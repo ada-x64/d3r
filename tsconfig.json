@@ -10,5 +10,5 @@
     "skipLibCheck": true
   },
   "include": ["build.ts", "core/**/*.ts", "adapters/**/*.ts"],
-  "exclude": ["adapters/pi/extensions/subagent/**"]
+  "exclude": ["adapters/pi/extensions/subagent/**", "adapters/pi/extensions/mode/**"]
 }

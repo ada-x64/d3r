@@ -5,7 +5,7 @@
 //   2. Rewrite frontmatter to pi shape (name, description, tools, tier);
 //      body verbatim; write distDir/agents/<name>.md.
 //   3. Parse coreDir/workflow.yaml -> Workflow.parse -> emitPrompts.
-//   4. Force-symlink extensions/subagent (and mode, once it exists)
+//   4. Force-symlink extensions/subagent and extensions/mode
 //      into distDir/extensions/.
 //   5. Force-symlink coreDir/templates -> distDir/templates.
 //   6. Return BuildReport. Throw on any zod failure.
@@ -96,27 +96,18 @@ const compilePrompts = async (
 const linkOneExtension = async (
 	name: string,
 	distDir: string,
-): Promise<string | null> => {
+): Promise<string> => {
 	const src = path.join(EXTENSIONS_SRC, name);
 	const dest = path.join(distDir, "extensions", name);
-	try {
-		await stat(src);
-	} catch {
-		console.warn(
-			`[compile] skipping extensions/${name}: source not present`,
-		);
-		return null;
-	}
+	await stat(src);
 	await forceSymlink(src, dest);
 	return name;
 };
 
-const linkExtensions = async (distDir: string): Promise<string[]> => {
-	const results = await Promise.all(
+const linkExtensions = async (distDir: string): Promise<string[]> =>
+	Promise.all(
 		WANTED_EXTENSIONS.map((name) => linkOneExtension(name, distDir)),
 	);
-	return results.filter((n): n is string => n !== null);
-};
 
 const linkTemplates = async (
 	coreDir: string,
