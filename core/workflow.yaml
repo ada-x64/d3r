@@ -1,0 +1,32 @@
+commands:
+  design:
+    description: Design phase — produce design.md from a topic
+    chain:
+      - { kind: parallel, agents: [aggregator, researcher] }
+      - { kind: human, prompt: "Discuss design questions before drafting" }
+      - { kind: agent, name: designer }
+  delegate:
+    description: Delegate phase — break design into schemas
+    chain:
+      - { kind: agent, name: planner }
+      - { kind: agent, name: schemer }
+  develop:
+    description: Develop loop — implement → verify → review
+    reviews_default: 1
+    chain:
+      - kind: loop
+        max: 3
+        body:
+          - { kind: agent, name: implementor }
+          - { kind: parallel, agents: [reviewer] }
+  audit:
+    description: Standalone audit
+    chain: [{ kind: agent, name: auditor }]
+  summarize:
+    description: Summarize a finished task and archive it
+    chain:
+      - { kind: agent, name: summarizer }
+      - { kind: agent, name: archivist }
+vault:
+  dirs: [designs, tasks, notes, archive, templates]
+  template_kinds: [task, remember, research, design, plan, schema, review, audit, summary, note]
