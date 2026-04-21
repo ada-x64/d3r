@@ -1,4 +1,4 @@
-// Vendored from @mariozechner/pi-coding-agent@0.68.0 — do not edit.
+// Vendored from @mariozechner/pi-coding-agent@0.68.0 - do not edit.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *

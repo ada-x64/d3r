@@ -1,17 +1,17 @@
 commands:
   design:
-    description: Design phase — produce design.md from a topic
+    description: Design phase - produce design.md from a topic
     chain:
       - { kind: parallel, agents: [aggregator, researcher] }
       - { kind: human, prompt: "Discuss design questions before drafting" }
       - { kind: agent, name: designer }
   delegate:
-    description: Delegate phase — break design into schemas
+    description: Delegate phase - break design into schemas
     chain:
       - { kind: agent, name: planner }
       - { kind: agent, name: schemer }
   develop:
-    description: Develop loop — implement → verify → review
+    description: Develop loop - implement, verify, review
     reviews_default: 1
     chain:
       - kind: loop

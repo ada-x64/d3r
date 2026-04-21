@@ -16,10 +16,13 @@ const coreDir = path.join(HERE, "core");
 const distDir = path.join(HERE, "dist", target);
 
 switch (target) {
-	case "pi":
+	case "pi": {
 		await compilePi(coreDir, distDir);
 		break;
-	default:
+	}
+	default: {
 		console.error(`Unknown target: ${target}`);
+		// oxlint-disable-next-line no-magic-numbers
 		process.exit(1);
+	}
 }
