@@ -1,0 +1,17 @@
+{
+  "name": "d3r",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx build.ts",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "^4",
+    "typescript": "^5",
+    "@types/node": "^22",
+    "gray-matter": "^4",
+    "yaml": "^2",
+    "zod": "^3"
+  }
+}
