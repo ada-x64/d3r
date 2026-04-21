@@ -28,5 +28,5 @@ commands:
       - { kind: agent, name: summarizer }
       - { kind: agent, name: archivist }
 vault:
-  dirs: [designs, tasks, notes, archive, templates]
+  dirs: [designs, tasks, notes, issues, archive, templates]
   template_kinds: [task, remember, research, design, plan, schema, review, audit, summary, note]
