@@ -1,11 +1,11 @@
 ---
-status: draft
-created: <ISO date>
+repo: <owner/repo>
+created: <ISO Date>
 ---
 
-# Audit: <owner>/<repo> - <label> (<date>)
+# Audit: <label>
 
-## Executive Summary
+## Executive summary
 
 <3-5 sentences. Overall health assessment, most critical findings, recommended priorities.
 
@@ -47,7 +47,7 @@ missing test categories, test-to-code churn correlation.>
 
 <Code smells, duplication, dead code, documentation gaps, over-specified tests.>
 
-## Severity Summary
+## Severity summary
 
 | Severity  | Security | Testing | Architecture | Performance | Maintenance | Total |
 | --------- | -------- | ------- | ------------ | ----------- | ----------- | ----- |
@@ -60,7 +60,7 @@ missing test categories, test-to-code churn correlation.>
 
 ---
 
-## Reference: Severity Levels
+## Reference: severity levels
 
 Audit severity uses **roadmap-priority semantics** - not merge-gate semantics. An audit finding does not block a PR; it informs an engineering roadmap.
 
@@ -73,3 +73,15 @@ Audit severity uses **roadmap-priority semantics** - not merge-gate semantics. A
 | **info**     | Neutral observation with no negative valence (e.g. "test coverage is 80% in this module"). |
 
 Note: `info` is specific to the audit severity model and has no counterpart in the review (`nit/low/medium/high/critical`) format.
+
+---
+
+<!--
+Frontmatter notes:
+- `repo` is the audited repository (`<owner/repo>`). Audits can
+  run independently of the Develop loop, so the repo handle lives
+  in frontmatter rather than being inferred from path context.
+- `created` is the ISO date the audit was run.
+
+Shape reference: notes/template-shapes/audit.md §4.
+-->

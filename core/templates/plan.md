@@ -1,7 +1,4 @@
 ---
-task: <kebab-case design dir name>
-design: design.md
-status: todo
 created: <ISO Date>
 ---
 
@@ -106,4 +103,12 @@ belong in a specific scope item.
 
 ---
 
-<!-- Shape reference: notes/template-shapes/plan.md §4. -->
+<!--
+Frontmatter notes:
+- `created` is the ISO date the plan was drafted.
+- Path encodes the design name (`designs/<name>/plan.md`); the
+  sibling `design.md` is the upstream artifact. No back-pointer
+  fields needed.
+
+Shape reference: notes/template-shapes/plan.md §4.
+-->

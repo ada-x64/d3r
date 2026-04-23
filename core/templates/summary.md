@@ -1,9 +1,9 @@
 ---
 created: <ISO Date>
-repo: <repo-name> # omit if unavailable
+repo: <owner/repo> # omit if unavailable
 branch: <branch-name> # omit if unavailable
 pr: <url> # omit if unavailable
-status: "" # "merged" | "rejected"
+status: merged # merged | rejected
 ---
 
 # Summary: <task-slug>

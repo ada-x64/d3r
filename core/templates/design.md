@@ -1,5 +1,4 @@
 ---
-status: draft
 created: <ISO Date>
 ---
 
@@ -119,4 +118,11 @@ section is for sources directly invoked in Decisions.
 
 ---
 
-<!-- Shape reference: notes/template-shapes/design.md §4. -->
+<!--
+Frontmatter notes:
+- `created` is the ISO date the design was drafted.
+- Path encodes the design name (`designs/<name>/design.md`); no
+  separate `task` or `design` field needed.
+
+Shape reference: notes/template-shapes/design.md §4.
+-->
