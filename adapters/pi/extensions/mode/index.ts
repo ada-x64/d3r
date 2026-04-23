@@ -29,7 +29,7 @@ import delegateMode from "./modes/delegate.ts";
 import developMode, { scanForBlocked } from "./modes/develop.ts";
 import type { ModeConfig, ModeName } from "./utils.ts";
 // oxlint-disable-next-line no-duplicate-imports
-import { cycleForward, NORMAL_TOOLS } from "./utils.ts";
+import { NORMAL_TOOLS } from "./utils.ts";
 
 // oxlint-disable-next-line no-magic-numbers
 const MAX_RETRIES = 3;
@@ -111,9 +111,9 @@ const piExtension = (pi: ExtensionAPI): void => {
 
     // `resetRetries` controls whether the develop loop counter is
     // zeroed on this transition. Manual exits (slash command,
-    // shortcut cycle, fresh-start CLI flag) reset; the BLOCKED-driven
-    // auto-exit preserves the counter so D19's `retries >= 3` bail is
-    // reachable across turns/sessions for the same task.
+    // fresh-start CLI flag) reset; the BLOCKED-driven auto-exit
+    // preserves the counter so the `retries >= 3` bail is reachable
+    // across turns/sessions for the same task.
     const enter = (
         next: ModeName,
         ctx: ExtensionContext,
@@ -148,15 +148,8 @@ const piExtension = (pi: ExtensionAPI): void => {
         });
     }
 
-    // Cycle shortcut (D23).
-    pi.registerShortcut("ctrl+shift+tab", {
-        description: "Cycle D3R mode forward",
-        handler: async (ctx) => {
-            enter(cycleForward(state.currentMode), ctx);
-        },
-    });
+    // System-prompt injection.
 
-    // System-prompt injection (D23).
     pi.on("before_agent_start", async (event) => {
         if (state.currentMode === "normal") {
             return;
