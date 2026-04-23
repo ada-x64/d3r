@@ -16,7 +16,7 @@ created: <ISO Date>
 
 What `task.md` asked for, in your own words. Pointers to sibling
 `remember.md` / `research.md` for prior context and investigation
-narrative — do not duplicate them here. If the design supersedes or
+narrative - do not duplicate them here. If the design supersedes or
 amends an earlier design, link it.
 
 ---
@@ -48,11 +48,12 @@ For complex decisions, a sub-section per decision:
 **Decision:** What was decided.
 
 **Rationale:** Why this over the alternatives. Cite sources via
-`path:lines` (repo), vault-relative path (vault), or full URL (web).
+`path:lines (ref)` (repo, with short git SHA), vault-relative path
+(vault), or full URL (web).
 
 **Alternatives considered:**
-- <Alternative A> — rejected because <reason>.
-- <Alternative B> — rejected because <reason>.
+- <Alternative A> - rejected because <reason>.
+- <Alternative B> - rejected because <reason>.
 
 ---
 
@@ -60,7 +61,7 @@ For complex decisions, a sub-section per decision:
 
 *Optional.* Diagrams, directory trees, or component sketches that
 clarify the structural shape of the design, preferably in Mermaid. Keep
-it tight — if a diagram needs paragraphs of caption, it's the wrong
+it tight - if a diagram needs paragraphs of caption, it's the wrong
 diagram.
 
 ---
@@ -88,7 +89,7 @@ per-schema verify steps; this is the design-level contract.
 
 *Optional.* Items deliberately deferred to Delegate or later. Each
 should be a real question, not a placeholder. Resolved questions
-are removed (not crossed out — git remembers).
+are removed (not crossed out - git remembers).
 
 1. <question>
 2. <question>
@@ -100,7 +101,7 @@ are removed (not crossed out — git remembers).
 *Optional.* Explicitly out-of-scope follow-ons that would otherwise
 creep into this design. Keeps the current scope honest.
 
-1. <item> — <one-line description of why it's out of scope here>.
+1. <item> - <one-line description of why it's out of scope here>.
 
 ---
 
@@ -108,13 +109,13 @@ creep into this design. Keeps the current scope honest.
 
 *Optional.* Footnote-style source list for citations made above.
 Reproduce a source here only if it's referenced inline by `[^N]`;
-otherwise inline `path:lines` is preferred. The Researcher and
+otherwise inline `path:lines (ref)` is preferred. The Researcher and
 Aggregator outputs in sibling docs are the bulk reference; this
 section is for sources directly invoked in Decisions.
 
-[^1]: `path/to/file.ts:42-58` — what was learned.
-[^2]: https://example.com — what was learned.
-[^3]: `[[notes/topic]]` — what was learned (vault link).
+[^1]: `path/to/file.ts:42-58 (a3f9c21)` - what was learned.
+[^2]: https://example.com - what was learned.
+[^3]: `[[notes/topic]]` - what was learned (vault link).
 
 ---
 

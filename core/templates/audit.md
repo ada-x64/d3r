@@ -3,7 +3,7 @@ status: draft
 created: <ISO date>
 ---
 
-# Audit: <owner>/<repo> — <label> (<date>)
+# Audit: <owner>/<repo> - <label> (<date>)
 
 ## Executive Summary
 
@@ -62,7 +62,7 @@ missing test categories, test-to-code churn correlation.>
 
 ## Reference: Severity Levels
 
-Audit severity uses **roadmap-priority semantics** — not merge-gate semantics. An audit finding does not block a PR; it informs an engineering roadmap.
+Audit severity uses **roadmap-priority semantics** - not merge-gate semantics. An audit finding does not block a PR; it informs an engineering roadmap.
 
 | Severity     | Audit meaning                                                                              |
 | ------------ | ------------------------------------------------------------------------------------------ |

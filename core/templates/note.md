@@ -15,7 +15,7 @@ summary: <string> # short description, used to indicate when this note should be
 
 What this note covers, what it doesn't, and when to reach for it.
 Scope, audience, and a pointer to related notes if any. Keep it
-short — the body sections carry the substance.
+short - the body sections carry the substance.
 
 ---
 
@@ -25,7 +25,7 @@ Topic-driven, not prescribed. Use whatever sectioning makes the
 material legible. Reference tables, prose, diagrams, and code
 snippets are all fair game. Try to keep code snippets up-to-date; if they are used, specify the git ref, file, and line number. 
 
-Cite external facts inline using `path:lines@ref` (repo),
+Cite external facts inline using `path:lines (ref)` (repo),
 vault-relative paths (vault), or full URLs (web).
 
 ---
@@ -37,9 +37,9 @@ above. Inline `path:lines` is preferred for one-off references;
 this section collects sources that are referenced repeatedly or
 that warrant a one-line description.
 
-- `path/to/file.ts:42-58` — what it shows.
-- `[[notes/related-topic]]` — sibling note worth reading alongside.
-- https://example.com — external doc.
+- `path/to/file.ts:42-58` - what it shows.
+- `[[notes/related-topic]]` - sibling note worth reading alongside.
+- https://example.com - external doc.
 
 ---
 
@@ -49,4 +49,4 @@ that warrant a one-line description.
 Supports the `updated` frontmatter field; lets a reader spot what's
 new since they last looked. Trivial typo fixes don't need entries.
 
-- `YYYY-MM-DD` — <what changed and why>.
+- `YYYY-MM-DD` - <what changed and why>.
