@@ -51,42 +51,43 @@ const findLoopMax = (chain: readonly ChainStep[]): number => {
     return DEFAULT_LOOP_MAX;
 };
 
+const renderDevelopEpilogue = (cmd: Workflow["commands"][string]): string => {
+    const loopMax = findLoopMax(cmd.chain);
+    const reviews = cmd.reviews_default ?? DEFAULT_REVIEWS;
+    return `## Retry semantics
+
+If the implementor's output contains a top-level \`## BLOCKED\`
+section, surface the reason to the user and exit the loop early.
+Otherwise honor the loop's \`max\` (default ${loopMax}) and the \`reviews_default\` (${reviews}) review count.
+
+## Implementor mode
+
+The implementor requires a \`mode\` declaration (\`semi\` or \`auto\`)
+from the caller. When invoking the implementor, you MUST include
+the caller's mode in the task string (e.g. \`mode: auto\`). If the
+caller did not declare a mode, ask the user before dispatching;
+do not guess.
+`;
+};
+
 const renderCommand = (
     name: string,
     cmd: Workflow["commands"][string],
 ): string => {
-    const lines: string[] = [];
-    lines.push(`# /${name}`);
-    lines.push("");
-    lines.push(cmd.description);
-    lines.push("");
-    lines.push("## Chain");
-    lines.push("");
-    lines.push("You are the Orchestrator (a thin router). Execute the");
-    lines.push("following chain by invoking the `subagent` tool. Pass each");
-    lines.push("step's output to the next via the `{previous}` placeholder.");
-    lines.push("");
-    for (const step of cmd.chain) {
-        lines.push(renderStep(step));
-    }
-    lines.push("");
-    if (name === "develop") {
-        const loopMax = findLoopMax(cmd.chain);
-        const reviews = cmd.reviews_default ?? DEFAULT_REVIEWS;
-        lines.push("## Retry semantics");
-        lines.push("");
-        lines.push(
-            "If the implementor's output contains a top-level `## BLOCKED`",
-        );
-        lines.push(
-            "section, surface the reason to the user and exit the loop early.",
-        );
-        lines.push(
-            `Otherwise honor the loop's \`max\` (default ${loopMax}) and the \`reviews_default\` (${reviews}) review count.`,
-        );
-        lines.push("");
-    }
-    return lines.join("\n");
+    const steps = cmd.chain.map((step) => renderStep(step)).join("\n");
+    const epilogue = name === "develop" ? `\n${renderDevelopEpilogue(cmd)}` : "";
+    return `# /${name}
+
+${cmd.description}
+
+## Chain
+
+You are the Orchestrator (a thin router). Execute the
+following chain by invoking the \`subagent\` tool. Pass each
+step's output to the next via the \`{previous}\` placeholder.
+
+${steps}
+${epilogue}`;
 };
 
 export const emitPrompts = async (
