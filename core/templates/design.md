@@ -79,8 +79,8 @@ description of what it covers and what it doesn't.
 Numbered checklist of what "design satisfied" means. Distinct from
 per-schema verify steps; this is the design-level contract.
 
-1. ✅ <criterion>
-2. ✅ <criterion>
+1. [ ] <criterion>
+2. [ ] <criterion>
 
 ---
 
@@ -124,5 +124,5 @@ Frontmatter notes:
 - Path encodes the design name (`designs/<name>/design.md`); no
   separate `task` or `design` field needed.
 
-Shape reference: notes/template-shapes/design.md §4.
+Shape reference: notes/template-shapes/design.md section 4.
 -->

@@ -158,5 +158,5 @@ Snippet policy:
 - Cite existing code via `path:lines (ref)`.
 - The Implementor is allowed grace to modify the schema in-flight.
 
-Shape reference: notes/template-shapes/schema.md §5.
+Shape reference: notes/template-shapes/schema.md section 5.
 -->

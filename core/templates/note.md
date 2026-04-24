@@ -68,5 +68,5 @@ TODO (vault tooling, not template scope):
   can see which tags are already in use before inventing new
   ones.
 
-Shape reference: notes/template-shapes/note.md §4.
+Shape reference: notes/template-shapes/note.md section 4.
 -->

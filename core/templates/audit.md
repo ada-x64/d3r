@@ -83,5 +83,5 @@ Frontmatter notes:
   in frontmatter rather than being inferred from path context.
 - `created` is the ISO date the audit was run.
 
-Shape reference: notes/template-shapes/audit.md §4.
+Shape reference: notes/template-shapes/audit.md section 4.
 -->

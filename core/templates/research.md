@@ -91,5 +91,5 @@ Snippet policy:
 - Never write *new* code here - that's Designer's job.
 - Local code citations use `path:lines (ref)`, not pasted blocks.
 
-Shape reference: notes/template-shapes/research.md §4.
+Shape reference: notes/template-shapes/research.md section 4.
 -->

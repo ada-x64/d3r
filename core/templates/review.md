@@ -133,5 +133,5 @@ Verdict to loop edge:
 - `Accept`, `Accept with nits` -> proceed to commit.
 - `Request changes`, `Reject` -> loop back to Implement.
 
-Shape reference: notes/template-shapes/review.md §4.
+Shape reference: notes/template-shapes/review.md section 4.
 -->

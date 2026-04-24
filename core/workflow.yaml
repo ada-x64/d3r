@@ -11,7 +11,7 @@ commands:
       - { kind: agent, name: planner }
       - { kind: agent, name: schemer }
   develop:
-    description: Develop loop - implement, verify, review
+    description: Develop loop - implement, verify, review, then audit
     reviews_default: 1
     chain:
       - kind: loop
@@ -19,6 +19,7 @@ commands:
         body:
           - { kind: agent, name: implementor }
           - { kind: parallel, agents: [reviewer] }
+      - { kind: agent, name: auditor }
   audit:
     description: Standalone audit
     chain: [{ kind: agent, name: auditor }]
@@ -28,5 +29,5 @@ commands:
       - { kind: agent, name: summarizer }
       - { kind: agent, name: archivist }
 vault:
-  dirs: [designs, tasks, notes, issues, archive, templates]
-  template_kinds: [task, remember, research, design, plan, schema, review, audit, summary, note]
+  dirs: [designs, tasks, notes, issues, archive, templates, reference]
+  template_kinds: [task, remember, research, design, plan, schema, review, audit, summary, note, implementation-log]

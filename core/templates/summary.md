@@ -109,12 +109,13 @@ deviations or lessons above. Inline citations elsewhere use
 
 <!--
 Snippet policy:
-- Cite via `path:lines (ref)` or `<commit-sha>` - do not reproduce
-  code. By the time someone reads this, the code lives in git;
-  snippets here go stale on the next refactor while refs remain
-  unambiguous.
-- Exception: a one-line illustrative diff fragment in Deviations
-  is permitted when describing an unexpected design choice.
+- Cite via `path:lines (ref)` or `<commit-sha>` where a citation
+  is enough; code lives in git, refs stay unambiguous while
+  copied snippets go stale on the next refactor.
+- Illustrative code snippets and diff fragments are permitted
+  where they make a deviation, lesson, or surprise concretely
+  intelligible. Keep them under ~10 lines where possible; longer
+  is permitted when necessary to characterize the change.
 
-Shape reference: notes/template-shapes/summary.md §4.
+Shape reference: notes/template-shapes/summary.md section 4.
 -->

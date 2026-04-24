@@ -49,14 +49,16 @@ fan-outs use box-drawing characters aligned under the originating
 node:
 
 ```
-task-1 ──┬──> task-2 ──> task-3
-         ├──> task-4
-         └──> task-5 ──> task-6
+task-1 --+--> task-2 --> task-3
+         +--> task-4
+         +--> task-5 --> task-6
 ```
 
 Reads as: `task-1` precedes `task-2`/`task-4`/`task-5`; `task-2`
 precedes `task-3`; `task-5` precedes `task-6`. Characters used:
-`─ ┬ ├ └` from the Unicode box-drawing block, plus ASCII `>`.
+ASCII `- + > |` only. (Earlier drafts used Unicode box-drawing
+glyphs; ASCII renders cleanly in every editor and survives copy
+through terminal pipelines.)
 
 **Mermaid form** (escape hatch). Use when the graph has more than
 two fan-out points or when cross-branch dependencies make the
@@ -110,5 +112,5 @@ Frontmatter notes:
   sibling `design.md` is the upstream artifact. No back-pointer
   fields needed.
 
-Shape reference: notes/template-shapes/plan.md §4.
+Shape reference: notes/template-shapes/plan.md section 4.
 -->

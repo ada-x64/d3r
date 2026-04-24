@@ -92,5 +92,5 @@ Decisions captured during Describe belong in `design.md` under
 `## Decisions`, not here. Keep this doc focused on intent and
 constraints; decisions are downstream.
 
-Shape reference: notes/template-shapes/task.md §4.
+Shape reference: notes/template-shapes/task.md section 4.
 -->

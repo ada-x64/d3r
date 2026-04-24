@@ -78,5 +78,5 @@ out X."
 ---
 
 <!--
-Shape reference: notes/template-shapes/remember.md §4.
+Shape reference: notes/template-shapes/remember.md section 4.
 -->
