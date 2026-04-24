@@ -2,3 +2,4 @@ node_modules
 dist
 pnpm-lock.yaml
 adapters/pi/extensions/subagent
+adapters/pi/extensions/mode/orchestrator-contract.generated.ts

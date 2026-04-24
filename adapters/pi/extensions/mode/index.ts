@@ -1,56 +1,54 @@
-// D3R mode extension.
+// D3R mode extension (Plan B').
 //
-// Per design.md §2.5 and D22/D23: a single pi extension that owns
-// three D3R phase modes (design, delegate, develop) plus a "normal"
-// resting state.
+// Two harness modes only: `normal` (vanilla pi) and `d3r` (orchestrator
+// contract injected as a system-prompt suffix). Phase state lives in
+// the conversation transcript as `## MODE: <phase>` markers; this
+// extension keeps no persistent phase state and does no per-phase tool
+// gating - the orchestrator is trusted to delegate writes to subagents
+// per its contract.
 //
 // Surface:
-//   - Ctrl+Shift+Tab   cycles forward through the modes (D23).
-//   - /design /delegate /develop   toggle in/out of the named mode.
-//   - --design --delegate --develop   start pi already in that mode.
+//   - /d3r [phase]   toggle into/out of d3r mode. Optional phase
+//                    argument seeds the first `## MODE: <phase>`
+//                    marker so the orchestrator can skip the
+//                    "which phase?" prompt.
+//   - /normal        leave d3r mode (idempotent if already normal).
+//   - --d3r          start pi already in d3r mode.
 //
 // Behavior:
-//   - Each mode swaps the active tool set (`pi.setActiveTools`).
-//   - Each mode injects a system-prompt suffix via
-//     `before_agent_start` (D23).
-//   - State persisted via `pi.appendEntry("mode", ...)` so it
-//     survives `pi -c` (design.md Glossary).
-//   - Develop only: `turn_end` scans the assistant message for
-//     `## BLOCKED`. On hit, persist + notify + exit to normal.
-//     Bail with a fatal notify at retries >= 3 (D19).
+//   - `before_agent_start`: when mode = d3r, append the orchestrator
+//     contract (compiled from core/agents/orchestrator.md plus
+//     core/workflow.yaml) to the system prompt.
+//   - `turn_end`: scan the assistant message for the most recent
+//     `## MODE: <phase>` marker and mirror it into the status icon.
+//     Scan for `## BLOCKED` and surface a notify (orchestrator handles
+//     the phase change itself by emitting `## MODE: routing`).
+//   - `session_start`: read the `--d3r` flag on fresh start; backfill
+//     the status icon from the most recent transcript marker on resume.
+
+// oxlint-disable no-duplicate-imports -- separate type+value imports keep both
+// `consistent-type-specifier-style` and TS-erased imports happy.
 
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import designMode from "./modes/design.ts";
-import delegateMode from "./modes/delegate.ts";
-import developMode, { scanForBlocked } from "./modes/develop.ts";
-import type { ModeConfig, ModeName } from "./utils.ts";
-// oxlint-disable-next-line no-duplicate-imports
-import { NORMAL_TOOLS } from "./utils.ts";
+import { ORCHESTRATOR_CONTRACT } from "./orchestrator-contract.generated.ts";
+import type { ModeName, PhaseName } from "./utils.ts";
+import {
+	formatModeMarker,
+	isPhaseName,
+	scanForBlocked,
+	scanForModeMarker,
+} from "./utils.ts";
 
-// oxlint-disable-next-line no-magic-numbers
-const MAX_RETRIES = 3;
-
-const MODES: Readonly<Record<Exclude<ModeName, "normal">, ModeConfig>> = {
-	design: designMode,
-	delegate: delegateMode,
-	develop: developMode,
-};
-
-interface ModeState {
-	currentMode: ModeName;
-	developRetries: number;
+interface ExtensionState {
+	mode: ModeName;
+	lastPhase: PhaseName | undefined;
 }
 
-interface ModeEntryData {
-	currentMode?: ModeName;
-	developRetries?: number;
-}
-
-// Type guard for assistant messages (mirrors plan-mode's helper).
+// Type guard for assistant messages.
 const isAssistantMessage = (m: unknown): m is AssistantMessage => {
 	const msg = m as { role?: string; content?: unknown };
 	return msg.role === "assistant" && Array.isArray(msg.content);
@@ -62,174 +60,156 @@ const getAssistantText = (message: AssistantMessage): string =>
 		.map((b) => b.text)
 		.join("\n");
 
+const phaseFromArgs = (args: string): PhaseName | undefined => {
+	const trimmed = args.trim().toLowerCase();
+	if (trimmed === "") {
+		return undefined;
+	}
+	return isPhaseName(trimmed) ? trimmed : undefined;
+};
+
 const piExtension = (pi: ExtensionAPI): void => {
-	const state: ModeState = {
-		currentMode: "normal",
-		developRetries: 0,
+	const state: ExtensionState = {
+		mode: "normal",
+		lastPhase: undefined,
 	};
 
-	// CLI flags (D23).
-	pi.registerFlag("design", {
-		description: "Start in D3R design mode",
+	pi.registerFlag("d3r", {
+		description: "Start pi in D3R mode",
 		type: "boolean",
 		default: false,
 	});
-	pi.registerFlag("delegate", {
-		description: "Start in D3R delegate mode",
-		type: "boolean",
-		default: false,
-	});
-	pi.registerFlag("develop", {
-		description: "Start in D3R develop mode",
-		type: "boolean",
-		default: false,
-	});
-
-	const persist = (): void => {
-		pi.appendEntry("mode", {
-			currentMode: state.currentMode,
-			developRetries: state.developRetries,
-		});
-	};
 
 	const updateStatus = (ctx: ExtensionContext): void => {
-		if (state.currentMode === "normal") {
+		if (state.mode === "normal") {
 			ctx.ui.setStatus("d3r-mode", undefined);
 			return;
 		}
-		const cfg = MODES[state.currentMode];
-		ctx.ui.setStatus("d3r-mode", ctx.ui.theme.fg("accent", cfg.statusIcon));
+		const label = state.lastPhase ? `d3r:${state.lastPhase}` : "d3r";
+		ctx.ui.setStatus("d3r-mode", ctx.ui.theme.fg("accent", label));
 	};
 
-	const applyTools = (): void => {
-		if (state.currentMode === "normal") {
-			pi.setActiveTools([...NORMAL_TOOLS]);
+	const enter = (next: ModeName, ctx: ExtensionContext): void => {
+		if (state.mode === next) {
 			return;
 		}
-		pi.setActiveTools([...MODES[state.currentMode].tools]);
-	};
-
-	// `resetRetries` controls whether the develop loop counter is
-	// zeroed on this transition. Manual exits (slash command,
-	// fresh-start CLI flag) reset; the BLOCKED-driven auto-exit
-	// preserves the counter so the `retries >= 3` bail is reachable
-	// across turns/sessions for the same task.
-	const enter = (
-		next: ModeName,
-		ctx: ExtensionContext,
-		opts: { resetRetries: boolean } = { resetRetries: true },
-	): void => {
-		state.currentMode = next;
-		if (next !== "develop" && opts.resetRetries) {
-			state.developRetries = 0;
+		state.mode = next;
+		if (next === "normal") {
+			state.lastPhase = undefined;
 		}
-		applyTools();
 		updateStatus(ctx);
-		persist();
-		const label = next === "normal" ? "normal mode" : `${next} mode`;
-		ctx.ui.notify(`D3R: entered ${label}`, "info");
+		ctx.ui.notify(`D3R: entered ${next} mode`, "info");
 	};
 
-	const toggleNamed = (
-		name: Exclude<ModeName, "normal">,
-		ctx: ExtensionContext,
-	): void => {
-		const next: ModeName = state.currentMode === name ? "normal" : name;
-		enter(next, ctx);
-	};
-
-	// Slash commands.
-	for (const cfg of Object.values(MODES)) {
-		pi.registerCommand(cfg.slashCommand, {
-			description: `Toggle D3R ${cfg.name} mode`,
-			handler: async (_args, ctx) => {
-				toggleNamed(cfg.name, ctx);
+	// Inject a `## MODE: <phase>` marker into the transcript via a
+	// custom display message so the orchestrator's next-turn scan
+	// finds it. Used by `/d3r <phase>` to seed the phase without
+	// forcing an immediate LLM turn.
+	const seedPhaseMarker = (phase: PhaseName): void => {
+		pi.sendMessage(
+			{
+				customType: "d3r-mode-marker",
+				content: formatModeMarker(phase),
+				display: true,
 			},
-		});
-	}
+			{ deliverAs: "nextTurn" },
+		);
+		state.lastPhase = phase;
+	};
 
-	// System-prompt injection.
+	pi.registerCommand("d3r", {
+		description: "Toggle D3R mode (optional: /d3r <phase>)",
+		handler: async (args, ctx) => {
+			const phase = phaseFromArgs(args);
+			const wasD3r = state.mode === "d3r";
+			const noPhaseArg = args.trim() === "";
+			// Bare `/d3r` toggles. `/d3r <phase>` enters d3r (if not
+			// already) and seeds the phase marker. An invalid phase
+			// arg is surfaced and ignored.
+			if (noPhaseArg) {
+				enter(wasD3r ? "normal" : "d3r", ctx);
+				return;
+			}
+			if (!phase) {
+				ctx.ui.notify(
+					`D3R: unknown phase "${args.trim()}" (expected: design, delegate, develop, routing)`,
+					"warning",
+				);
+				return;
+			}
+			if (!wasD3r) {
+				enter("d3r", ctx);
+			}
+			seedPhaseMarker(phase);
+			updateStatus(ctx);
+		},
+	});
 
+	pi.registerCommand("normal", {
+		description: "Leave D3R mode",
+		handler: async (_args, ctx) => {
+			enter("normal", ctx);
+		},
+	});
+
+	// System-prompt injection: orchestrator contract appended when in
+	// d3r mode. `normal` leaves the upstream prompt untouched.
 	pi.on("before_agent_start", async (event) => {
-		if (state.currentMode === "normal") {
+		if (state.mode === "normal") {
 			return;
 		}
-		const cfg = MODES[state.currentMode];
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${cfg.systemPrompt}`,
+			systemPrompt: `${event.systemPrompt}\n\n[D3R ORCHESTRATOR CONTRACT]\n\n${ORCHESTRATOR_CONTRACT}`,
 		};
 	});
 
-	// BLOCKED detection in develop mode (D19).
+	// turn_end: mirror the most recent `## MODE` marker into the
+	// status icon and surface BLOCKED notifications. No state
+	// mutation beyond the icon - the transcript is authoritative.
 	pi.on("turn_end", async (event, ctx) => {
-		if (state.currentMode !== "develop") {
-			return;
-		}
-		if (!isAssistantMessage(event.message)) {
+		if (state.mode !== "d3r" || !isAssistantMessage(event.message)) {
 			return;
 		}
 		const text = getAssistantText(event.message);
-		const scan = scanForBlocked(text);
-		if (!scan.blocked) {
-			return;
+		const marker = scanForModeMarker(text);
+		if (marker.matched && marker.phase && marker.phase !== state.lastPhase) {
+			state.lastPhase = marker.phase;
+			updateStatus(ctx);
 		}
-		state.developRetries += scan.retries;
-		if (state.developRetries >= MAX_RETRIES) {
+		const blocked = scanForBlocked(text);
+		if (blocked.blocked) {
 			ctx.ui.notify(
-				`D3R develop: BLOCKED retries reached ${state.developRetries} (>= ${MAX_RETRIES}); bailing to normal mode`,
-				"error",
-			);
-		} else {
-			ctx.ui.notify(
-				`D3R develop: BLOCKED detected (retries=${state.developRetries}); exiting to normal mode`,
+				`D3R: ${blocked.count} BLOCKED marker(s) in last reply; orchestrator should route`,
 				"warning",
 			);
 		}
-		// TODO: We need some sort of audit or emergency mode
-		// to tackle this.
-		// Preserve the counter on auto-exit so a subsequent develop
-		// session inherits it (D19 cross-turn semantics). The final
-		// persist() inside enter() writes the carried counter as the
-		// latest `mode` entry.
-		enter("normal", ctx, { resetRetries: false });
 	});
 
-	// Hydrate on session_start (design.md Glossary).
-	pi.on("session_start", async (_event, ctx) => {
-		const entries = ctx.sessionManager.getEntries();
-		const last = [...entries]
-			.toReversed()
-			.find(
-				(e: { type: string; customType?: string }) =>
-					e.type === "custom" && e.customType === "mode",
-			) as { data?: ModeEntryData } | undefined;
-		if (last?.data) {
-			if (last.data.currentMode) {
-				state.currentMode = last.data.currentMode;
-			}
-			if (typeof last.data.developRetries === "number") {
-				state.developRetries = last.data.developRetries;
-			}
-		}
-		// CLI flags override persisted state only on a fresh start
-		// (Obs B). On `reload` and `resume`, prefer the rehydrated
-		// state so a stale `--design` in shell history does not
-		// clobber an in-flight develop session.
-		const { reason } = _event as { reason?: string };
+	// Backfill the status icon on resume by scanning the existing
+	// session messages for the most recent `## MODE` marker. Apply
+	// the --d3r flag only on a fresh start.
+	pi.on("session_start", async (event, ctx) => {
+		const { reason } = event as { reason?: string };
 		const isFreshStart =
 			reason === "startup" || reason === "new" || reason === "fork";
-		if (isFreshStart) {
-			if (pi.getFlag("--design") === true) {
-				state.currentMode = "design";
-				state.developRetries = 0;
-			} else if (pi.getFlag("--delegate") === true) {
-				state.currentMode = "delegate";
-				state.developRetries = 0;
-			} else if (pi.getFlag("--develop") === true) {
-				state.currentMode = "develop";
+		if (isFreshStart && pi.getFlag("--d3r") === true) {
+			state.mode = "d3r";
+		}
+		// Best-effort backfill: walk session messages and find the
+		// most recent assistant text containing a marker.
+		const messages = ctx.sessionManager.getMessages?.() as
+			| readonly unknown[]
+			| undefined;
+		if (messages) {
+			const latestPhase = [...messages]
+				.toReversed()
+				.filter(isAssistantMessage)
+				.map((m) => scanForModeMarker(getAssistantText(m)))
+				.find((s) => s.matched && s.phase)?.phase;
+			if (latestPhase) {
+				state.lastPhase = latestPhase;
 			}
 		}
-		applyTools();
 		updateStatus(ctx);
 	});
 };
