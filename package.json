@@ -5,12 +5,17 @@
   "scripts": {
     "build": "tsx build.ts",
     "check": "tsc --noEmit",
-    "lint": "oxlint --deny-warnings"
+    "lint": "oxlint --deny-warnings",
+    "lint:md": "markdownlint-cli2",
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "^22",
     "gray-matter": "^4",
+    "markdownlint-cli2": "^0.22.1",
     "oxlint": "^1.61.0",
+    "prettier": "^3.8.3",
     "tsx": "^4",
     "typescript": "^5",
     "yaml": "^2",

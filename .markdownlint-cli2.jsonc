@@ -1,0 +1,17 @@
+{
+  // Markdown lint config. Templates and agent prompts use angle-bracket
+  // placeholders (`<task-slug>`, `<reason>`, etc.) and example URLs that
+  // would trigger MD033/MD034 unhelpfully. Prose wrapping is owned by
+  // Prettier (see .prettierrc.json), so MD013 is off here.
+  "config": {
+    "default": true,
+    "MD013": false, // line-length (Prettier owns prose wrapping)
+    "MD033": false, // no-inline-html (angle-bracket placeholders)
+    "MD034": false, // no-bare-urls (example URLs in templates)
+    "MD041": false, // first-line-h1 (frontmatter-first files)
+    "MD024": false, // no-duplicate-heading (templates repeat section names by design)
+    "MD053": false, // unused link/image reference definitions (template examples)
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["node_modules", "dist"],
+}
