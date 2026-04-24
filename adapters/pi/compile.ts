@@ -53,9 +53,7 @@ const compileOneAgent = async (
 	const raw = await readFile(srcPath, "utf8");
 	const parsed = matter(raw);
 	const spec = AgentSpec.parse(parsed.data);
-	const tools = [
-		...new Set(spec.capabilities.flatMap((c) => piToolMap[c])),
-	];
+	const tools = [...new Set(spec.capabilities.flatMap((c) => piToolMap[c]))];
 	const piFrontmatter = {
 		name: spec.name,
 		description: spec.description,
@@ -105,9 +103,7 @@ const linkOneExtension = async (
 };
 
 const linkExtensions = async (distDir: string): Promise<string[]> =>
-	Promise.all(
-		WANTED_EXTENSIONS.map((name) => linkOneExtension(name, distDir)),
-	);
+	Promise.all(WANTED_EXTENSIONS.map((name) => linkOneExtension(name, distDir)));
 
 const linkTemplates = async (
 	coreDir: string,

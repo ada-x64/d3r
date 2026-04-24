@@ -7,7 +7,8 @@ created: <ISO Date>
 
 ## Executive summary
 
-<3-5 sentences. Overall health assessment, most critical findings, recommended priorities.
+<3-5 sentences. Overall health assessment, most critical findings, recommended
+priorities.
 
 | Severity | Count |
 | -------- | ----- |
@@ -19,9 +20,8 @@ created: <ISO Date>
 
 ## Scope
 
-**Audited:** `<path or "full repository">`
-**Excluded:** `<explicit exclusions or "none">`
-**Commit:** `<git SHA>` on `<branch>`
+**Audited:** `<path or "full repository">` **Excluded:**
+`<explicit exclusions or "none">` **Commit:** `<git SHA>` on `<branch>`
 **Date:** YYYY-MM-DD
 
 ## Analysis
@@ -32,8 +32,7 @@ created: <ISO Date>
 
 ### Testing
 
-<trivial-test smell,
-missing test categories, test-to-code churn correlation.>
+<trivial-test smell, missing test categories, test-to-code churn correlation.>
 
 ### Architecture
 
@@ -62,7 +61,8 @@ missing test categories, test-to-code churn correlation.>
 
 ## Reference: severity levels
 
-Audit severity uses **roadmap-priority semantics** - not merge-gate semantics. An audit finding does not block a PR; it informs an engineering roadmap.
+Audit severity uses **roadmap-priority semantics** - not merge-gate semantics.
+An audit finding does not block a PR; it informs an engineering roadmap.
 
 | Severity     | Audit meaning                                                                              |
 | ------------ | ------------------------------------------------------------------------------------------ |
@@ -72,7 +72,8 @@ Audit severity uses **roadmap-priority semantics** - not merge-gate semantics. A
 | **low**      | Minor quality issue or best-practice gap; worth tracking, not urgent.                      |
 | **info**     | Neutral observation with no negative valence (e.g. "test coverage is 80% in this module"). |
 
-Note: `info` is specific to the audit severity model and has no counterpart in the review (`nit/low/medium/high/critical`) format.
+Note: `info` is specific to the audit severity model and has no counterpart in
+the review (`nit/low/medium/high/critical`) format.
 
 ---
 

@@ -12,30 +12,30 @@
 import type { ModeConfig } from "../utils.ts";
 
 const developMode: ModeConfig = {
-    name: "develop",
-    tools: ["read", "grep", "find", "ls", "bash", "subagent"],
-    systemPrompt: [
-        "[D3R DEVELOP MODE]",
-        "",
-        "You are the Orchestrator in the Develop phase. Run the loop in",
-        "core/workflow.yaml under `commands.develop` by invoking the",
-        "`subagent` tool. Each iteration: implementor (single) followed",
-        "by reviewer (parallel, count = reviews_default).",
-        "",
-        "If the implementor's output begins with a top-level `## BLOCKED`",
-        "section, exit the loop early and surface the reason to the user.",
-        "Honor the loop's `max` (default 3).",
-    ].join("\n"),
-    statusIcon: "▲ develop",
-    slashCommand: "develop",
+	name: "develop",
+	tools: ["read", "grep", "find", "ls", "bash", "subagent"],
+	systemPrompt: [
+		"[D3R DEVELOP MODE]",
+		"",
+		"You are the Orchestrator in the Develop phase. Run the loop in",
+		"core/workflow.yaml under `commands.develop` by invoking the",
+		"`subagent` tool. Each iteration: implementor (single) followed",
+		"by reviewer (parallel, count = reviews_default).",
+		"",
+		"If the implementor's output begins with a top-level `## BLOCKED`",
+		"section, exit the loop early and surface the reason to the user.",
+		"Honor the loop's `max` (default 3).",
+	].join("\n"),
+	statusIcon: "▲ develop",
+	slashCommand: "develop",
 };
 
 // Multiline-anchored match for a top-level "## BLOCKED" heading.
 const BLOCKED_RE = /^## BLOCKED\b/m;
 
 export interface BlockedScan {
-    readonly blocked: boolean;
-    readonly retries: number;
+	readonly blocked: boolean;
+	readonly retries: number;
 }
 
 // Count occurrences of "## BLOCKED" headings in a text blob.
@@ -44,11 +44,11 @@ export interface BlockedScan {
 // emits multiple BLOCKED sections in one turn). The persistent retry
 // counter lives in mode/index.ts state.
 export const scanForBlocked = (text: string): BlockedScan => {
-    if (!BLOCKED_RE.test(text)) {
-        return { blocked: false, retries: 0 };
-    }
-    const all = text.match(/^## BLOCKED\b/gm);
-    return { blocked: true, retries: all ? all.length : 1 };
+	if (!BLOCKED_RE.test(text)) {
+		return { blocked: false, retries: 0 };
+	}
+	const all = text.match(/^## BLOCKED\b/gm);
+	return { blocked: true, retries: all ? all.length : 1 };
 };
 
 export default developMode;

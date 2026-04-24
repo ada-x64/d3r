@@ -7,10 +7,9 @@ mode: auto
 
 # Implementation log: <task-slug>
 
-> Append-only record of implementor decisions that diverge from
-> `schema.md`. Written by the implementor when running in auto
-> mode (no human in the loop). Read by the reviewer, the auditor,
-> and the summarizer.
+> Append-only record of implementor decisions that diverge from `schema.md`.
+> Written by the implementor when running in auto mode (no human in the loop).
+> Read by the reviewer, the auditor, and the summarizer.
 
 ---
 
@@ -19,15 +18,14 @@ mode: auto
 - One entry per deviation. Newest entries at the bottom.
 - An entry is required when the implementor:
   - changes the commit grouping promised by the schema,
-  - changes a public surface the schema named (function
-    signature, file path, configuration key),
+  - changes a public surface the schema named (function signature, file path,
+    configuration key),
   - skips a step the schema required, or
   - adds a step the schema did not anticipate.
-- A trivial choice the schema left open (variable names, local
-  helpers, comment wording) is NOT a deviation and does NOT need
-  an entry.
-- Schema text is frozen contract. Never edit `schema.md` from
-  this file; record what you did instead and why.
+- A trivial choice the schema left open (variable names, local helpers, comment
+  wording) is NOT a deviation and does NOT need an entry.
+- Schema text is frozen contract. Never edit `schema.md` from this file; record
+  what you did instead and why.
 
 ---
 
@@ -35,21 +33,21 @@ mode: auto
 
 ### <ISO Date> - <short title>
 
-**Schema reference:** `schema.md` `### Commit <N>` (or section
-heading the deviation departs from).
+**Schema reference:** `schema.md` `### Commit <N>` (or section heading the
+deviation departs from).
 
-**What the schema said:** One or two sentences quoting or
-paraphrasing the contract.
+**What the schema said:** One or two sentences quoting or paraphrasing the
+contract.
 
-**What was implemented:** One or two sentences describing the
-actual change. Cite via `path:lines (ref)` where useful.
+**What was implemented:** One or two sentences describing the actual change.
+Cite via `path:lines (ref)` where useful.
 
-**Why:** The constraint, discovery, or trade-off that forced the
-divergence. Be specific; "cleaner" is not a reason.
+**Why:** The constraint, discovery, or trade-off that forced the divergence. Be
+specific; "cleaner" is not a reason.
 
-**Follow-up (optional):** Anything the next reader (reviewer,
-auditor, summarizer, or future implementor) needs to know. Open
-questions belong here, not in the schema.
+**Follow-up (optional):** Anything the next reader (reviewer, auditor,
+summarizer, or future implementor) needs to know. Open questions belong here,
+not in the schema.
 
 ---
 

@@ -19,42 +19,40 @@ const DEFAULT_LOOP_MAX = 3;
 const DEFAULT_REVIEWS = 1;
 
 const renderStep = (step: ChainStep, depth = 0): string => {
-    const indent = "  ".repeat(depth);
-    switch (step.kind) {
-        case "agent": {
-            return `${indent}- Invoke \`subagent\` with \`{ agent: "${step.name}", task: "<task derived from {previous}>" }\`.`;
-        }
-        case "parallel": {
-            const agents = step.agents.slice(0, PARALLEL_MAX);
-            const list = agents.map((a) => `"${a}"`).join(", ");
-            return `${indent}- Invoke \`subagent\` in parallel mode with \`{ tasks: [ ${list}.map(a => ({ agent: a, task: "<derived from {previous}>" })) ] }\` (max ${PARALLEL_MAX} concurrent).`;
-        }
-        case "human": {
-            return `${indent}- **Human checkpoint:** ${step.prompt}. Pause and surface the question to the user before continuing.`;
-        }
-        case "loop": {
-            const header = `${indent}- Loop up to ${step.max} times:`;
-            const body = step.body
-                .map((s) => renderStep(s, depth + 1))
-                .join("\n");
-            return `${header}\n${body}`;
-        }
-    }
+	const indent = "  ".repeat(depth);
+	switch (step.kind) {
+		case "agent": {
+			return `${indent}- Invoke \`subagent\` with \`{ agent: "${step.name}", task: "<task derived from {previous}>" }\`.`;
+		}
+		case "parallel": {
+			const agents = step.agents.slice(0, PARALLEL_MAX);
+			const list = agents.map((a) => `"${a}"`).join(", ");
+			return `${indent}- Invoke \`subagent\` in parallel mode with \`{ tasks: [ ${list}.map(a => ({ agent: a, task: "<derived from {previous}>" })) ] }\` (max ${PARALLEL_MAX} concurrent).`;
+		}
+		case "human": {
+			return `${indent}- **Human checkpoint:** ${step.prompt}. Pause and surface the question to the user before continuing.`;
+		}
+		case "loop": {
+			const header = `${indent}- Loop up to ${step.max} times:`;
+			const body = step.body.map((s) => renderStep(s, depth + 1)).join("\n");
+			return `${header}\n${body}`;
+		}
+	}
 };
 
 const findLoopMax = (chain: readonly ChainStep[]): number => {
-    for (const s of chain) {
-        if (s.kind === "loop") {
-            return s.max;
-        }
-    }
-    return DEFAULT_LOOP_MAX;
+	for (const s of chain) {
+		if (s.kind === "loop") {
+			return s.max;
+		}
+	}
+	return DEFAULT_LOOP_MAX;
 };
 
 const renderDevelopEpilogue = (cmd: Workflow["commands"][string]): string => {
-    const loopMax = findLoopMax(cmd.chain);
-    const reviews = cmd.reviews_default ?? DEFAULT_REVIEWS;
-    return `## Retry semantics
+	const loopMax = findLoopMax(cmd.chain);
+	const reviews = cmd.reviews_default ?? DEFAULT_REVIEWS;
+	return `## Retry semantics
 
 If the implementor's output contains a top-level \`## BLOCKED\`
 section, surface the reason to the user and exit the loop early.
@@ -71,12 +69,12 @@ do not guess.
 };
 
 const renderCommand = (
-    name: string,
-    cmd: Workflow["commands"][string],
+	name: string,
+	cmd: Workflow["commands"][string],
 ): string => {
-    const steps = cmd.chain.map((step) => renderStep(step)).join("\n");
-    const epilogue = name === "develop" ? `\n${renderDevelopEpilogue(cmd)}` : "";
-    return `# /${name}
+	const steps = cmd.chain.map((step) => renderStep(step)).join("\n");
+	const epilogue = name === "develop" ? `\n${renderDevelopEpilogue(cmd)}` : "";
+	return `# /${name}
 
 ${cmd.description}
 
@@ -91,17 +89,17 @@ ${epilogue}`;
 };
 
 export const emitPrompts = async (
-    workflow: Workflow,
-    outDir: string,
+	workflow: Workflow,
+	outDir: string,
 ): Promise<string[]> => {
-    await mkdir(outDir, { recursive: true });
-    const entries = Object.entries(workflow.commands);
-    const written = await Promise.all(
-        entries.map(async ([name, cmd]) => {
-            const file = path.join(outDir, `${name}.md`);
-            await writeFile(file, `${renderCommand(name, cmd)}\n`, "utf8");
-            return file;
-        }),
-    );
-    return written;
+	await mkdir(outDir, { recursive: true });
+	const entries = Object.entries(workflow.commands);
+	const written = await Promise.all(
+		entries.map(async ([name, cmd]) => {
+			const file = path.join(outDir, `${name}.md`);
+			await writeFile(file, `${renderCommand(name, cmd)}\n`, "utf8");
+			return file;
+		}),
+	);
+	return written;
 };
