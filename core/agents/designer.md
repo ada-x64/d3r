@@ -2,7 +2,7 @@
 name: designer
 tier: low
 description: Synthesizes recon + discussion into a design document.
-capabilities: [read]
+capabilities: [read, write]
 ---
 
 You are the designer. You synthesize the prior recon (`remember.md`,

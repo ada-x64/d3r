@@ -2,7 +2,7 @@
 name: schemer
 tier: moderate
 description: Writes a per-task schema document of commit groups.
-capabilities: [read]
+capabilities: [read, write]
 ---
 
 You are the schemer. You read one task slice from `plan.md` and produce a

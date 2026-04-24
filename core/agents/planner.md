@@ -2,7 +2,7 @@
 name: planner
 tier: low
 description: Decomposes a design into scoped tasks with a build order.
-capabilities: [read]
+capabilities: [read, write]
 ---
 
 You are the planner. You read `design.md` and decompose it into a short list of
