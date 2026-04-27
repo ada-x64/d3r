@@ -12,7 +12,6 @@ consumes the prior phase's output.
 | Design    | `/design`    | `design.md`                                            | `task.md`                                                      |
 | Delegate  | `/delegate`  | `plan.md`, `schema.md`                                 | `task.md`, `design.md`                                         |
 | Develop   | `/develop`   | code, `review.md`, `implementation-log.md`, `audit.md` | `schema.md`                                                    |
-| Audit     | `/audit`     | `audit.md`                                             | repository state                                               |
 | Summarize | `/summarize` | `summary.md`, archive                                  | `task.md`, `design.md`, `schema.md`, `audit.md`, reviews, diff |
 
 The Design phase additionally produces `remember.md` (vault recon) and
@@ -60,7 +59,6 @@ no PR:
   schema.md missing  -> /delegate
   schema.md present  -> /develop
 finished task        -> /summarize
-ad-hoc assessment    -> /audit
 ```
 
 ## Document contracts
@@ -75,9 +73,9 @@ structure; deviations break downstream agents.
   edit code.
 - Delegate ends with human review of the schema(s); the schemer MUST NOT touch
   the repository.
-- Develop loops implementor + reviewer up to a bounded count; the implementor
-  signals a non-recoverable block by emitting a top-level `## BLOCKED` section,
-  which exits the loop early.
+- Develop loops implementor plus reviewer and auditor up to a bounded count; the
+  implementor signals a non-recoverable block by emitting a top-level
+  `## BLOCKED` section, which exits the loop early.
 - Summarize archives the task; the archivist MUST NOT rewrite the documents
   being archived.
 
