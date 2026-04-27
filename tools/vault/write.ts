@@ -12,11 +12,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type {
-	Result,
-	VaultAccessor,
-	VaultPathError,
-} from "../common/vault-root.ts";
+import type { Result } from "../common/result.ts";
+import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
 import { acceptRoot, assembleDoc } from "./_lib.ts";
 
 const DocArm = z.object({
@@ -53,7 +50,7 @@ export const vaultWrite = async (
 	const text =
 		params.mode === "doc"
 			? assembleDoc({
-					frontmatter: { kind: params.kind, ...params.frontmatter },
+					frontmatter: { ...params.frontmatter, kind: params.kind },
 					body: params.body,
 				})
 			: params.contents;

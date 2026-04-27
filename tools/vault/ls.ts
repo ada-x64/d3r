@@ -4,11 +4,8 @@
 import { readdir } from "node:fs/promises";
 import { z } from "zod";
 
-import type {
-	Result,
-	VaultAccessor,
-	VaultPathError,
-} from "../common/vault-root.ts";
+import type { Result } from "../common/result.ts";
+import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
 import { acceptRoot } from "./_lib.ts";
 
 export const VaultLsParams = z.object({

@@ -11,8 +11,6 @@ import type { Result } from "./result.ts";
 // oxlint-disable-next-line no-duplicate-imports
 import { error, ok } from "./result.ts";
 
-export type { Result };
-
 // Implementations are owned by harness adapters or higher-level
 // orchestration. The tools package only consumes the interface so the
 // vault location stays a runtime concern.
@@ -47,24 +45,8 @@ export const resolveUnderRoot = (
 	return ok(resolved);
 };
 
-// Discriminated accessor accepted by vault tools. Callers either pass an
-// already-known absolute root or a deferred `VaultResolver` that the
-// harness wires up. `acceptVaultPath` collapses the two and applies the
-// traversal guard in a single hop.
+// Discriminated accessor accepted by vault tools. Callers either pass
+// an already-known absolute root or a deferred `VaultResolver` that
+// the harness wires up. Vault tools collapse the two and apply the
+// traversal guard via `acceptRoot` in `vault/_lib.ts`.
 export type VaultAccessor = { vaultRoot: string } | { resolver: VaultResolver };
-
-export const acceptVaultPath = async (
-	accessor: VaultAccessor,
-	relPath: string,
-): Promise<Result<string, VaultPathError>> => {
-	const root =
-		"vaultRoot" in accessor
-			? accessor.vaultRoot
-			: await accessor.resolver.resolve();
-	return resolveUnderRoot(root, relPath);
-};
-
-export const resolveAccessorRoot = async (
-	accessor: VaultAccessor,
-): Promise<string> =>
-	"vaultRoot" in accessor ? accessor.vaultRoot : accessor.resolver.resolve();

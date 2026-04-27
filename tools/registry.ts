@@ -3,6 +3,7 @@ import { FmReadParams, fmRead } from "./fm/read.ts";
 import { FmWriteParams, fmWrite } from "./fm/write.ts";
 import { VaultEditParams, vaultEdit } from "./vault/edit.ts";
 import { VaultFindParams, vaultFind } from "./vault/find.ts";
+import { VaultLintParams, vaultLint } from "./vault/lint.ts";
 import { VaultLsParams, vaultLs } from "./vault/ls.ts";
 import { VaultMvParams, vaultMv } from "./vault/mv.ts";
 import { VaultReadParams, vaultRead } from "./vault/read.ts";
@@ -87,5 +88,13 @@ export const registry: ToolEntry[] = [
 			"Write a vault file. mode: doc assembles frontmatter+body; mode: raw writes bytes verbatim.",
 		schema: VaultWriteParams,
 		fn: vaultWrite as (...args: never[]) => unknown,
+	},
+	{
+		name: "vault_lint",
+		label: "Vault lint",
+		description:
+			"Validate vault markdown frontmatter against per-kind zod schemas; reports findings.",
+		schema: VaultLintParams,
+		fn: vaultLint as (...args: never[]) => unknown,
 	},
 ];

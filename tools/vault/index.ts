@@ -5,3 +5,5 @@ export * from "./mv.ts";
 export * from "./rm.ts";
 export * from "./edit.ts";
 export * from "./write.ts";
+export * from "./lint.ts";
+export { lintSchemas, getLintSchema } from "./lint/index.ts";
