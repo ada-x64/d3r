@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@d3r/core": "workspace:*",
+    "gray-matter": "^4",
     "zod": "^3"
   }
 }
