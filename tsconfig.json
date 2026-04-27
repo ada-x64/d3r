@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": ["build.ts", "core/**/*.ts", "adapters/**/*.ts"],
+  "include": ["build.ts"],
   "exclude": [
     "adapters/pi/extensions/subagent/**",
     "adapters/pi/extensions/mode/**"
