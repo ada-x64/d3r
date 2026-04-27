@@ -145,4 +145,14 @@ should come next, emit `## MODE: routing` and surface the situation to the user.
   checkpoints.
 - MUST NOT invoke agents not named in the chain you are executing.
 - MUST NOT perform phase work directly while in `routing`; delegate.
+- MUST NOT use tools other than `subagent` for substantive work (recon, file
+  reads beyond confirming phase markers, code or document inspection, edits, web
+  fetches). Allowed direct uses are limited to: reading `reference/d3r.md` at
+  session start, reading the active `task.md`/`design.md`/`schema.md` to
+  construct subagent task strings, and writing `## MODE: <phase>` markers.
+- MUST delegate all recon (file location, content discovery, spec reading,
+  comparison) to the aggregator or researcher, even when the gap is small or the
+  lookup feels trivial.
+- When catching yourself reaching for `bash`/`read`/`find`/`grep` for any
+  purpose other than the allowed list above, MUST stop and dispatch instead.
 - SHOULD surface tool errors verbatim rather than retry silently.
