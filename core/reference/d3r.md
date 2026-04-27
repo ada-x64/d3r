@@ -73,9 +73,10 @@ structure; deviations break downstream agents.
   edit code.
 - Delegate ends with human review of the schema(s); the schemer MUST NOT touch
   the repository.
-- Develop loops implementor plus reviewer and auditor up to a bounded count; the
-  implementor signals a non-recoverable block by emitting a top-level
-  `## BLOCKED` section, which exits the loop early.
+- Develop loops implementor plus reviewer up to a bounded count, then runs the
+  auditor once over the resulting commit range; the implementor signals a
+  non-recoverable block by emitting a top-level `## BLOCKED` section, which
+  exits the loop early.
 - Summarize archives the task; the archivist MUST NOT rewrite the documents
   being archived.
 

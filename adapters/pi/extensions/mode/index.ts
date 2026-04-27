@@ -132,7 +132,7 @@ const piExtension = (pi: ExtensionAPI): void => {
 			}
 			if (!phase) {
 				ctx.ui.notify(
-					`D3R: unknown phase "${args.trim()}" (expected: design, delegate, develop, summarize, routing)`,
+					`D3R: unknown phase "${args.trim()}" (expected: design, delegate, develop, routing)`,
 					"warning",
 				);
 				return;

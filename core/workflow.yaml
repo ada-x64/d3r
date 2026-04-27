@@ -11,14 +11,15 @@ commands:
       - { kind: agent, name: planner }
       - { kind: agent, name: schemer }
   develop:
-    description: Develop loop - implement, verify, then review and audit
+    description: Develop loop - implement, verify, review, and audit
     reviews_default: 1
     chain:
       - kind: loop
         max: 3
         body:
           - { kind: agent, name: implementor }
-          - { kind: parallel, agents: [reviewer, auditor] }
+          - { kind: parallel, agents: [reviewer] }
+      - { kind: agent, name: auditor }
   summarize:
     description: Summarize a finished task and archive it
     chain:

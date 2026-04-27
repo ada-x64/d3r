@@ -16,18 +16,12 @@
 
 export type ModeName = "normal" | "d3r";
 
-export type PhaseName =
-	| "design"
-	| "delegate"
-	| "develop"
-	| "summarize"
-	| "routing";
+export type PhaseName = "design" | "delegate" | "develop" | "routing";
 
 export const PHASE_NAMES: readonly PhaseName[] = [
 	"design",
 	"delegate",
 	"develop",
-	"summarize",
 	"routing",
 ] as const;
 
