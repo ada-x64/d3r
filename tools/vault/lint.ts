@@ -13,7 +13,7 @@ import { z } from "zod";
 import type { Result } from "../common/result.ts";
 import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
 import { parseFm } from "../fm/_lib.ts";
-import { resolveRoot, walkVault } from "./_lib.ts";
+import { acceptRoot, resolveRoot, walkVault } from "./_lib.ts";
 import { lintSchemas } from "./lint/index.ts";
 
 export const VaultLintParams = z.object({
@@ -25,7 +25,7 @@ export type VaultLintReason = "no-kind" | "unknown-kind" | "schema-fail";
 
 export interface VaultLintFinding {
 	path: string;
-	kind: string | null;
+	kind?: string;
 	ok: boolean;
 	reason?: VaultLintReason;
 	errors?: z.ZodIssue[];
@@ -42,15 +42,12 @@ export interface VaultLintResult {
 	summary: VaultLintSummary;
 }
 
-const lintOne = async (
-	root: string,
-	rel: string,
-): Promise<VaultLintFinding> => {
-	const raw = await readFile(path.join(root, rel), "utf8");
+const lintOne = async (abs: string, rel: string): Promise<VaultLintFinding> => {
+	const raw = await readFile(abs, "utf8");
 	const { data } = parseFm(raw);
-	const kindValue = typeof data.kind === "string" ? data.kind : null;
-	if (kindValue === null) {
-		return { path: rel, kind: null, ok: false, reason: "no-kind" };
+	const kindValue = typeof data.kind === "string" ? data.kind : undefined;
+	if (kindValue === undefined) {
+		return { path: rel, ok: false, reason: "no-kind" };
 	}
 	const schema = lintSchemas[kindValue];
 	if (!schema) {
@@ -74,12 +71,29 @@ export const vaultLint = async (
 	accessor: VaultAccessor,
 ): Promise<Result<VaultLintResult, VaultPathError>> => {
 	const root = await resolveRoot(accessor);
-	const walked = params.paths === undefined ? await walkVault(root) : null;
-	const targets =
-		walked === null
-			? (params.paths as string[])
-			: walked.filter((p) => p.endsWith(".md"));
-	const findings = await Promise.all(targets.map((rel) => lintOne(root, rel)));
+	const targets: { abs: string; rel: string }[] = [];
+	if (params.paths === undefined) {
+		const walked = await walkVault(root);
+		for (const rel of walked) {
+			if (rel.endsWith(".md")) {
+				targets.push({ abs: path.join(root, rel), rel });
+			}
+		}
+	} else {
+		const resolutions = await Promise.all(
+			params.paths.map((rel) => acceptRoot(accessor, rel)),
+		);
+		for (let i = 0; i < resolutions.length; i++) {
+			const resolved = resolutions[i];
+			if (!resolved.ok) {
+				return resolved;
+			}
+			targets.push({ abs: resolved.value, rel: params.paths[i] });
+		}
+	}
+	const findings = await Promise.all(
+		targets.map(({ abs, rel }) => lintOne(abs, rel)),
+	);
 	const okCount = findings.filter((f) => f.ok).length;
 	return {
 		ok: true,
