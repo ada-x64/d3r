@@ -1,6 +1,6 @@
 packages:
   - "core"
-  - "core/tools"
+  - "tools"
   - "adapters/pi"
   - "cli"
 allowBuilds:

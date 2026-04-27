@@ -20,7 +20,7 @@ on its own; the vault is for humans.
 
 ## Adding a harness adapter
 
-Mirror the shape of `adapters/pi/` and add a case to `build.ts`'s target
+Mirror the shape of `adapters/pi/` and add a case to `scripts/build.ts`'s target
 dispatch. The adapter owns capability-to-tool mapping, prompt rendering,
 extension vendoring, and the install script. If you find yourself wanting to
 edit `core/` to make your adapter work, the boundary is wrong somewhere -- stop
@@ -42,3 +42,8 @@ and use the richer header that ties them to a task, design, branch, and date.
 
 If you change a shape, update the zod schema first; the build will tell you what
 else needs to move.
+
+## File types
+
+Avoid writing shell scripts. All code in this repo should be cross-platform
+scripts written in TypeScript.

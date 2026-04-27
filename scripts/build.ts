@@ -4,7 +4,7 @@
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { compile as compilePi } from "./adapters/pi/compile.ts";
+import { compile as compilePi } from "../adapters/pi/compile.ts";
 
 const { values } = parseArgs({
 	options: { target: { type: "string", default: "pi" } },
@@ -12,8 +12,9 @@ const { values } = parseArgs({
 const target = values.target ?? "pi";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const coreDir = path.join(HERE, "core");
-const distDir = path.join(HERE, "dist", target);
+const REPO_ROOT = path.resolve(HERE, "..");
+const coreDir = path.join(REPO_ROOT, "core");
+const distDir = path.join(REPO_ROOT, "dist", target);
 
 switch (target) {
 	case "pi": {

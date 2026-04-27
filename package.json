@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "check": "tsc --noEmit && pnpm -r check",
-    "build:legacy": "tsx build.ts",
+    "build:legacy": "tsx scripts/build.ts",
     "lint": "oxlint --deny-warnings",
     "lint:md": "markdownlint-cli2",
     "fmt": "prettier --write .",
