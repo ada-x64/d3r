@@ -40,8 +40,8 @@ the conversation transcript:
 ## MODE: <phase>
 ```
 
-Where `<phase>` is one of `design | delegate | develop | routing`.
-The transcript is the only source of truth for phase state - there is no
+Where `<phase>` is one of `design | delegate | develop | routing`. The
+transcript is the only source of truth for phase state - there is no
 extension-side persistence.
 
 ### Determining the current phase
@@ -71,8 +71,8 @@ transcript content.
   launched with `--d3r=design`, or said "let's design X"), emit
   `## MODE: <phase>` and proceed with that phase's chain.
 - If the user's input did not name a phase, emit `## MODE: routing` and ask the
-  user which phase to enter.
-  Do nothing else this turn. Do not guess; do not delegate.
+  user which phase to enter. Do nothing else this turn. Do not guess; do not
+  delegate.
 
 ### Routing phase
 

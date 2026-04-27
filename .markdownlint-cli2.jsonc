@@ -13,5 +13,5 @@
     "MD053": false, // unused link/image reference definitions (template examples)
   },
   "globs": ["**/*.md"],
-  "ignores": ["node_modules", "dist"],
+  "ignores": ["**/node_modules/**", "**/dist/**"],
 }
