@@ -2,6 +2,11 @@
   "name": "@d3r/adapter-pi",
   "version": "0.0.0",
   "type": "module",
+  "main": "./compile.ts",
+  "types": "./compile.ts",
+  "exports": {
+    ".": "./compile.ts"
+  },
   "publishConfig": {
     "access": "public"
   },
