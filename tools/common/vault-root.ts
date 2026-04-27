@@ -11,6 +11,8 @@ import type { Result } from "./result.ts";
 // oxlint-disable-next-line no-duplicate-imports
 import { error, ok } from "./result.ts";
 
+export type { Result };
+
 // Implementations are owned by harness adapters or higher-level
 // orchestration. The tools package only consumes the interface so the
 // vault location stays a runtime concern.
