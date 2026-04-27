@@ -15,6 +15,8 @@ export const AgentSpec = z.object({
 	tier: z.enum(["low", "moderate", "high"]),
 	description: z.string(),
 	capabilities: z.array(Capability),
+	tools: z.array(z.string()).optional().default([]),
+	vault_scope: z.enum(["global", "local"]).optional().default("local"),
 });
 export type AgentSpec = z.infer<typeof AgentSpec>;
 
