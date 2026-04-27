@@ -190,10 +190,11 @@ const piExtension = (pi: ExtensionAPI): void => {
 	// the --d3r flag only on a fresh start.
 	pi.on("session_start", async (event, ctx) => {
 		const { reason } = event as { reason?: string };
-		const isFreshStart =
-			reason === "startup" || reason === "new" || reason === "fork";
-		if (isFreshStart && pi.getFlag("--d3r") === true) {
+		// Treat anything other than "resume" as a fresh start.
+		const isFreshStart = reason !== "resume";
+		if (isFreshStart && pi.getFlag("d3r") === true) {
 			state.mode = "d3r";
+			seedPhaseMarker("routing");
 		}
 		// Best-effort backfill: walk session messages and find the
 		// most recent assistant text containing a marker.
