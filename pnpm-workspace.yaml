@@ -1,2 +1,7 @@
+packages:
+  - "core"
+  - "core/tools"
+  - "adapters/pi"
+  - "cli"
 allowBuilds:
   esbuild: true

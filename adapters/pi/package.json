@@ -1,0 +1,19 @@
+{
+  "name": "@d3r/adapter-pi",
+  "version": "0.0.0",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@d3r/core": "workspace:*",
+    "@d3r/tools": "workspace:*",
+    "gray-matter": "^4",
+    "yaml": "^2",
+    "zod": "^3"
+  }
+}

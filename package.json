@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsx build.ts",
-    "check": "tsc --noEmit",
+    "build": "pnpm -r build",
+    "check": "pnpm -r check",
+    "build:legacy": "tsx build.ts",
     "lint": "oxlint --deny-warnings",
     "lint:md": "markdownlint-cli2",
     "fmt": "prettier --write .",

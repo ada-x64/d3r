@@ -1,0 +1,16 @@
+{
+  "name": "@d3r/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@d3r/core": "workspace:*",
+    "@d3r/tools": "workspace:*"
+  }
+}

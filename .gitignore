@@ -1,3 +1,3 @@
 /dist/
-/node_modules/
+node_modules/
 /adapters/pi/extensions/mode/orchestrator-contract.generated.ts

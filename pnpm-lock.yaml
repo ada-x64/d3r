@@ -36,6 +36,51 @@ importers:
         specifier: ^3
         version: 3.25.76
 
+  adapters/pi:
+    dependencies:
+      '@d3r/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@d3r/tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+      gray-matter:
+        specifier: ^4
+        version: 4.0.3
+      yaml:
+        specifier: ^2
+        version: 2.8.3
+      zod:
+        specifier: ^3
+        version: 3.25.76
+
+  cli:
+    dependencies:
+      '@d3r/core':
+        specifier: workspace:*
+        version: link:../core
+      '@d3r/tools':
+        specifier: workspace:*
+        version: link:../core/tools
+
+  core:
+    dependencies:
+      yaml:
+        specifier: ^2
+        version: 2.8.3
+      zod:
+        specifier: ^3
+        version: 3.25.76
+
+  core/tools:
+    dependencies:
+      '@d3r/core':
+        specifier: workspace:*
+        version: link:..
+      zod:
+        specifier: ^3
+        version: 3.25.76
+
 packages:
 
   '@esbuild/aix-ppc64@0.27.7':
