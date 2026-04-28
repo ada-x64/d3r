@@ -29,7 +29,10 @@ import { parse as parseYaml } from "yaml";
 import type { ChainStep } from "../../core/schema.ts";
 // oxlint-disable-next-line no-duplicate-imports
 import { AgentSpec, Workflow } from "../../core/schema.ts";
+import { registry } from "@d3r/tools";
 import { piToolMap } from "./capability-map.ts";
+
+const KNOWN_TOOL_NAMES = new Set(registry.map((t) => t.name));
 
 export interface BuildReport {
 	agents: number;
@@ -118,7 +121,20 @@ const compileOneAgent = async (
 	const raw = await readFile(srcPath, "utf8");
 	const parsed = matter(raw);
 	const spec = AgentSpec.parse(parsed.data);
-	const tools = [...new Set(spec.capabilities.flatMap((c) => piToolMap[c]))];
+	for (const t of spec.tools) {
+		if (!KNOWN_TOOL_NAMES.has(t)) {
+			const known = [...KNOWN_TOOL_NAMES].toSorted().join(", ");
+			throw new Error(
+				`agent "${spec.name}" lists unknown tool "${t}"; known: ${known}`,
+			);
+		}
+	}
+	const tools = [
+		...new Set([
+			...spec.capabilities.flatMap((c) => piToolMap[c]),
+			...spec.tools,
+		]),
+	];
 	const piFrontmatter = {
 		name: spec.name,
 		description: spec.description,

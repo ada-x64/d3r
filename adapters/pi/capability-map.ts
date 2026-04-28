@@ -8,6 +8,6 @@ export const piToolMap: Record<Capability, string[]> = {
 	write: ["write"],
 	edit: ["edit"],
 	bash: ["bash"],
-	web: ["bash"], // pi has no first-class web tool yet
+	web: [], // web is satisfied by the web_search tool listed in tools:
 	delegate: ["subagent"],
 };
