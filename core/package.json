@@ -5,7 +5,12 @@
   "main": "./schema.ts",
   "types": "./schema.ts",
   "exports": {
-    ".": "./schema.ts"
+    ".": "./schema.ts",
+    "./vault": "./vault/index.ts",
+    "./vault/init.ts": "./vault/init.ts",
+    "./vault/sync.ts": "./vault/sync.ts",
+    "./vault/migrate.ts": "./vault/migrate.ts",
+    "./vault/status.ts": "./vault/status.ts"
   },
   "publishConfig": {
     "access": "public"
