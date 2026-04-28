@@ -4,6 +4,7 @@
   "exclude": [
     "extensions/subagent/**",
     "extensions/mode/**",
+    "extensions/d3r-tools/**",
     "dist",
     "node_modules"
   ]

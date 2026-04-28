@@ -12,6 +12,7 @@
   "include": ["scripts/**/*.ts"],
   "exclude": [
     "adapters/pi/extensions/subagent/**",
-    "adapters/pi/extensions/mode/**"
+    "adapters/pi/extensions/mode/**",
+    "adapters/pi/extensions/d3r-tools/**"
   ]
 }
