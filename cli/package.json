@@ -18,7 +18,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json --noCheck",
+    "build": "tsc -p tsconfig.build.json",
     "postbuild": "chmod +x dist/cli.js",
     "check": "tsc --noEmit"
   },
