@@ -1,2 +1,2 @@
-// Placeholder until task 2 lands `vault-root.ts` and `result.ts` here.
-export const __placeholder = true;
+export * from "./result.ts";
+export * from "./vault-root.ts";
