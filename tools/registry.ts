@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { VaultAccessor } from "./common/vault-root.ts";
 import { FmReadParams, fmRead } from "./fm/read.ts";
 import { FmWriteParams, fmWrite } from "./fm/write.ts";
 import { VaultEditParams, vaultEdit } from "./vault/edit.ts";
@@ -40,12 +41,27 @@ const createIssueFn = async (params: CreateIssueParams) =>
 const commentIssueFn = async (params: CommentIssueParams) =>
 	commentIssueTool(params, defaultGithubProvider());
 
+// Harness-supplied per-call context. Tools that ignore one or both
+// fields just don't read them; the factory always supplies both.
+export interface ToolCtx {
+	accessor: VaultAccessor;
+	signal?: AbortSignal;
+}
+
 export interface ToolEntry {
 	name: string;
 	label: string;
 	description: string;
 	schema: z.ZodTypeAny;
-	fn: (...args: never[]) => unknown;
+	// True if a successful invocation mutates the filesystem under the
+	// vault root. The harness uses this to serialise per-path writes
+	// behind a mutation queue.
+	mutating?: boolean;
+	// Uniform invocation shape. Each entry adapts its tool's native
+	// signature (which may take a VaultAccessor, an AbortSignal, both,
+	// or neither) to this single contract so the harness can drive
+	// every entry the same way.
+	invoke: (params: never, ctx: ToolCtx) => Promise<unknown>;
 }
 
 export const registry: ToolEntry[] = [
@@ -55,7 +71,7 @@ export const registry: ToolEntry[] = [
 		description:
 			"Parse a markdown string into its YAML frontmatter object and body text.",
 		schema: FmReadParams,
-		fn: fmRead as (...args: never[]) => unknown,
+		invoke: async (params: never) => fmRead(params),
 	},
 	{
 		name: "fm_write",
@@ -63,7 +79,7 @@ export const registry: ToolEntry[] = [
 		description:
 			"Serialise a frontmatter object plus body back to a single markdown string.",
 		schema: FmWriteParams,
-		fn: fmWrite as (...args: never[]) => unknown,
+		invoke: async (params: never) => fmWrite(params),
 	},
 	{
 		name: "vault_read",
@@ -71,14 +87,14 @@ export const registry: ToolEntry[] = [
 		description:
 			"Read a vault file as text, or list immediate children when the path is a directory.",
 		schema: VaultReadParams,
-		fn: vaultRead as (...args: never[]) => unknown,
+		invoke: async (params: never, ctx) => vaultRead(params, ctx.accessor),
 	},
 	{
 		name: "vault_ls",
 		label: "Vault list",
 		description: "List immediate children of a vault-relative directory.",
 		schema: VaultLsParams,
-		fn: vaultLs as (...args: never[]) => unknown,
+		invoke: async (params: never, ctx) => vaultLs(params, ctx.accessor),
 	},
 	{
 		name: "vault_find",
@@ -86,7 +102,7 @@ export const registry: ToolEntry[] = [
 		description:
 			"Find vault files by glob, body substring, or frontmatter kind. All filters optional.",
 		schema: VaultFindParams,
-		fn: vaultFind as (...args: never[]) => unknown,
+		invoke: async (params: never, ctx) => vaultFind(params, ctx.accessor),
 	},
 	{
 		name: "vault_mv",
@@ -94,14 +110,16 @@ export const registry: ToolEntry[] = [
 		description:
 			"Rename or move a file within the vault; refuses to clobber unless overwrite is set.",
 		schema: VaultMvParams,
-		fn: vaultMv as (...args: never[]) => unknown,
+		mutating: true,
+		invoke: async (params: never, ctx) => vaultMv(params, ctx.accessor),
 	},
 	{
 		name: "vault_rm",
 		label: "Vault remove",
 		description: "Remove a vault file; directories require recursive: true.",
 		schema: VaultRmParams,
-		fn: vaultRm as (...args: never[]) => unknown,
+		mutating: true,
+		invoke: async (params: never, ctx) => vaultRm(params, ctx.accessor),
 	},
 	{
 		name: "vault_edit",
@@ -109,7 +127,8 @@ export const registry: ToolEntry[] = [
 		description:
 			"Literal find/replace inside a vault file; refuses unless find occurs exactly count times.",
 		schema: VaultEditParams,
-		fn: vaultEdit as (...args: never[]) => unknown,
+		mutating: true,
+		invoke: async (params: never, ctx) => vaultEdit(params, ctx.accessor),
 	},
 	{
 		name: "vault_write",
@@ -117,7 +136,8 @@ export const registry: ToolEntry[] = [
 		description:
 			"Write a vault file. mode: doc assembles frontmatter+body; mode: raw writes bytes verbatim.",
 		schema: VaultWriteParams,
-		fn: vaultWrite as (...args: never[]) => unknown,
+		mutating: true,
+		invoke: async (params: never, ctx) => vaultWrite(params, ctx.accessor),
 	},
 	{
 		name: "vault_lint",
@@ -125,7 +145,7 @@ export const registry: ToolEntry[] = [
 		description:
 			"Validate vault markdown frontmatter against per-kind zod schemas; reports findings.",
 		schema: VaultLintParams,
-		fn: vaultLint as (...args: never[]) => unknown,
+		invoke: async (params: never, ctx) => vaultLint(params, ctx.accessor),
 	},
 	{
 		name: "vector_read",
@@ -133,7 +153,7 @@ export const registry: ToolEntry[] = [
 		description:
 			'Semantic search over the vault\'s vector index. Currently a stub; returns kind: "stub" until the recollection-store design lands.',
 		schema: VectorReadParams,
-		fn: vectorRead as (...args: never[]) => unknown,
+		invoke: async (params: never) => vectorRead(params),
 	},
 	{
 		name: "web_search",
@@ -141,7 +161,7 @@ export const registry: ToolEntry[] = [
 		description:
 			"Search the web for relevant pages and return titled hits with short snippets.",
 		schema: WebSearchParams,
-		fn: webSearchFn as (...args: never[]) => unknown,
+		invoke: async (params: never, ctx) => webSearchFn(params, ctx.signal),
 	},
 	{
 		name: "create_issue",
@@ -149,7 +169,7 @@ export const registry: ToolEntry[] = [
 		description:
 			'Open a new GitHub issue on repo "owner/name" with title and body. Requires GITHUB_TOKEN with repo scope.',
 		schema: CreateIssueParams,
-		fn: createIssueFn as (...args: never[]) => unknown,
+		invoke: async (params: never) => createIssueFn(params),
 	},
 	{
 		name: "comment_issue",
@@ -157,6 +177,6 @@ export const registry: ToolEntry[] = [
 		description:
 			'Post a comment on an existing GitHub issue identified by repo "owner/name" and issue_number. Requires GITHUB_TOKEN with repo scope.',
 		schema: CommentIssueParams,
-		fn: commentIssueFn as (...args: never[]) => unknown,
+		invoke: async (params: never) => commentIssueFn(params),
 	},
 ];

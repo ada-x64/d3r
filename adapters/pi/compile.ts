@@ -38,7 +38,7 @@ export interface BuildReport {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXTENSIONS_SRC = path.join(HERE, "extensions");
-const WANTED_EXTENSIONS = ["subagent", "mode"] as const;
+const WANTED_EXTENSIONS = ["d3r-tools", "subagent", "mode"] as const;
 const ORCHESTRATOR_AGENT_FILE = "orchestrator.md";
 const ORCHESTRATOR_CONTRACT_OUT = path.join(
 	EXTENSIONS_SRC,
