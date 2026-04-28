@@ -2,20 +2,29 @@
   "name": "@d3r/cli",
   "version": "0.0.0",
   "type": "module",
-  "main": "./src/cli.ts",
-  "types": "./src/cli.ts",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
   "exports": {
-    ".": "./src/cli.ts"
+    ".": "./dist/cli.js",
+    "./package.json": "./package.json"
   },
+  "bin": {
+    "d3r": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "postbuild": "chmod +x dist/cli.js",
     "check": "tsc --noEmit"
   },
   "dependencies": {
     "@d3r/core": "workspace:*",
-    "@d3r/tools": "workspace:*"
+    "@d3r/tools": "workspace:*",
+    "citty": "^0.2.2"
   }
 }
