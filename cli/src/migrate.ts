@@ -1,4 +1,5 @@
 import { defineCommand } from "citty";
+import { runPendingMigrations } from "@d3r/core/vault/migrate.ts";
 
 export default defineCommand({
 	meta: {
@@ -6,6 +7,6 @@ export default defineCommand({
 		description: "Run pending vault migrations.",
 	},
 	run: async () => {
-		throw new Error("d3r migrate: not yet implemented");
+		await runPendingMigrations();
 	},
 });

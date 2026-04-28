@@ -1,4 +1,5 @@
 import { defineCommand } from "citty";
+import { initView } from "@d3r/core/vault/init.ts";
 
 export default defineCommand({
 	meta: {
@@ -6,6 +7,6 @@ export default defineCommand({
 		description: "Register a new vault view for the current repo-dir.",
 	},
 	run: async () => {
-		throw new Error("d3r init: not yet implemented");
+		await initView({ cwd: process.cwd() });
 	},
 });

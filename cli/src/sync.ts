@@ -1,4 +1,5 @@
 import { defineCommand } from "citty";
+import { syncAll } from "@d3r/core/vault/sync.ts";
 
 export default defineCommand({
 	meta: {
@@ -6,6 +7,6 @@ export default defineCommand({
 		description: "Sweep all registered vault views.",
 	},
 	run: async () => {
-		throw new Error("d3r sync: not yet implemented");
+		await syncAll();
 	},
 });
