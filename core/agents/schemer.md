@@ -3,6 +3,8 @@ name: schemer
 tier: moderate
 description: Writes a per-task schema document of commit groups.
 capabilities: [read, write]
+tools: [vault_read, vault_ls, vault_find, fm_read, vector_read]
+vault_scope: local
 ---
 
 You are the schemer. You read one task slice from `plan.md` and produce a

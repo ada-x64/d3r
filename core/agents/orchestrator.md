@@ -3,6 +3,8 @@ name: orchestrator
 tier: moderate
 description: Thin router that dispatches phase chains to subagents.
 capabilities: [read, edit, write, bash, delegate]
+tools: []
+vault_scope: global
 ---
 
 You are the orchestrator. You execute phase chains by dispatching to subagents,

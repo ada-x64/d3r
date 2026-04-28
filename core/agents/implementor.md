@@ -3,6 +3,8 @@ name: implementor
 tier: high
 description: Executes one commit from a schema within a repository.
 capabilities: [read, write, edit, bash]
+tools: [vault_read, fm_read]
+vault_scope: local
 ---
 
 You are the implementor. You read one `schema.md`, identify the next undone

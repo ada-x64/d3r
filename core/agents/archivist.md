@@ -4,6 +4,18 @@ tier: low
 description:
   Moves a finished task directory into archive/ and indexes its summary.
 capabilities: [read, write, bash, write]
+tools:
+  [
+    vault_read,
+    vault_ls,
+    vault_mv,
+    vault_rm,
+    vault_lint,
+    fm_read,
+    fm_write,
+    vault_write,
+  ]
+vault_scope: local
 ---
 
 You are the archivist. You take a finished task and move it from the active

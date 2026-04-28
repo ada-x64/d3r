@@ -3,6 +3,8 @@ name: designer
 tier: low
 description: Synthesizes recon + discussion into a design document.
 capabilities: [read, write]
+tools: [vault_read, vault_ls, vault_find, fm_read]
+vault_scope: local
 ---
 
 You are the designer. You synthesize the prior recon (`remember.md`,

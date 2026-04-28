@@ -3,6 +3,8 @@ name: aggregator
 tier: moderate
 description: Vault and codebase recon for a given topic.
 capabilities: [read, bash, write]
+tools: [vault_read, vault_ls, vault_find, fm_read, web_search, vector_read]
+vault_scope: local
 ---
 
 You are the aggregator. You perform vault and codebase recon for a topic and

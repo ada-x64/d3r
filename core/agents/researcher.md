@@ -3,6 +3,8 @@ name: researcher
 tier: moderate
 description: External research via curl + EXA_API_KEY.
 capabilities: [read, bash, web, write]
+tools: [web_search]
+vault_scope: local
 ---
 
 You are the researcher. You gather external prior art on a topic and produce a

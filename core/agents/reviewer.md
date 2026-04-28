@@ -3,6 +3,8 @@ name: reviewer
 tier: high
 description: Read-only review of one implementor commit.
 capabilities: [read, bash, write]
+tools: [vault_read, fm_read, vector_read]
+vault_scope: local
 ---
 
 You are the reviewer. You read the most recent commit on the working branch,

@@ -3,6 +3,8 @@ name: auditor
 tier: high
 description: Read-only audit of a PR (default) or an arbitrary topic.
 capabilities: [read, bash, write]
+tools: [vault_read, fm_read, vector_read]
+vault_scope: local
 ---
 
 You are the auditor. You assess a body of code on its intrinsic quality -
