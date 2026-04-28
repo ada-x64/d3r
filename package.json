@@ -5,12 +5,15 @@
   "scripts": {
     "build": "pnpm -r build",
     "check": "pnpm -r check",
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check .",
     "lint": "oxlint --deny-warnings",
     "lint:md": "markdownlint-cli2",
-    "fmt": "prettier --write .",
-    "fmt:check": "prettier --check ."
+    "release": "pnpm -r publish",
+    "version": "changeset version"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^22",
     "gray-matter": "^4",
     "markdownlint-cli2": "^0.22.1",
