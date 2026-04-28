@@ -83,6 +83,9 @@ importers:
       citty:
         specifier: ^0.2.2
         version: 0.2.2
+      zod:
+        specifier: ^3
+        version: 3.25.76
 
   core:
     dependencies:
