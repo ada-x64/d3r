@@ -3,7 +3,7 @@ name: archivist
 tier: low
 description:
   Moves a finished task directory into archive/ and indexes its summary.
-capabilities: [read, write, bash]
+capabilities: [read, write, bash, write]
 ---
 
 You are the archivist. You take a finished task and move it from the active

@@ -2,7 +2,7 @@
 name: summarizer
 tier: moderate
 description: Post-task retrospective synthesized from diff and vault docs.
-capabilities: [read, bash]
+capabilities: [read, bash, write]
 ---
 
 You are the summarizer. You write the post-task retrospective - one `summary.md`
