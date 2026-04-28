@@ -33,7 +33,16 @@ export default defineCommand({
 		description: "Launch the configured harness in routing mode.",
 	},
 	run: async (ctx) => {
-		await vaultGate(process.cwd());
+		// citty's runCommand (used for the bare entry) does not short-circuit
+		// on builtin help/version flags the way runMain does for sub-commands,
+		// so the gate has to opt out explicitly. The flags are then forwarded
+		// to the underlying harness as part of rawArgs.
+		const HELP = new Set(["--help", "-h"]);
+		const VERSION = new Set(["--version", "-v"]);
+		const skipGate = ctx.rawArgs.some((a) => HELP.has(a) || VERSION.has(a));
+		if (!skipGate) {
+			await vaultGate(process.cwd());
+		}
 		const harness = resolveHarness();
 		const args = [...HARNESS_FLAGS[harness], ...ctx.rawArgs];
 		const child = spawn(harness, args, { stdio: "inherit" });
