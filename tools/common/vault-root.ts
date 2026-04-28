@@ -10,7 +10,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { Result } from "./result.ts";
 // oxlint-disable-next-line no-duplicate-imports
-import { error, ok } from "./result.ts";
+import { error as fail, ok } from "./result.ts";
 
 // Implementations are owned by harness adapters or higher-level
 // orchestration. The tools package only consumes the interface so the
@@ -20,10 +20,14 @@ export interface VaultResolver {
 }
 
 export interface VaultPathError {
-	kind: "traversal" | "not-absolute-root";
+	kind: "traversal" | "not-absolute-root" | "realpath-failed";
 	root: string;
 	requested: string;
 	resolved: string;
+	// Populated only when `kind === "realpath-failed"`. Lets operators
+	// distinguish a symlink-escape / unreadable-root rejection from a
+	// benign `..`-traversal one without parsing strings.
+	cause?: string;
 }
 
 // Walks up to the nearest existing ancestor of `target`, realpaths
@@ -37,10 +41,19 @@ const realpathOrAncestor = async (
 	try {
 		const real = await realpath(target);
 		return tail === "" ? real : path.join(real, tail);
-	} catch {
+	} catch (error) {
+		const { code } = error as NodeJS.ErrnoException;
+		// Only walk up on the legitimate "tail does not exist yet" cases.
+		// EACCES / ELOOP / ENAMETOOLONG / EIO etc. must propagate so the
+		// guard fails closed; otherwise an intermediate symlink whose
+		// realpath happens to throw a non-ENOENT errno would be silently
+		// re-anchored against an ancestor and bypass the symlink check.
+		if (code !== "ENOENT" && code !== "ENOTDIR") {
+			throw error;
+		}
 		const parent = path.dirname(target);
 		if (parent === target) {
-			throw new Error("no existing ancestor");
+			throw new Error("no existing ancestor", { cause: error });
 		}
 		const nextTail =
 			tail === "" ? path.basename(target) : `${path.basename(target)}/${tail}`;
@@ -63,7 +76,7 @@ export const resolveUnderRoot = async (
 	relPath: string,
 ): Promise<Result<string, VaultPathError>> => {
 	if (!path.isAbsolute(root)) {
-		return error({
+		return fail({
 			kind: "not-absolute-root",
 			root,
 			requested: relPath,
@@ -73,10 +86,8 @@ export const resolveUnderRoot = async (
 	const resolved = path.resolve(root, relPath);
 	const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
 	if (resolved !== root && !resolved.startsWith(rootWithSep)) {
-		return error({ kind: "traversal", root, requested: relPath, resolved });
+		return fail({ kind: "traversal", root, requested: relPath, resolved });
 	}
-	const traversal = (): Result<string, VaultPathError> =>
-		error({ kind: "traversal", root, requested: relPath, resolved });
 	try {
 		const realRoot = await realpath(root);
 		const realRootSep = realRoot.endsWith(path.sep)
@@ -84,11 +95,23 @@ export const resolveUnderRoot = async (
 			: realRoot + path.sep;
 		const realResolved = await realpathOrAncestor(resolved, "");
 		if (realResolved !== realRoot && !realResolved.startsWith(realRootSep)) {
-			return traversal();
+			return fail({
+				kind: "traversal",
+				root,
+				requested: relPath,
+				resolved,
+			});
 		}
 		return ok(resolved);
-	} catch {
-		return traversal();
+	} catch (error) {
+		const { code } = error as NodeJS.ErrnoException;
+		return fail({
+			kind: "realpath-failed",
+			root,
+			requested: relPath,
+			resolved,
+			cause: code ?? (error as Error).message,
+		});
 	}
 };
 
