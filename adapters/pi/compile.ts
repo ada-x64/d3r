@@ -23,7 +23,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import matter from "gray-matter";
 import { parse as parseYaml } from "yaml";
 import type { ChainStep } from "../../core/schema.ts";
@@ -171,7 +171,7 @@ const linkTemplates = async (
 
 export const compile = async (
 	coreDir: string,
-	distDir: string,
+	distDir: string = path.join(HERE, "dist"),
 ): Promise<BuildReport> => {
 	await mkdir(distDir, { recursive: true });
 	await compileOrchestratorContract(coreDir);
@@ -184,3 +184,11 @@ export const compile = async (
 	);
 	return report;
 };
+
+// CLI entry: invoked via `pnpm --filter @d3r/adapter-pi build`.
+// Resolves the workspace's @d3r/core root relative to this file and
+// runs the compile against the package's own dist/.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+	const coreDir = path.resolve(HERE, "../../core");
+	await compile(coreDir);
+}

@@ -21,7 +21,7 @@
     ]
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsx compile.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
