@@ -8,7 +8,7 @@ const MAX_RESULTS = 20;
 const DEFAULT_RESULTS = 5;
 
 export const WebSearchParams = z.object({
-	query: z.string(),
+	query: z.string().min(1),
 	k: z.number().int().positive().max(MAX_RESULTS).default(DEFAULT_RESULTS),
 });
 export type WebSearchParams = z.infer<typeof WebSearchParams>;
