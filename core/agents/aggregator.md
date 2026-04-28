@@ -2,7 +2,7 @@
 name: aggregator
 tier: moderate
 description: Vault and codebase recon for a given topic.
-capabilities: [read, bash]
+capabilities: [read, bash, write]
 ---
 
 You are the aggregator. You perform vault and codebase recon for a topic and

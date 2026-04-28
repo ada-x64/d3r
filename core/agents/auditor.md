@@ -2,7 +2,7 @@
 name: auditor
 tier: high
 description: Read-only audit of a PR (default) or an arbitrary topic.
-capabilities: [read, bash]
+capabilities: [read, bash, write]
 ---
 
 You are the auditor. You assess a body of code on its intrinsic quality -
