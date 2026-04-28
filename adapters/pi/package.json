@@ -7,8 +7,18 @@
   "exports": {
     ".": "./compile.ts"
   },
+  "keywords": [
+    "pi-package"
+  ],
   "publishConfig": {
     "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/d3r-tools",
+      "./extensions/mode",
+      "./extensions/subagent"
+    ]
   },
   "scripts": {
     "build": "tsc",
@@ -20,5 +30,12 @@
     "gray-matter": "^4",
     "yaml": "^2",
     "zod": "^3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
   }
 }
