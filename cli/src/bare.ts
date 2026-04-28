@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { defineCommand } from "citty";
+import { vaultGate } from "./vault-gate.js";
 
 const HARNESS_FLAGS: Record<string, string[]> = {
 	pi: ["--d3r"],
@@ -32,6 +33,7 @@ export default defineCommand({
 		description: "Launch the configured harness in routing mode.",
 	},
 	run: async (ctx) => {
+		await vaultGate(process.cwd());
 		const harness = resolveHarness();
 		const args = [...HARNESS_FLAGS[harness], ...ctx.rawArgs];
 		const child = spawn(harness, args, { stdio: "inherit" });

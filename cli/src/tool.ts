@@ -22,6 +22,7 @@ import {
 	schemaToParseArgsOptions,
 	walkDiscriminated,
 } from "./zod-args.js";
+import { vaultGate } from "./vault-gate.js";
 
 const JSON_INDENT = 2;
 const EXIT_FAILURE = 1;
@@ -221,6 +222,9 @@ export default defineCommand({
 	meta: {
 		name: "tool",
 		description: "Dispatch a @d3r/tools registry entry.",
+	},
+	setup: async () => {
+		await vaultGate(process.cwd());
 	},
 	args: {
 		name: {
