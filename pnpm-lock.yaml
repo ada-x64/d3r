@@ -71,6 +71,9 @@ importers:
 
   cli:
     dependencies:
+      '@d3r/adapter-pi':
+        specifier: workspace:*
+        version: link:../adapters/pi
       '@d3r/core':
         specifier: workspace:*
         version: link:../core
