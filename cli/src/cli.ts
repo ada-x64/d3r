@@ -31,7 +31,17 @@ const firstPositional = rawArgs.find((a) => !a.startsWith("-"));
 if (firstPositional && subCommandNames.has(firstPositional)) {
 	runMain(main);
 } else {
-	const { default: bare } = await import("./bare.js");
-	const { runCommand } = await import("citty");
-	await runCommand(bare, { rawArgs });
+	try {
+		const { default: bare } = await import("./bare.js");
+		const { runCommand } = await import("citty");
+		await runCommand(bare, { rawArgs });
+	} catch (error) {
+		// Match citty's runMain UX: print the message (not a stack) and exit
+		// non-zero. resolveHarness() throws synchronously for invalid
+		// D3R_HARNESS values; without this, Node would surface those as an
+		// unhandled top-level rejection with a stack trace.
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`${message}\n`);
+		process.exitCode = 1;
+	}
 }

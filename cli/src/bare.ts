@@ -47,24 +47,38 @@ export default defineCommand({
 
 		try {
 			await new Promise<void>((resolve) => {
-				child.on("error", (err) => {
-					process.stderr.write(
-						`d3r: failed to spawn ${harness}: ${err.message}; is it installed and on $PATH?\n`,
-					);
-					process.exitCode = EXIT_COMMAND_NOT_FOUND;
+				// `error` and `close` can both fire (in either order) when the
+				// binary is missing; the first event wins so the exit code is not
+				// overwritten by a trailing `close` with a null code.
+				let settled = false;
+				const settle = (assign: () => void) => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					assign();
 					resolve();
+				};
+				child.on("error", (err) => {
+					settle(() => {
+						process.stderr.write(
+							`d3r: failed to spawn ${harness}: ${err.message}; is it installed and on $PATH?\n`,
+						);
+						process.exitCode = EXIT_COMMAND_NOT_FOUND;
+					});
 				});
 				child.on("close", (code, signal) => {
-					if (code !== null) {
-						process.exitCode = code;
-					} else if (signal) {
-						const signo = osConstants.signals[signal];
-						process.exitCode =
-							typeof signo === "number" ? SIGNAL_EXIT_BASE + signo : 1;
-					} else {
-						process.exitCode = 1;
-					}
-					resolve();
+					settle(() => {
+						if (code !== null) {
+							process.exitCode = code;
+						} else if (signal) {
+							const signo = osConstants.signals[signal];
+							process.exitCode =
+								typeof signo === "number" ? SIGNAL_EXIT_BASE + signo : 1;
+						} else {
+							process.exitCode = 1;
+						}
+					});
 				});
 			});
 		} finally {
