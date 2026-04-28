@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "declaration": true
+  },
+  "include": [
+    "index.ts",
+    "registry.ts",
+    "common/**/*.ts",
+    "fm/**/*.ts",
+    "vault/**/*.ts",
+    "web/**/*.ts",
+    "vector/**/*.ts",
+    "ticketing/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

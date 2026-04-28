@@ -2,21 +2,46 @@
   "name": "@d3r/core",
   "version": "0.0.0",
   "type": "module",
-  "main": "./schema.ts",
-  "types": "./schema.ts",
+  "main": "./dist/schema.js",
+  "types": "./dist/schema.d.ts",
   "exports": {
-    ".": "./schema.ts",
-    "./vault": "./vault/index.ts",
-    "./vault/init.ts": "./vault/init.ts",
-    "./vault/sync.ts": "./vault/sync.ts",
-    "./vault/migrate.ts": "./vault/migrate.ts",
-    "./vault/status.ts": "./vault/status.ts"
+    ".": {
+      "import": "./dist/schema.js",
+      "types": "./dist/schema.d.ts"
+    },
+    "./vault": {
+      "import": "./dist/vault/index.js",
+      "types": "./dist/vault/index.d.ts"
+    },
+    "./vault/init.ts": {
+      "import": "./dist/vault/init.js",
+      "types": "./dist/vault/init.d.ts"
+    },
+    "./vault/sync.ts": {
+      "import": "./dist/vault/sync.js",
+      "types": "./dist/vault/sync.d.ts"
+    },
+    "./vault/migrate.ts": {
+      "import": "./dist/vault/migrate.js",
+      "types": "./dist/vault/migrate.d.ts"
+    },
+    "./vault/status.ts": {
+      "import": "./dist/vault/status.js",
+      "types": "./dist/vault/status.d.ts"
+    }
   },
+  "files": [
+    "dist",
+    "agents",
+    "templates",
+    "reference",
+    "workflow.yaml"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit"
   },
   "dependencies": {
