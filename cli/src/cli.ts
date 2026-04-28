@@ -2,16 +2,6 @@
 import { defineCommand, runMain } from "citty";
 import pkg from "../package.json" with { type: "json" };
 
-const subCommandNames = new Set([
-	"install",
-	"tool",
-	"init",
-	"sync",
-	"migrate",
-	"status",
-	"version",
-]);
-
 const main = defineCommand({
 	meta: {
 		name: "d3r",
@@ -28,17 +18,12 @@ const main = defineCommand({
 		version: () => import("./version.js").then((m) => m.default),
 	},
 	run: async (ctx) => {
+		const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
 		const first = ctx.rawArgs.find((a) => !a.startsWith("-"));
 		if (first && subCommandNames.has(first)) {
 			return;
 		}
-		const bare = await import("./bare.js").then((m) => m.default);
-		await bare.run?.({
-			args: {},
-			cmd: bare,
-			rawArgs: ctx.rawArgs,
-			data: undefined,
-		} as never);
+		throw new Error("d3r bare-launch: not yet implemented");
 	},
 });
 
