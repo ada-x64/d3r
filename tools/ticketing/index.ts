@@ -29,7 +29,7 @@ export interface TicketingProvider {
 export const CreateIssueParams = z.object({
 	repo: repoSchema,
 	title: z.string().min(1),
-	body: z.string(),
+	body: z.string().min(1),
 	labels: z.array(z.string()).optional(),
 });
 export type CreateIssueParams = z.infer<typeof CreateIssueParams>;

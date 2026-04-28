@@ -9,6 +9,13 @@ import { VaultMvParams, vaultMv } from "./vault/mv.ts";
 import { VaultReadParams, vaultRead } from "./vault/read.ts";
 import { VaultRmParams, vaultRm } from "./vault/rm.ts";
 import { VaultWriteParams, vaultWrite } from "./vault/write.ts";
+import {
+	CommentIssueParams,
+	CreateIssueParams,
+	commentIssueTool,
+	createIssueTool,
+} from "./ticketing/index.ts";
+import { defaultProvider as defaultGithubProvider } from "./ticketing/providers/github.ts";
 import { VectorReadParams, vectorRead } from "./vector/read.ts";
 import { createExaProvider } from "./web/providers/exa.ts";
 import { WebSearchParams, webSearch } from "./web/search.ts";
@@ -26,6 +33,12 @@ const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) => {
 	const provider = createExaProvider();
 	return webSearch(params, provider, signal);
 };
+
+const createIssueFn = async (params: CreateIssueParams) =>
+	createIssueTool(params, defaultGithubProvider());
+
+const commentIssueFn = async (params: CommentIssueParams) =>
+	commentIssueTool(params, defaultGithubProvider());
 
 export interface ToolEntry {
 	name: string;
@@ -129,5 +142,21 @@ export const registry: ToolEntry[] = [
 			"Search the web for relevant pages and return titled hits with short snippets.",
 		schema: WebSearchParams,
 		fn: webSearchFn as (...args: never[]) => unknown,
+	},
+	{
+		name: "create_issue",
+		label: "Create GitHub issue",
+		description:
+			'Open a new GitHub issue on repo "owner/name" with title and body. Requires GITHUB_TOKEN with repo scope.',
+		schema: CreateIssueParams,
+		fn: createIssueFn as (...args: never[]) => unknown,
+	},
+	{
+		name: "comment_issue",
+		label: "Comment on GitHub issue",
+		description:
+			'Post a comment on an existing GitHub issue identified by repo "owner/name" and issue_number. Requires GITHUB_TOKEN with repo scope.',
+		schema: CommentIssueParams,
+		fn: commentIssueFn as (...args: never[]) => unknown,
 	},
 ];

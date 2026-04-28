@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@d3r/core": "workspace:*",
+    "@octokit/rest": "^21",
     "exa-js": "^2.12.1",
     "gray-matter": "^4",
     "zod": "^3"
