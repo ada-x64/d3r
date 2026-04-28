@@ -17,14 +17,21 @@ const main = defineCommand({
 		status: () => import("./status.js").then((m) => m.default),
 		version: () => import("./version.js").then((m) => m.default),
 	},
-	run: async (ctx) => {
-		const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
-		const first = ctx.rawArgs.find((a) => !a.startsWith("-"));
-		if (first && subCommandNames.has(first)) {
-			return;
-		}
-		throw new Error("d3r bare-launch: not yet implemented");
+	run: async () => {
+		// Sub-commands run through citty's own dispatcher; the bare path is
+		// handled below before runMain ever sees citty. Nothing to do here.
 	},
 });
 
-runMain(main);
+// process.argv is [node, script, ...userArgs]; user args start at index 2.
+const USER_ARGV_OFFSET = 2;
+const rawArgs = process.argv.slice(USER_ARGV_OFFSET);
+const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
+const firstPositional = rawArgs.find((a) => !a.startsWith("-"));
+if (firstPositional && subCommandNames.has(firstPositional)) {
+	runMain(main);
+} else {
+	const { default: bare } = await import("./bare.js");
+	const { runCommand } = await import("citty");
+	await runCommand(bare, { rawArgs });
+}
