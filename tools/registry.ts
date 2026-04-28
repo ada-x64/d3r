@@ -9,6 +9,7 @@ import { VaultMvParams, vaultMv } from "./vault/mv.ts";
 import { VaultReadParams, vaultRead } from "./vault/read.ts";
 import { VaultRmParams, vaultRm } from "./vault/rm.ts";
 import { VaultWriteParams, vaultWrite } from "./vault/write.ts";
+import { VectorReadParams, vectorRead } from "./vector/read.ts";
 import { createExaProvider } from "./web/providers/exa.ts";
 import { WebSearchParams, webSearch } from "./web/search.ts";
 
@@ -112,6 +113,14 @@ export const registry: ToolEntry[] = [
 			"Validate vault markdown frontmatter against per-kind zod schemas; reports findings.",
 		schema: VaultLintParams,
 		fn: vaultLint as (...args: never[]) => unknown,
+	},
+	{
+		name: "vector_read",
+		label: "Vector read",
+		description:
+			'Semantic search over the vault\'s vector index. Currently a stub; returns kind: "stub" until the recollection-store design lands.',
+		schema: VectorReadParams,
+		fn: vectorRead as (...args: never[]) => unknown,
 	},
 	{
 		name: "web_search",
