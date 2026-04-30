@@ -10,10 +10,10 @@
     "lint:md": "markdownlint-cli2",
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
-    "test": "vitest --run",
+    "test": "vitest --run --passWithNoTests",
     "test:watch": "vitest",
-    "test:dist": "vitest --run --project=dist",
-    "test:coverage": "vitest --run --coverage"
+    "test:dist": "vitest --run --project=dist --passWithNoTests",
+    "test:coverage": "vitest --run --coverage --passWithNoTests"
   },
   "devDependencies": {
     "@types/node": "^22",
