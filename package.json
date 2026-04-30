@@ -9,7 +9,11 @@
     "lint": "oxlint --deny-warnings",
     "lint:md": "markdownlint-cli2",
     "fmt": "prettier --write .",
-    "fmt:check": "prettier --check ."
+    "fmt:check": "prettier --check .",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "test:dist": "vitest --run --project=dist",
+    "test:coverage": "vitest --run --coverage"
   },
   "devDependencies": {
     "@types/node": "^22",
