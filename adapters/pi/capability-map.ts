@@ -1,7 +1,7 @@
 // Maps harness-agnostic Capability values (core/schema.ts) to the
 // concrete pi tool names the compiled agent's frontmatter must list.
 
-import type { Capability } from "../../core/schema.ts";
+import type { Capability } from "@d3r/core";
 
 export const piToolMap: Record<Capability, string[]> = {
 	read: ["read", "grep", "find", "ls"],
