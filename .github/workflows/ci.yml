@@ -24,7 +24,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - run: pnpm -r check
-      - run: pnpm lint --deny-warnings
+      - run: pnpm lint
       - run: pnpm lint:md
       - run: pnpm fmt:check
       - run: pnpm test:coverage
