@@ -8,6 +8,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 
 import { fetchAndMapVersion } from "./http-mapper.ts";
 
@@ -48,5 +49,11 @@ describe("fetchAndMapVersion", () => {
 		);
 
 		await expect(fetchAndMapVersion(ENDPOINT)).rejects.toThrow(/http 500/);
+	});
+
+	it("rejects with a ZodError when the body is missing `version`", async () => {
+		server.use(http.get(ENDPOINT, () => HttpResponse.json({ ver: "1.2.3" })));
+
+		await expect(fetchAndMapVersion(ENDPOINT)).rejects.toBeInstanceOf(ZodError);
 	});
 });
