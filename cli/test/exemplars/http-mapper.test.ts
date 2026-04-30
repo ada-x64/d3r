@@ -11,7 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { fetchAndMapVersion } from "./http-mapper.ts";
 
-const URL = "https://example.test/v.json";
+const ENDPOINT = "https://example.test/v.json";
 
 const server = setupServer();
 
@@ -29,9 +29,11 @@ afterAll(() => {
 
 describe("fetchAndMapVersion", () => {
 	it("renames `version` to `latest` on a 200 response", async () => {
-		server.use(http.get(URL, () => HttpResponse.json({ version: "1.2.3" })));
+		server.use(
+			http.get(ENDPOINT, () => HttpResponse.json({ version: "1.2.3" })),
+		);
 
-		const result = await fetchAndMapVersion(URL);
+		const result = await fetchAndMapVersion(ENDPOINT);
 
 		expect(result).toMatchInlineSnapshot(`
 			{
@@ -41,8 +43,10 @@ describe("fetchAndMapVersion", () => {
 	});
 
 	it("rejects with a typed error when the upstream returns 5xx", async () => {
-		server.use(http.get(URL, () => new HttpResponse(null, { status: 500 })));
+		server.use(
+			http.get(ENDPOINT, () => new HttpResponse(null, { status: 500 })),
+		);
 
-		await expect(fetchAndMapVersion(URL)).rejects.toThrow(/http 500/);
+		await expect(fetchAndMapVersion(ENDPOINT)).rejects.toThrow(/http 500/);
 	});
 });

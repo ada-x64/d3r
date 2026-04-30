@@ -21,7 +21,7 @@ export const runAndCapture = async (
 
 	return new Promise((resolve, reject) => {
 		child.on("error", reject);
-		child.on("exit", (code) => {
+		child.on("close", (code) => {
 			resolve({
 				stdout: Buffer.concat(chunks).toString("utf8"),
 				exitCode: code ?? 0,
