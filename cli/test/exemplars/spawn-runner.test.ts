@@ -18,12 +18,22 @@ describe("runAndCapture", () => {
 	it("captures stdout and a zero exit code", async () => {
 		const result = await runAndCapture(stubPath, ["hello", "0"]);
 
-		expect(result).toEqual({ stdout: "hello", exitCode: 0 });
+		expect(result).toEqual({ stdout: "hello", exitCode: 0, signal: null });
 	});
 
 	it("surfaces a non-zero exit code verbatim", async () => {
-		const result = await runAndCapture(stubPath, ["bye", "3"]);
+		const result = await runAndCapture(stubPath, ["bye", "1"]);
 
-		expect(result).toEqual({ stdout: "bye", exitCode: 3 });
+		expect(result).toEqual({ stdout: "bye", exitCode: 1, signal: null });
+	});
+
+	it("surfaces a terminating signal as `signal`, with a null `exitCode`", async () => {
+		const result = await runAndCapture(stubPath, ["interrupted", "SIGTERM"]);
+
+		expect(result).toEqual({
+			stdout: "interrupted",
+			exitCode: null,
+			signal: "SIGTERM",
+		});
 	});
 });
