@@ -10,9 +10,10 @@ they don't fork it.
 ## Quality gates
 
 Every change must pass `pnpm check`, `pnpm lint --deny-warnings`,
-`pnpm lint:md`, and `pnpm fmt:check` before commit. Run `pnpm fmt` to
-auto-format. Authored sources are ASCII-only (vendored files keep their upstream
-encoding). Arrow functions only. Prefer `Promise.all` over awaits in loops.
+`pnpm lint:md`, `pnpm fmt:check`, and `pnpm test` before commit. Run `pnpm fmt`
+to auto-format. Authored sources are ASCII-only (vendored files keep their
+upstream encoding). Arrow functions only. Prefer `Promise.all` over awaits in
+loops.
 
 Source code does not reference vault documents -- no decision IDs, section
 numbers, or commit-schema labels in comments or commit messages. The code stands
