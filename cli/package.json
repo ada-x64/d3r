@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@d3r/core": "workspace:*",
-    "@d3r/tools": "workspace:*"
+    "@d3r/tools": "workspace:*",
+    "zod": "^3"
   }
 }
