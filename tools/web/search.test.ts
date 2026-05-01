@@ -5,7 +5,7 @@
 // interface itself is exercised via a DI fake in callers; those tests
 // live next to those callers.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
 	DEFAULT_WEB_SEARCH_PROVIDER,
@@ -15,19 +15,45 @@ import {
 
 type WebSearchProvider = ReturnType<typeof selectWebSearchProvider>;
 
+// Pin selector → Exa mapping by exercising the returned provider's
+// lazy key-read path: only the Exa factory throws MissingApiKeyError
+// for EXA_API_KEY, so a generic WebSearchProvider-shaped object would
+// not satisfy this assertion.
+const ORIGINAL_KEY = process.env.EXA_API_KEY;
+
+afterEach(() => {
+	if (ORIGINAL_KEY === undefined) {
+		delete process.env.EXA_API_KEY;
+	} else {
+		process.env.EXA_API_KEY = ORIGINAL_KEY;
+	}
+});
+
 describe("selectWebSearchProvider", () => {
-	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is unset`, () => {
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is unset`, async () => {
+		delete process.env.EXA_API_KEY;
 		const provider = selectWebSearchProvider({});
-		expect(typeof provider.search).toBe("function");
 		expect(typeof provider.fetch).toBe("function");
+		await expect(
+			provider.search({ query: "ping", k: 1 }),
+		).rejects.toMatchObject({
+			name: "MissingApiKeyError",
+			envVar: "EXA_API_KEY",
+		});
 	});
 
-	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is set to '${DEFAULT_WEB_SEARCH_PROVIDER}'`, () => {
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is set to '${DEFAULT_WEB_SEARCH_PROVIDER}'`, async () => {
+		delete process.env.EXA_API_KEY;
 		const provider = selectWebSearchProvider({
 			[WEB_SEARCH_PROVIDER_ENV]: DEFAULT_WEB_SEARCH_PROVIDER,
 		});
 		expect(typeof provider.search).toBe("function");
-		expect(typeof provider.fetch).toBe("function");
+		await expect(
+			provider.fetch({ urls: ["https://example.com"] }),
+		).rejects.toMatchObject({
+			name: "MissingApiKeyError",
+			envVar: "EXA_API_KEY",
+		});
 	});
 
 	it("throws a clear error naming the env var and value when the selector is unknown", () => {
