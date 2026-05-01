@@ -9,22 +9,10 @@ import { VaultMvParams, vaultMv } from "./vault/mv.ts";
 import { VaultReadParams, vaultRead } from "./vault/read.ts";
 import { VaultRmParams, vaultRm } from "./vault/rm.ts";
 import { VaultWriteParams, vaultWrite } from "./vault/write.ts";
-import { createExaProvider } from "./web/providers/exa.ts";
-import { WebSearchParams, webSearch } from "./web/search.ts";
+import { WebSearchParams, selectWebSearchProvider } from "./web/search.ts";
 
-const DEFAULT_WEB_SEARCH_PROVIDER = "exa";
-
-const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) => {
-	const selector =
-		process.env.D3R_WEB_SEARCH_PROVIDER ?? DEFAULT_WEB_SEARCH_PROVIDER;
-	if (selector !== "exa") {
-		throw new Error(
-			`Unknown D3R_WEB_SEARCH_PROVIDER value: ${selector} (supported: exa)`,
-		);
-	}
-	const provider = createExaProvider();
-	return webSearch(params, provider, signal);
-};
+const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) =>
+	selectWebSearchProvider().search(params, signal);
 
 export interface ToolEntry {
 	name: string;
