@@ -198,8 +198,19 @@ describe("createExaProvider - search()", () => {
 	});
 
 	it("rejects synchronously when the caller's signal is already aborted", async () => {
-		process.env.EXA_API_KEY = "test-key";
-		const provider = createExaProvider();
+		// Stub client whose methods throw if invoked. The short-circuit
+		// on `signal.aborted` happens before the SDK call, so reaching
+		// either method indicates a regression.
+		const provider = createExaProvider({
+			client: {
+				searchAndContents: () => {
+					throw new Error("searchAndContents must not be invoked when aborted");
+				},
+				getContents: () => {
+					throw new Error("getContents must not be invoked when aborted");
+				},
+			},
+		});
 		const ac = new AbortController();
 		ac.abort();
 
@@ -209,14 +220,16 @@ describe("createExaProvider - search()", () => {
 	});
 
 	it("rejects promptly when the caller's signal fires mid-flight", async () => {
-		process.env.EXA_API_KEY = "test-key";
-		const provider = createExaProvider();
+		// Stub returns a promise that never resolves, so the only way
+		// the test completes is via the abort race rejecting.
+		const provider = createExaProvider({
+			client: {
+				searchAndContents: () => new Promise(() => {}),
+				getContents: () => new Promise(() => {}),
+			},
+		});
 		const ac = new AbortController();
 		const pending = provider.search({ query: "q", k: 1 }, ac.signal);
-		// Swallow the eventual upstream rejection so the unhandled
-		// rejection does not pollute later tests; the assertion below
-		// checks the abort wrapper rejected first.
-		pending.catch(() => undefined);
 		ac.abort();
 
 		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
@@ -240,8 +253,16 @@ describe("createExaProvider - fetch()", () => {
 	});
 
 	it("rejects synchronously when the caller's signal is already aborted", async () => {
-		process.env.EXA_API_KEY = "test-key";
-		const provider = createExaProvider();
+		const provider = createExaProvider({
+			client: {
+				searchAndContents: () => {
+					throw new Error("searchAndContents must not be invoked when aborted");
+				},
+				getContents: () => {
+					throw new Error("getContents must not be invoked when aborted");
+				},
+			},
+		});
 		const ac = new AbortController();
 		ac.abort();
 
@@ -251,11 +272,14 @@ describe("createExaProvider - fetch()", () => {
 	});
 
 	it("rejects promptly when the caller's signal fires mid-flight", async () => {
-		process.env.EXA_API_KEY = "test-key";
-		const provider = createExaProvider();
+		const provider = createExaProvider({
+			client: {
+				searchAndContents: () => new Promise(() => {}),
+				getContents: () => new Promise(() => {}),
+			},
+		});
 		const ac = new AbortController();
 		const pending = provider.fetch({ urls: ["https://x.example/"] }, ac.signal);
-		pending.catch(() => undefined);
 		ac.abort();
 
 		await expect(pending).rejects.toMatchObject({ name: "AbortError" });

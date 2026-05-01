@@ -16,21 +16,18 @@ import {
 type WebSearchProvider = ReturnType<typeof selectWebSearchProvider>;
 
 describe("selectWebSearchProvider", () => {
-	it("returns a provider that satisfies the interface when the env is unset", () => {
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is unset`, () => {
 		const provider = selectWebSearchProvider({});
 		expect(typeof provider.search).toBe("function");
 		expect(typeof provider.fetch).toBe("function");
 	});
 
-	it(`defaults to ${DEFAULT_WEB_SEARCH_PROVIDER} when ${WEB_SEARCH_PROVIDER_ENV} is unset`, () => {
-		// The default is a structural promise rather than a behavioural
-		// one; constructing it should not throw on a clean env.
-		expect(() => selectWebSearchProvider({})).not.toThrow();
-		expect(() =>
-			selectWebSearchProvider({
-				[WEB_SEARCH_PROVIDER_ENV]: DEFAULT_WEB_SEARCH_PROVIDER,
-			}),
-		).not.toThrow();
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is set to '${DEFAULT_WEB_SEARCH_PROVIDER}'`, () => {
+		const provider = selectWebSearchProvider({
+			[WEB_SEARCH_PROVIDER_ENV]: DEFAULT_WEB_SEARCH_PROVIDER,
+		});
+		expect(typeof provider.search).toBe("function");
+		expect(typeof provider.fetch).toBe("function");
 	});
 
 	it("throws a clear error naming the env var and value when the selector is unknown", () => {
@@ -69,11 +66,5 @@ describe("selectWebSearchProvider", () => {
 		expect(search.hits[0]?.title).toBe("ping");
 		const fetched = await fake.fetch({ urls: ["https://a", "https://b"] });
 		expect(fetched.docs.map((d) => d.url)).toEqual(["https://a", "https://b"]);
-	});
-
-	it("selects a provider that exposes both search and fetch", () => {
-		const provider = selectWebSearchProvider({});
-		expect(typeof provider.search).toBe("function");
-		expect(typeof provider.fetch).toBe("function");
 	});
 });

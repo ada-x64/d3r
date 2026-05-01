@@ -91,6 +91,23 @@ export const mapFetchResponse = (
 	}),
 });
 
+// Minimal structural slice of the exa-js client that this provider
+// actually invokes. Defined here so callers (notably tests) can pass
+// a hand-written stub through the DI seam below without dragging in
+// the SDK's full generic surface area.
+export interface ExaLike {
+	searchAndContents: Exa["searchAndContents"];
+	getContents: Exa["getContents"];
+}
+
+export interface CreateExaProviderOptions {
+	// Inject a client directly. When supplied, the provider will not
+	// read EXA_API_KEY or construct an Exa instance; this is the seam
+	// tests use to exercise abort and cancellation paths without
+	// touching the network.
+	client?: ExaLike;
+}
+
 export class MissingApiKeyError extends Error {
 	override readonly name = "MissingApiKeyError";
 	readonly envVar: string;
@@ -100,10 +117,15 @@ export class MissingApiKeyError extends Error {
 	}
 }
 
-// Race a promise against an AbortSignal. The Exa SDK does not accept a
-// signal; this wrapper lets callers reject promptly when the agent
-// loop cancels the tool call. The underlying request still runs to
-// completion in the background, but the caller is unblocked.
+const abortError = (signal: AbortSignal): unknown =>
+	signal.reason ?? new DOMException("Aborted", "AbortError");
+
+// Race an in-flight promise against an AbortSignal. The Exa SDK does
+// not accept a signal; this wrapper lets callers reject promptly when
+// the agent loop cancels the tool call. The underlying request still
+// runs to completion in the background, but the caller is unblocked.
+// Callers are expected to short-circuit on `signal.aborted` *before*
+// invoking the SDK so an already-cancelled call never hits the wire.
 const raceWithSignal = async <T>(
 	promise: Promise<T>,
 	signal: AbortSignal | undefined,
@@ -111,12 +133,9 @@ const raceWithSignal = async <T>(
 	if (!signal) {
 		return promise;
 	}
-	if (signal.aborted) {
-		throw signal.reason ?? new DOMException("Aborted", "AbortError");
-	}
 	return new Promise<T>((resolve, reject) => {
 		const onAbort = () => {
-			reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+			reject(abortError(signal));
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		promise.then(
@@ -132,9 +151,11 @@ const raceWithSignal = async <T>(
 	});
 };
 
-export const createExaProvider = (): WebSearchProvider => {
-	let client: Exa | null = null;
-	const getClient = (): Exa => {
+export const createExaProvider = (
+	options: CreateExaProviderOptions = {},
+): WebSearchProvider => {
+	let client: ExaLike | null = options.client ?? null;
+	const getClient = (): ExaLike => {
 		if (client) {
 			return client;
 		}
@@ -150,6 +171,9 @@ export const createExaProvider = (): WebSearchProvider => {
 			params: WebSearchParams,
 			signal?: AbortSignal,
 		): Promise<WebSearchResult> => {
+			if (signal?.aborted) {
+				throw abortError(signal);
+			}
 			const c = getClient();
 			const response = await raceWithSignal(
 				c.searchAndContents(params.query, {
@@ -164,6 +188,9 @@ export const createExaProvider = (): WebSearchProvider => {
 			params: WebFetchParams,
 			signal?: AbortSignal,
 		): Promise<WebFetchResult> => {
+			if (signal?.aborted) {
+				throw abortError(signal);
+			}
 			const c = getClient();
 			const response = await raceWithSignal(
 				c.getContents(params.urls, { text: true }),
