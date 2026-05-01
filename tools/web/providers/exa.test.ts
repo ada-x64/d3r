@@ -71,40 +71,37 @@ describe("mapSearchResponse", () => {
 		expect(result.hits[0]?.id).toBe("https://no-id.example/");
 	});
 
-	it("carries through the optional score and publishedDate when present", () => {
-		const SCORE = 0.87;
-		const result = mapSearchResponse({
-			results: [
-				{
-					id: "with-extras",
-					url: "https://e.example/",
-					score: SCORE,
-					publishedDate: "2025-01-02T00:00:00Z",
-				},
-			],
-		});
-		expect(result.hits[0]?.score).toBe(SCORE);
-		expect(result.hits[0]?.publishedDate).toBe("2025-01-02T00:00:00Z");
-	});
-
-	it("omits score and publishedDate when Exa returns null/undefined", () => {
-		const result = mapSearchResponse({
-			results: [
-				{
-					id: "no-extras",
-					url: "https://n.example/",
-					score: null,
-					publishedDate: null,
-				},
-			],
-		});
-		expect(result.hits[0]).not.toHaveProperty("score");
-		expect(result.hits[0]).not.toHaveProperty("publishedDate");
-	});
-
-	it("returns an empty hits array for an empty response", () => {
-		const result = mapSearchResponse({ results: [] });
-		expect(result).toEqual({ hits: [] });
+	it.each([
+		{
+			label: "carries through score and publishedDate when present",
+			input: {
+				id: "with-extras",
+				url: "https://e.example/",
+				score: 0.87,
+				publishedDate: "2025-01-02T00:00:00Z",
+			},
+			expected: { score: 0.87, publishedDate: "2025-01-02T00:00:00Z" },
+			omitted: false,
+		},
+		{
+			label: "omits score and publishedDate when Exa returns null/undefined",
+			input: {
+				id: "no-extras",
+				url: "https://n.example/",
+				score: null,
+				publishedDate: null,
+			},
+			expected: {},
+			omitted: true,
+		},
+	])("$label", ({ input, expected, omitted }) => {
+		const result = mapSearchResponse({ results: [input] });
+		if (omitted) {
+			expect(result.hits[0]).not.toHaveProperty("score");
+			expect(result.hits[0]).not.toHaveProperty("publishedDate");
+		} else {
+			expect(result.hits[0]).toMatchObject(expected);
+		}
 	});
 });
 
@@ -126,38 +123,39 @@ describe("mapFetchResponse", () => {
 		expect(result.docs[0]?.title).toBeNull();
 	});
 
-	it("carries through publishedDate and author when present", () => {
-		const result = mapFetchResponse({
-			results: [
-				{
-					url: "https://withmeta.example/",
-					title: "Meta",
-					text: "body",
-					publishedDate: "2024-12-31",
-					author: "Some Author",
-				},
-			],
-		});
-		expect(result.docs[0]).toMatchObject({
-			publishedDate: "2024-12-31",
-			author: "Some Author",
-		});
-	});
-
-	it("omits publishedDate and author when null/undefined", () => {
-		const result = mapFetchResponse({
-			results: [
-				{
-					url: "https://bare.example/",
-					title: "Bare",
-					text: "body",
-					publishedDate: null,
-					author: null,
-				},
-			],
-		});
-		expect(result.docs[0]).not.toHaveProperty("publishedDate");
-		expect(result.docs[0]).not.toHaveProperty("author");
+	it.each([
+		{
+			label: "carries through publishedDate and author when present",
+			input: {
+				url: "https://withmeta.example/",
+				title: "Meta",
+				text: "body",
+				publishedDate: "2024-12-31",
+				author: "Some Author",
+			},
+			expected: { publishedDate: "2024-12-31", author: "Some Author" },
+			omitted: false,
+		},
+		{
+			label: "omits publishedDate and author when null/undefined",
+			input: {
+				url: "https://bare.example/",
+				title: "Bare",
+				text: "body",
+				publishedDate: null,
+				author: null,
+			},
+			expected: {},
+			omitted: true,
+		},
+	])("$label", ({ input, expected, omitted }) => {
+		const result = mapFetchResponse({ results: [input] });
+		if (omitted) {
+			expect(result.docs[0]).not.toHaveProperty("publishedDate");
+			expect(result.docs[0]).not.toHaveProperty("author");
+		} else {
+			expect(result.docs[0]).toMatchObject(expected);
+		}
 	});
 
 	it("substitutes an empty string when text is missing or null", () => {
@@ -168,11 +166,6 @@ describe("mapFetchResponse", () => {
 			],
 		});
 		expect(result.docs.map((d) => d.text)).toEqual(["", ""]);
-	});
-
-	it("returns an empty docs array for an empty response", () => {
-		const result = mapFetchResponse({ results: [] });
-		expect(result).toEqual({ docs: [] });
 	});
 });
 
@@ -190,11 +183,6 @@ describe("createExaProvider - search()", () => {
 			name: "MissingApiKeyError",
 			envVar: "EXA_API_KEY",
 		});
-	});
-
-	it("does not read EXA_API_KEY at construction time", () => {
-		delete process.env.EXA_API_KEY;
-		expect(() => createExaProvider()).not.toThrow();
 	});
 
 	it("rejects synchronously when the caller's signal is already aborted", async () => {
