@@ -16,6 +16,31 @@ const ENV_VAR = "EXA_API_KEY";
 
 export const EXA_PROVIDER_ID = "exa";
 
+// Pure mapper from the exa-js response shape to the WebSearchResult
+// the rest of the codebase consumes. Extracted so unit tests can pin
+// the d3r-owned translation (snippet selection, title fallback,
+// truncation) without standing up the SDK or its HTTP boundary.
+interface ExaLikeResult {
+	title?: string | null;
+	url: string;
+	text?: string | null;
+	highlights?: string[] | null;
+}
+
+export interface ExaLikeResponse {
+	results: ExaLikeResult[];
+}
+
+export const mapExaResponse = (response: ExaLikeResponse): WebSearchResult => ({
+	provider: EXA_PROVIDER_ID,
+	hits: response.results.map((r) => ({
+		title: r.title ?? r.url,
+		url: r.url,
+		snippet:
+			r.highlights?.[0] ?? (r.text ? r.text.slice(0, SNIPPET_MAX_CHARS) : ""),
+	})),
+});
+
 export class MissingApiKeyError extends Error {
 	override readonly name = "MissingApiKeyError";
 	readonly envVar: string;
@@ -84,14 +109,7 @@ export const createExaProvider = (): WebSearchProvider => {
 				}),
 				signal,
 			);
-			const hits = response.results.map((r) => ({
-				title: r.title ?? r.url,
-				url: r.url,
-				snippet:
-					r.highlights?.[0] ??
-					(r.text ? r.text.slice(0, SNIPPET_MAX_CHARS) : ""),
-			}));
-			return { hits, provider: EXA_PROVIDER_ID };
+			return mapExaResponse(response);
 		},
 	};
 };
