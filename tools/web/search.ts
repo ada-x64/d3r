@@ -1,8 +1,9 @@
-// web_search: harness-agnostic surface for the web_search tool. Owns
-// the zod schema, result types, the provider interface, and the
-// env-driven selector that picks a provider implementation. Vendor
-// implementations live under ./providers and are wired in through the
-// providers table below.
+// Web research surface: harness-agnostic types, zod params, and the
+// env-driven provider selector for both web_search and web_fetch.
+// Owns the WebSearchProvider interface (search + fetch), the result
+// shapes consumers depend on, and the provider table that picks an
+// implementation. Vendor implementations live under ./providers and
+// are wired in through the providers table below.
 
 import { z } from "zod";
 
@@ -10,6 +11,7 @@ import { EXA_PROVIDER_ID, createExaProvider } from "./providers/exa.ts";
 
 const MAX_RESULTS = 20;
 const DEFAULT_RESULTS = 5;
+const MAX_FETCH_URLS = 20;
 
 export const WebSearchParams = z.object({
 	query: z
@@ -26,15 +28,40 @@ export const WebSearchParams = z.object({
 });
 export type WebSearchParams = z.infer<typeof WebSearchParams>;
 
-export interface WebSearchHit {
+export const WebFetchParams = z.object({
+	urls: z
+		.array(z.string().url())
+		.min(1)
+		.max(MAX_FETCH_URLS)
+		.describe(
+			`URLs to retrieve full extracted text for (1-${MAX_FETCH_URLS} per call).`,
+		),
+});
+export type WebFetchParams = z.infer<typeof WebFetchParams>;
+
+export interface WebHit {
+	id: string;
 	title: string;
 	url: string;
-	snippet: string;
+	highlights: string[];
+	score?: number;
+	publishedDate?: string;
 }
 
 export interface WebSearchResult {
-	hits: WebSearchHit[];
-	provider: string;
+	hits: WebHit[];
+}
+
+export interface WebDoc {
+	url: string;
+	title: string | null;
+	text: string;
+	publishedDate?: string;
+	author?: string;
+}
+
+export interface WebFetchResult {
+	docs: WebDoc[];
 }
 
 export interface WebSearchProvider {
@@ -42,6 +69,7 @@ export interface WebSearchProvider {
 		params: WebSearchParams,
 		signal?: AbortSignal,
 	): Promise<WebSearchResult>;
+	fetch(params: WebFetchParams, signal?: AbortSignal): Promise<WebFetchResult>;
 }
 
 export const WEB_SEARCH_PROVIDER_ENV = "D3R_WEB_SEARCH_PROVIDER";

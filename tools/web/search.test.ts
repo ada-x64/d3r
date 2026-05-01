@@ -19,6 +19,7 @@ describe("selectWebSearchProvider", () => {
 	it("returns a provider that satisfies the interface when the env is unset", () => {
 		const provider = selectWebSearchProvider({});
 		expect(typeof provider.search).toBe("function");
+		expect(typeof provider.fetch).toBe("function");
 	});
 
 	it(`defaults to ${DEFAULT_WEB_SEARCH_PROVIDER} when ${WEB_SEARCH_PROVIDER_ENV} is unset`, () => {
@@ -41,17 +42,38 @@ describe("selectWebSearchProvider", () => {
 	});
 
 	// Exercises the typing seam: a hand-written fake satisfies the
-	// WebSearchProvider contract without going near the registry. This
-	// is the DI-fake-above-the-seam shape callers are expected to use.
+	// WebSearchProvider contract (both methods) without going near the
+	// registry. This is the DI-fake-above-the-seam shape callers are
+	// expected to use.
 	it("accepts a hand-written fake as a WebSearchProvider", async () => {
 		const fake: WebSearchProvider = {
 			search: async (params) => ({
-				hits: [{ title: params.query, url: "https://x", snippet: "" }],
-				provider: "fake",
+				hits: [
+					{
+						id: "https://x",
+						title: params.query,
+						url: "https://x",
+						highlights: [],
+					},
+				],
+			}),
+			fetch: async (params) => ({
+				docs: params.urls.map((url) => ({
+					url,
+					title: null,
+					text: "body",
+				})),
 			}),
 		};
-		const result = await fake.search({ query: "ping", k: 1 });
-		expect(result.provider).toBe("fake");
-		expect(result.hits[0]?.title).toBe("ping");
+		const search = await fake.search({ query: "ping", k: 1 });
+		expect(search.hits[0]?.title).toBe("ping");
+		const fetched = await fake.fetch({ urls: ["https://a", "https://b"] });
+		expect(fetched.docs.map((d) => d.url)).toEqual(["https://a", "https://b"]);
+	});
+
+	it("selects a provider that exposes both search and fetch", () => {
+		const provider = selectWebSearchProvider({});
+		expect(typeof provider.search).toBe("function");
+		expect(typeof provider.fetch).toBe("function");
 	});
 });

@@ -1,44 +1,94 @@
-// Exa-backed WebSearchProvider. Reads EXA_API_KEY lazily on first
-// search() call so that the registry stays importable without the key
-// set; throws a typed MissingApiKeyError when the key is absent so
-// callers can surface a clear message.
+// Exa-backed WebSearchProvider. Implements both the lightweight
+// `search` surface (hits with full highlights) and the full-text
+// `fetch` surface (extracted page bodies, no truncation). Reads
+// EXA_API_KEY lazily on first call so the registry stays importable
+// without the key set; throws a typed MissingApiKeyError when the key
+// is absent so callers can surface a clear message.
 
 import { Exa } from "exa-js";
 
 import type {
+	WebDoc,
+	WebFetchParams,
+	WebFetchResult,
+	WebHit,
 	WebSearchParams,
 	WebSearchProvider,
 	WebSearchResult,
 } from "../search.ts";
 
-const SNIPPET_MAX_CHARS = 280;
 const ENV_VAR = "EXA_API_KEY";
 
 export const EXA_PROVIDER_ID = "exa";
 
-// Pure mapper from the exa-js response shape to the WebSearchResult
-// the rest of the codebase consumes. Extracted so unit tests can pin
-// the d3r-owned translation (snippet selection, title fallback,
-// truncation) without standing up the SDK or its HTTP boundary.
-interface ExaLikeResult {
+// Pure mappers from the exa-js response shapes to the result types the
+// rest of the codebase consumes. Extracted so unit tests can pin the
+// d3r-owned translation (id/url fallback, highlight passthrough,
+// optional-field carry) without standing up the SDK or its HTTP
+// boundary.
+
+interface ExaSearchResult {
+	id?: string | null;
 	title?: string | null;
 	url: string;
-	text?: string | null;
 	highlights?: string[] | null;
+	score?: number | null;
+	publishedDate?: string | null;
 }
 
-export interface ExaLikeResponse {
-	results: ExaLikeResult[];
+export interface ExaSearchResponse {
+	results: ExaSearchResult[];
 }
 
-export const mapExaResponse = (response: ExaLikeResponse): WebSearchResult => ({
-	provider: EXA_PROVIDER_ID,
-	hits: response.results.map((r) => ({
-		title: r.title ?? r.url,
-		url: r.url,
-		snippet:
-			r.highlights?.[0] ?? (r.text ? r.text.slice(0, SNIPPET_MAX_CHARS) : ""),
-	})),
+interface ExaContentsResult {
+	url: string;
+	title?: string | null;
+	text?: string | null;
+	publishedDate?: string | null;
+	author?: string | null;
+}
+
+export interface ExaContentsResponse {
+	results: ExaContentsResult[];
+}
+
+export const mapSearchResponse = (
+	response: ExaSearchResponse,
+): WebSearchResult => ({
+	hits: response.results.map((r): WebHit => {
+		const hit: WebHit = {
+			id: r.id ?? r.url,
+			title: r.title ?? r.url,
+			url: r.url,
+			highlights: r.highlights ?? [],
+		};
+		if (r.score != null) {
+			hit.score = r.score;
+		}
+		if (r.publishedDate != null) {
+			hit.publishedDate = r.publishedDate;
+		}
+		return hit;
+	}),
+});
+
+export const mapFetchResponse = (
+	response: ExaContentsResponse,
+): WebFetchResult => ({
+	docs: response.results.map((r): WebDoc => {
+		const doc: WebDoc = {
+			url: r.url,
+			title: r.title ?? null,
+			text: r.text ?? "",
+		};
+		if (r.publishedDate != null) {
+			doc.publishedDate = r.publishedDate;
+		}
+		if (r.author != null) {
+			doc.author = r.author;
+		}
+		return doc;
+	}),
 });
 
 export class MissingApiKeyError extends Error {
@@ -104,12 +154,22 @@ export const createExaProvider = (): WebSearchProvider => {
 			const response = await raceWithSignal(
 				c.searchAndContents(params.query, {
 					numResults: params.k,
-					text: { maxCharacters: SNIPPET_MAX_CHARS },
 					highlights: true,
 				}),
 				signal,
 			);
-			return mapExaResponse(response);
+			return mapSearchResponse(response);
+		},
+		fetch: async (
+			params: WebFetchParams,
+			signal?: AbortSignal,
+		): Promise<WebFetchResult> => {
+			const c = getClient();
+			const response = await raceWithSignal(
+				c.getContents(params.urls, { text: true }),
+				signal,
+			);
+			return mapFetchResponse(response);
 		},
 	};
 };

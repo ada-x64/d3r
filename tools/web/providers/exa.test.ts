@@ -1,16 +1,18 @@
 // Smoke tests for the Exa-backed WebSearchProvider. These pin the
-// d3r-side seams: the response mapper (snippet selection, title
-// fallback, provider tag), the typed MissingApiKeyError contract
-// callers rely on, and the AbortSignal cancellation wrapper. The
-// mapper is exercised as a pure unit because the SDK boundary itself
-// is upstream and not what the tests should be pinning.
+// d3r-side seams: the search and fetch response mappers (id/url
+// fallback, highlight passthrough, optional-field carry, full-text
+// passthrough), the typed MissingApiKeyError contract callers rely
+// on, and the AbortSignal cancellation wrapper. The mappers are
+// exercised as pure units because the SDK boundary itself is
+// upstream and not what the tests should be pinning.
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
 	MissingApiKeyError,
 	createExaProvider,
-	mapExaResponse,
+	mapFetchResponse,
+	mapSearchResponse,
 } from "./exa.ts";
 
 const ORIGINAL_KEY = process.env.EXA_API_KEY;
@@ -23,60 +25,37 @@ afterEach(() => {
 	}
 });
 
-describe("mapExaResponse", () => {
-	it("prefers highlights[0] over text for the snippet", () => {
-		const result = mapExaResponse({
+describe("mapSearchResponse", () => {
+	it("passes every highlight through, not just the first", () => {
+		const result = mapSearchResponse({
 			results: [
 				{
+					id: "exa-id-1",
 					title: "First",
 					url: "https://a.example/",
-					text: "ignored when highlights are present",
-					highlights: ["highlight wins", "second"],
+					highlights: ["one", "two", "three"],
 				},
 			],
 		});
-		expect(result.provider).toBe("exa");
-		expect(result.hits[0]).toEqual({
-			title: "First",
-			url: "https://a.example/",
-			snippet: "highlight wins",
-		});
+		expect(result.hits[0]?.highlights).toEqual(["one", "two", "three"]);
 	});
 
-	it("falls back to text when highlights are empty or missing", () => {
-		const result = mapExaResponse({
+	it("emits an empty highlights array when the field is missing or null", () => {
+		const result = mapSearchResponse({
 			results: [
-				{
-					title: "Empty highlights",
-					url: "https://b.example/",
-					text: "fallback body",
-					highlights: [],
-				},
-				{
-					title: "Missing highlights",
-					url: "https://c.example/",
-					text: "another fallback",
-				},
+				{ id: "x", url: "https://x.example/" },
+				{ id: "y", url: "https://y.example/", highlights: null },
+				{ id: "z", url: "https://z.example/", highlights: [] },
 			],
 		});
-		expect(result.hits.map((h) => h.snippet)).toEqual([
-			"fallback body",
-			"another fallback",
-		]);
-	});
-
-	it("emits an empty snippet when neither highlights nor text are present", () => {
-		const result = mapExaResponse({
-			results: [{ title: "Bare", url: "https://d.example/" }],
-		});
-		expect(result.hits[0]?.snippet).toBe("");
+		expect(result.hits.map((h) => h.highlights)).toEqual([[], [], []]);
 	});
 
 	it("substitutes the URL when an Exa result has no title", () => {
-		const result = mapExaResponse({
+		const result = mapSearchResponse({
 			results: [
-				{ url: "https://untitled.example/page", text: "body" },
-				{ title: null, url: "https://null-title.example/", text: "x" },
+				{ id: "a", url: "https://untitled.example/page" },
+				{ id: "b", title: null, url: "https://null-title.example/" },
 			],
 		});
 		expect(result.hits.map((h) => h.title)).toEqual([
@@ -85,29 +64,119 @@ describe("mapExaResponse", () => {
 		]);
 	});
 
-	it("truncates the text fallback at 280 characters", () => {
-		const LIMIT = 280;
-		const LONG_INPUT = 1000;
-		const result = mapExaResponse({
+	it("falls back to the URL when Exa omits an id", () => {
+		const result = mapSearchResponse({
+			results: [{ url: "https://no-id.example/" }],
+		});
+		expect(result.hits[0]?.id).toBe("https://no-id.example/");
+	});
+
+	it("carries through the optional score and publishedDate when present", () => {
+		const SCORE = 0.87;
+		const result = mapSearchResponse({
 			results: [
 				{
-					title: "Long",
-					url: "https://long.example/",
-					text: "x".repeat(LONG_INPUT),
+					id: "with-extras",
+					url: "https://e.example/",
+					score: SCORE,
+					publishedDate: "2025-01-02T00:00:00Z",
 				},
 			],
 		});
-		expect(result.hits[0]?.snippet.length).toBe(LIMIT);
-		expect(result.hits[0]?.snippet).toBe("x".repeat(LIMIT));
+		expect(result.hits[0]?.score).toBe(SCORE);
+		expect(result.hits[0]?.publishedDate).toBe("2025-01-02T00:00:00Z");
 	});
 
-	it("tags every result with the exa provider id", () => {
-		const result = mapExaResponse({ results: [] });
-		expect(result).toEqual({ hits: [], provider: "exa" });
+	it("omits score and publishedDate when Exa returns null/undefined", () => {
+		const result = mapSearchResponse({
+			results: [
+				{
+					id: "no-extras",
+					url: "https://n.example/",
+					score: null,
+					publishedDate: null,
+				},
+			],
+		});
+		expect(result.hits[0]).not.toHaveProperty("score");
+		expect(result.hits[0]).not.toHaveProperty("publishedDate");
+	});
+
+	it("returns an empty hits array for an empty response", () => {
+		const result = mapSearchResponse({ results: [] });
+		expect(result).toEqual({ hits: [] });
 	});
 });
 
-describe("createExaProvider", () => {
+describe("mapFetchResponse", () => {
+	it("passes the full extracted text through with no truncation", () => {
+		const LONG = 5000;
+		const text = "x".repeat(LONG);
+		const result = mapFetchResponse({
+			results: [{ url: "https://long.example/", title: "Long", text }],
+		});
+		expect(result.docs[0]?.text).toBe(text);
+		expect(result.docs[0]?.text.length).toBe(LONG);
+	});
+
+	it("preserves a null title (distinguishing it from the URL fallback used in search)", () => {
+		const result = mapFetchResponse({
+			results: [{ url: "https://no-title.example/", text: "body" }],
+		});
+		expect(result.docs[0]?.title).toBeNull();
+	});
+
+	it("carries through publishedDate and author when present", () => {
+		const result = mapFetchResponse({
+			results: [
+				{
+					url: "https://withmeta.example/",
+					title: "Meta",
+					text: "body",
+					publishedDate: "2024-12-31",
+					author: "Some Author",
+				},
+			],
+		});
+		expect(result.docs[0]).toMatchObject({
+			publishedDate: "2024-12-31",
+			author: "Some Author",
+		});
+	});
+
+	it("omits publishedDate and author when null/undefined", () => {
+		const result = mapFetchResponse({
+			results: [
+				{
+					url: "https://bare.example/",
+					title: "Bare",
+					text: "body",
+					publishedDate: null,
+					author: null,
+				},
+			],
+		});
+		expect(result.docs[0]).not.toHaveProperty("publishedDate");
+		expect(result.docs[0]).not.toHaveProperty("author");
+	});
+
+	it("substitutes an empty string when text is missing or null", () => {
+		const result = mapFetchResponse({
+			results: [
+				{ url: "https://no-text.example/" },
+				{ url: "https://null-text.example/", text: null },
+			],
+		});
+		expect(result.docs.map((d) => d.text)).toEqual(["", ""]);
+	});
+
+	it("returns an empty docs array for an empty response", () => {
+		const result = mapFetchResponse({ results: [] });
+		expect(result).toEqual({ docs: [] });
+	});
+});
+
+describe("createExaProvider - search()", () => {
 	it("throws MissingApiKeyError lazily when EXA_API_KEY is unset", async () => {
 		delete process.env.EXA_API_KEY;
 		const provider = createExaProvider();
@@ -147,6 +216,45 @@ describe("createExaProvider", () => {
 		// Swallow the eventual upstream rejection so the unhandled
 		// rejection does not pollute later tests; the assertion below
 		// checks the abort wrapper rejected first.
+		pending.catch(() => undefined);
+		ac.abort();
+
+		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+	});
+});
+
+describe("createExaProvider - fetch()", () => {
+	it("throws MissingApiKeyError lazily when EXA_API_KEY is unset", async () => {
+		delete process.env.EXA_API_KEY;
+		const provider = createExaProvider();
+
+		await expect(
+			provider.fetch({ urls: ["https://x.example/"] }),
+		).rejects.toBeInstanceOf(MissingApiKeyError);
+		await expect(
+			provider.fetch({ urls: ["https://x.example/"] }),
+		).rejects.toMatchObject({
+			name: "MissingApiKeyError",
+			envVar: "EXA_API_KEY",
+		});
+	});
+
+	it("rejects synchronously when the caller's signal is already aborted", async () => {
+		process.env.EXA_API_KEY = "test-key";
+		const provider = createExaProvider();
+		const ac = new AbortController();
+		ac.abort();
+
+		await expect(
+			provider.fetch({ urls: ["https://x.example/"] }, ac.signal),
+		).rejects.toMatchObject({ name: "AbortError" });
+	});
+
+	it("rejects promptly when the caller's signal fires mid-flight", async () => {
+		process.env.EXA_API_KEY = "test-key";
+		const provider = createExaProvider();
+		const ac = new AbortController();
+		const pending = provider.fetch({ urls: ["https://x.example/"] }, ac.signal);
 		pending.catch(() => undefined);
 		ac.abort();
 

@@ -9,10 +9,17 @@ import { VaultMvParams, vaultMv } from "./vault/mv.ts";
 import { VaultReadParams, vaultRead } from "./vault/read.ts";
 import { VaultRmParams, vaultRm } from "./vault/rm.ts";
 import { VaultWriteParams, vaultWrite } from "./vault/write.ts";
-import { WebSearchParams, selectWebSearchProvider } from "./web/search.ts";
+import {
+	WebFetchParams,
+	WebSearchParams,
+	selectWebSearchProvider,
+} from "./web/search.ts";
 
 const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) =>
 	selectWebSearchProvider().search(params, signal);
+
+const webFetchFn = async (params: WebFetchParams, signal?: AbortSignal) =>
+	selectWebSearchProvider().fetch(params, signal);
 
 export interface ToolEntry {
 	name: string;
@@ -105,8 +112,16 @@ export const registry: ToolEntry[] = [
 		name: "web_search",
 		label: "Web search",
 		description:
-			"Search the web for relevant pages and return titled hits with short snippets.",
+			"Search the web for relevant pages and return titled hits with highlight snippets.",
 		schema: WebSearchParams,
 		fn: webSearchFn as (...args: never[]) => unknown,
+	},
+	{
+		name: "web_fetch",
+		label: "Web fetch",
+		description:
+			"Retrieve the full extracted text of one or more web pages by URL.",
+		schema: WebFetchParams,
+		fn: webFetchFn as (...args: never[]) => unknown,
 	},
 ];
