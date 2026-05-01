@@ -12,7 +12,8 @@ dist_dir="$(cd "$script_dir/../.." && pwd)/dist/pi"
 target_dir="${PI_AGENT_DIR:-$HOME/.pi/agent}"
 
 if [ ! -d "$dist_dir" ]; then
-    echo "error: $dist_dir not found. Run pnpm build first." >&2
+    echo "error: $dist_dir not found. Run 'pnpm build:legacy' first to compile the pi adapter artefacts." >&2
+    echo "  ('pnpm build' runs the per-package typecheck/emit; 'pnpm build:legacy' runs scripts/build.ts which produces dist/pi/ for this installer.)" >&2
     exit 1
 fi
 
