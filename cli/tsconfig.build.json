@@ -9,7 +9,8 @@
     "declarationMap": true,
     "sourceMap": true,
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true
+    "rewriteRelativeImportExtensions": true,
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts", "node_modules", "dist", "test/**"],
