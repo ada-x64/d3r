@@ -1,20 +1,14 @@
-import { spawn } from "node:child_process";
 import { defineCommand, type CommandDef } from "citty";
 import pkg from "../../package.json" with { type: "json" };
 import { ADAPTERS, type AdapterEntry } from "../utils/data.ts";
 import {
 	die,
+	isEnoent,
 	piConfigDir,
 	readInstalledVersion,
 	resolveNpmCommand,
+	runNpm,
 } from "../utils/helpers.ts";
-
-export const runNpm = (cmd: string, args: readonly string[]): Promise<number> =>
-	new Promise((resolve, reject) => {
-		const child = spawn(cmd, [...args], { stdio: "inherit" });
-		child.on("error", reject);
-		child.on("exit", (code) => resolve(code ?? 1));
-	});
 
 export interface PlannedInstall {
 	readonly entry: AdapterEntry;
@@ -68,11 +62,6 @@ export interface InstallDeps {
 	readonly runner?: (cmd: string, args: readonly string[]) => Promise<number>;
 	readonly readInstalled?: typeof readInstalledVersion;
 }
-
-const isEnoent = (err: unknown): boolean =>
-	typeof err === "object" &&
-	err !== null &&
-	(err as { code?: unknown }).code === "ENOENT";
 
 export const executeInstall = async (
 	spec: string,
