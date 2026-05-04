@@ -2,18 +2,16 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { gateExemptVerbs } from "./verbs/registry.ts";
 
 /**
  * Verbs that are allowed to run without a registered vault for the
- * current working directory. Every other verb (and the bare-launch
- * path) is gated.
+ * current working directory. Derived from the verb registry's
+ * `gateExempt` flag so the allow-list and the citty registration
+ * cannot drift. Every other verb (and the bare-launch path) is
+ * gated.
  */
-export const ALLOW_LIST: ReadonlySet<string> = new Set([
-	"init",
-	"migrate",
-	"install",
-	"version",
-]);
+export const ALLOW_LIST: ReadonlySet<string> = gateExemptVerbs();
 
 const withTrailingSep = (p: string): string => (p.endsWith(sep) ? p : p + sep);
 
