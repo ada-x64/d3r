@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:dist": "vitest --run --project=dist --passWithNoTests",
     "test:coverage": "vitest --run --coverage --passWithNoTests",
-    "cli": "pnpm -r build && node cli/dist/cli.js"
+    "cli": "node cli/dist/cli.js",
+    "clean": "rimraf --glob 'dist' './{,*/,adapters/*/}{dist,tsconfig*.tsbuildinfo}'"
   },
   "devDependencies": {
     "@types/node": "^22",
@@ -24,6 +25,7 @@
     "msw": "^2",
     "oxlint": "^1.61.0",
     "prettier": "^3.8.3",
+    "rimraf": "^6.1.3",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^3.2.4",

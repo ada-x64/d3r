@@ -18,6 +18,14 @@ Source code does not reference vault documents -- no decision IDs, section
 numbers, or commit-schema labels in comments or commit messages. The code stands
 on its own; the vault is for humans.
 
+## Code comments
+
+Only include comments where necessary to explain intention. A good
+comment explains how the code got to this state, _not_ what the code does.
+A description of intention will not drift, a mechanical description will.
+
+All top-level items should have a brief jsdoc style comment.
+
 ## Adding a harness adapter
 
 Mirror the shape of `adapters/pi/`: a workspace package with a `prebuild` script
