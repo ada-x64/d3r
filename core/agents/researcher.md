@@ -25,7 +25,7 @@ designer consumes your output alongside `remember.md`.
 
 ## Outputs
 
-- `research.md` - MUST follow `templates/research.md`; the template MUST be read
+- `research.md` - MUST follow `.misc/templates/research.md`; the template MUST be read
   end-to-end before producing the output. Every claim carries a citation; every
   citation resolves to a URL with an access date.
 

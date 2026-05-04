@@ -27,9 +27,9 @@ too many and the build order graph turns into noise.
 
 ## Outputs
 
-- `plan.md` - MUST follow `templates/plan.md`; the template MUST be read
+- `plan.md` - MUST follow `.misc/templates/plan.md`; the template MUST be read
   end-to-end before producing the output. Sits alongside `design.md` in the same
-  `designs/<topic>/` directory. Names each task, scopes it explicitly (in and
+  `process/designs/<topic>/` directory. Names each task, scopes it explicitly (in and
   out), records the build-order graph, and lists open questions tagged
   `[for: schemer]` or `[for: human]`.
 

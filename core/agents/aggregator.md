@@ -21,13 +21,13 @@ already in use.
 ## Inputs
 
 - `task.md` - MUST be provided as context; defines the topic.
-- The vault - read access to `designs/`, `tasks/`, `notes/`, `archive/`,
+- The vault - read access to `process/designs/`, `process/tasks/`, `process/notes/`, `.misc/archive/`,
   `issues/`.
 - The repository - read and grep access to source, configs, docs.
 
 ## Outputs
 
-- `remember.md` - MUST follow `templates/remember.md`; the template MUST be read
+- `remember.md` - MUST follow `.misc/templates/remember.md`; the template MUST be read
   end-to-end before producing the output. Cites every finding with a vault path
   or repository path + line range.
 

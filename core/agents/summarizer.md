@@ -23,15 +23,15 @@ you note follow-ups for the next reader and stop there.
 
 ## Inputs
 
-- The task slug naming `tasks/<task>/` in the vault - MUST be provided.
+- The task slug naming `process/tasks/<task>/` in the vault - MUST be provided.
 - The commit range the task contributed (e.g. `<base>..<head>`, or a branch
   name) - MUST be provided. Resolve `<head>` to a concrete SHA.
-- `tasks/<task>/task.md`, `design.md`, `schema.md` - MUST all be read; they are
+- `process/tasks/<task>/task.md`, `design.md`, `schema.md` - MUST all be read; they are
   the contract the summary judges what shipped against.
-- `tasks/<task>/reviews/*.md` - MUST be read if any exist; review history shapes
+- `process/tasks/<task>/reviews/*.md` - MUST be read if any exist; review history shapes
   the deviations and lessons sections.
-- `tasks/<task>/audit.md` - MUST be read if it exists.
-- `tasks/<task>/implementation-log.md` - MUST be read if it exists; recorded
+- `process/tasks/<task>/audit.md` - MUST be read if it exists.
+- `process/tasks/<task>/implementation-log.md` - MUST be read if it exists; recorded
   deviations are first-class input to the Deviations section.
 - The actual diff and commit history of `<base>..<head>` - MUST be inspectable
   via `git log`, `git show`, `git diff`.
@@ -43,7 +43,7 @@ you note follow-ups for the next reader and stop there.
 
 ## Outputs
 
-- `tasks/<task>/summary.md` - MUST follow `templates/summary.md`. The template
+- `process/tasks/<task>/summary.md` - MUST follow `.misc/templates/summary.md`. The template
   defines the section spine (Outcome, Scope, Commits, Deviations, Lessons,
   Unresolved, References), frontmatter, and the snippet policy; MUST be read
   end-to-end before producing the summary.
@@ -61,7 +61,7 @@ you note follow-ups for the next reader and stop there.
    subsection in `Deviations` (load-bearing surprises, constraint discoveries,
    better paths found) or a one-line note in `Commits`. Trivial deviations stay
    in the commit bullet; recall-worthy ones get a paragraph.
-5. Distil `Lessons`: patterns worth promoting to `notes/`, anti-patterns to
+5. Distil `Lessons`: patterns worth promoting to `process/notes/`, anti-patterns to
    avoid, conventions confirmed or invalidated. Source these from review issues
    that recurred, audit findings that surprised the team, and implementation-log
    entries that reflect a real change of mind. One bullet per lesson.
@@ -79,7 +79,7 @@ you note follow-ups for the next reader and stop there.
   from the design, and what to remember. Do not assume `design.md`, `schema.md`,
   or the review trail will still exist.
 - MUST cite via `path:lines (ref)` for in-repo references, `<commit-sha>` for
-  historical references, `[[notes/topic]]` for vault siblings, and full URLs for
+  historical references, `[[process/notes/topic]]` for vault siblings, and full URLs for
   web sources. Illustrative code snippets and diff fragments are permitted where
   they make a deviation, lesson, or surprise concretely intelligible; keep them
   under ~10 lines where possible, longer only when necessary.

@@ -28,7 +28,7 @@ downstream.
 
 ## Outputs
 
-- `design.md` - MUST follow `templates/design.md`; the template MUST be read
+- `design.md` - MUST follow `.misc/templates/design.md`; the template MUST be read
   end-to-end before producing the output. Every claim carries a citation back to
   `remember.md`, `research.md`, or the discussion transcript. Every design
   decision records its rationale and at least one alternative considered.

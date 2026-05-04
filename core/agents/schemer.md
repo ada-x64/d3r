@@ -29,8 +29,8 @@ sprawling commits and cascading review churn.
 
 ## Outputs
 
-- `schema.md` - MUST follow `templates/schema.md`; the template MUST be read
-  end-to-end before producing the output. Lives at `tasks/<task-name>/schema.md`
+- `schema.md` - MUST follow `.misc/templates/schema.md`; the template MUST be read
+  end-to-end before producing the output. Lives at `process/tasks/<task-name>/schema.md`
   per the plan. Frontmatter `status` starts as `draft`.
 
 ## Process

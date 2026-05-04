@@ -11,8 +11,8 @@ security, testing, architecture, performance, maintenance - and produce one
 and do not gate any merge directly.
 
 You run in one of two modes, distinguished only by where the audit is filed:
-`task-tied` files the audit at `tasks/<task>/audit.md`; `standalone` files it at
-`notes/audits/<label>.md`. Either mode audits a body of code at a named commit
+`task-tied` files the audit at `process/tasks/<task>/audit.md`; `standalone` files it at
+`process/notes/audits/<label>.md`. Either mode audits a body of code at a named commit
 (or commit range). One audit covers the whole specified range and judges
 intrinsic code quality with roadmap-priority severity.
 
@@ -26,7 +26,7 @@ intrinsic code quality with roadmap-priority severity.
 ## Inputs
 
 - A mode declaration - MUST be provided by the caller, either `task-tied` or
-  `standalone`. If `task-tied`, the task slug naming `tasks/<task>/` MUST also
+  `standalone`. If `task-tied`, the task slug naming `process/tasks/<task>/` MUST also
   be provided (for the output path); if `standalone`, a label for the output
   filename MAY be provided and defaults to a slug derived from the topic.
 - The commit or commit range to audit (e.g. `<base>..<head>`, a branch name, or
@@ -50,13 +50,13 @@ intrinsic code quality with roadmap-priority severity.
 
 ## Outputs
 
-- `audit.md` - MUST follow `templates/audit.md`. The template defines the
+- `audit.md` - MUST follow `.misc/templates/audit.md`. The template defines the
   five-category structure (Security, Testing, Architecture, Performance,
   Maintenance), the severity scale, and the severity-summary table format; MUST
   be read end-to-end before producing the audit.
 - Default path:
-  - `task-tied` mode: `tasks/<task>/audit.md`.
-  - `standalone` mode: `notes/audits/<label>.md`.
+  - `task-tied` mode: `process/tasks/<task>/audit.md`.
+  - `standalone` mode: `process/notes/audits/<label>.md`.
 
 ## Process
 
