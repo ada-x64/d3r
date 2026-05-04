@@ -12,7 +12,7 @@ interface AdapterEntry {
 	readonly target: (piConfigDir: string) => string;
 }
 
-const ADAPTERS: Record<string, AdapterEntry> = {
+export const ADAPTERS: Readonly<Record<string, AdapterEntry>> = {
 	pi: {
 		pkg: "@d3r/adapter-pi",
 		target: (piConfigDir) => path.join(piConfigDir, "extensions", "d3r-tools"),
@@ -40,7 +40,7 @@ const resolveNpmCommand = (configDir: string): string => {
 	return "npm";
 };
 
-const readInstalledVersion = (
+export const readInstalledVersion = (
 	target: string,
 	pkgName: string,
 ): string | null => {
@@ -69,14 +69,14 @@ const die = (msg: string): never => {
 	process.exit(1);
 };
 
-const runNpm = (cmd: string, args: readonly string[]): Promise<number> =>
+export const runNpm = (cmd: string, args: readonly string[]): Promise<number> =>
 	new Promise((resolve, reject) => {
 		const child = spawn(cmd, [...args], { stdio: "inherit" });
 		child.on("error", reject);
 		child.on("exit", (code) => resolve(code ?? 1));
 	});
 
-interface PlannedInstall {
+export interface PlannedInstall {
 	readonly entry: AdapterEntry;
 	readonly id: string;
 	readonly version: string;
@@ -85,10 +85,15 @@ interface PlannedInstall {
 	readonly npmArgs: readonly string[];
 }
 
-const planInstall = (spec: string): PlannedInstall => {
+export const planInstall = (spec: string): PlannedInstall => {
 	const at = spec.indexOf("@");
 	const id = at === -1 ? spec : spec.slice(0, at);
-	const versionOverride = at === -1 ? undefined : spec.slice(at + 1);
+	// Empty version override (e.g. `pi@`) is treated as "no override"
+	// so the pinned version is used; otherwise the empty string would
+	// defeat the `?? pinned` fallback and produce a malformed spec.
+	const rawOverride = at === -1 ? undefined : spec.slice(at + 1);
+	const versionOverride =
+		rawOverride === undefined || rawOverride === "" ? undefined : rawOverride;
 
 	const entry = ADAPTERS[id];
 	if (!entry) {
@@ -105,13 +110,70 @@ const planInstall = (spec: string): PlannedInstall => {
 	const configDir = piConfigDir();
 	const target = entry.target(configDir);
 	const npmCmd = resolveNpmCommand(configDir);
-	const npmArgs = [
-		"install",
-		"--prefix",
-		target,
-		`npm:${entry.pkg}@${version}`,
-	];
+	// Plain `<pkg>@<ver>`: the bare `npm:` alias prefix used in the
+	// strawman provided no value (no LHS alias name, on-disk dir matches
+	// the registry name) and only obscured npm error output. If a future
+	// adapter genuinely needs an alias, this and `readInstalledVersion`'s
+	// read path must move together.
+	const npmArgs = ["install", "--prefix", target, `${entry.pkg}@${version}`];
 	return { entry, id, version, target, npmCmd, npmArgs };
+};
+
+export interface InstallOpts {
+	readonly force?: boolean;
+	readonly dryRun?: boolean;
+}
+
+export interface InstallDeps {
+	readonly runner?: (cmd: string, args: readonly string[]) => Promise<number>;
+	readonly readInstalled?: typeof readInstalledVersion;
+}
+
+const isEnoent = (err: unknown): boolean =>
+	typeof err === "object" &&
+	err !== null &&
+	(err as { code?: unknown }).code === "ENOENT";
+
+export const executeInstall = async (
+	spec: string,
+	opts: InstallOpts,
+	deps: InstallDeps = {},
+): Promise<void> => {
+	const runner = deps.runner ?? runNpm;
+	const readInstalled = deps.readInstalled ?? readInstalledVersion;
+	const plan = planInstall(spec);
+	if (opts.dryRun) {
+		console.log(`${plan.npmCmd} ${plan.npmArgs.join(" ")}`);
+		return;
+	}
+	if (plan.version.startsWith("workspace:")) {
+		die(
+			`dev install detected (${plan.version}); pass an explicit version: d3r install ${plan.id}@<version>`,
+		);
+	}
+	const installed = readInstalled(plan.target, plan.entry.pkg);
+	if (installed && installed === plan.version && !opts.force) {
+		console.log(`already installed at ${plan.version}`);
+		return;
+	}
+	let code = 1;
+	try {
+		code = await runner(plan.npmCmd, plan.npmArgs);
+	} catch (error) {
+		if (isEnoent(error)) {
+			die(`npm not found on PATH (tried '${plan.npmCmd}')`);
+		}
+		die(
+			`failed to spawn npm: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return;
+	}
+	if (code !== 0) {
+		process.exit(code);
+	}
+	if (installed && installed !== plan.version) {
+		console.log(`upgraded ${installed} -> ${plan.version}`);
+	}
 };
 
 const command = defineCommand({
@@ -136,28 +198,10 @@ const command = defineCommand({
 		},
 	},
 	run: async ({ args }) => {
-		const plan = planInstall(String(args.adapter));
-		if (args["dry-run"]) {
-			console.log(`${plan.npmCmd} ${plan.npmArgs.join(" ")}`);
-			return;
-		}
-		if (plan.version.startsWith("workspace:")) {
-			die(
-				`dev install detected (${plan.version}); pass an explicit version: d3r install ${plan.id}@<version>`,
-			);
-		}
-		const installed = readInstalledVersion(plan.target, plan.entry.pkg);
-		if (installed && installed === plan.version && !args.force) {
-			console.log(`already installed at ${plan.version}`);
-			return;
-		}
-		if (installed && installed !== plan.version) {
-			console.log(`upgraded ${installed} -> ${plan.version}`);
-		}
-		const code = await runNpm(plan.npmCmd, plan.npmArgs);
-		if (code !== 0) {
-			process.exit(code);
-		}
+		await executeInstall(String(args.adapter), {
+			force: Boolean(args.force),
+			dryRun: Boolean(args["dry-run"]),
+		});
 	},
 });
 
