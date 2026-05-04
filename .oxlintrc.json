@@ -23,6 +23,7 @@
     "sort-imports": "off",
     "capitalized-comments": "off",
     "no-ternary": "off",
-    "unicorn/no-null": "off"
+    "unicorn/no-null": "off",
+    "consistent-type-specifier-style": ["error", "prefer-inline"]
   }
 }
