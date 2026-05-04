@@ -15,6 +15,8 @@ export type ArgSpec =
 			default?: string;
 			description?: string;
 			valueHint?: string;
+			/** True for primitive arrays serialised as comma-joined strings. */
+			multi?: boolean;
 	  }
 	| {
 			type: "number";
@@ -214,6 +216,7 @@ const walkLeaf = (field: z.ZodTypeAny, path: string): ArgSpec => {
 				type: "string",
 				required: wrap.required,
 				description: description ?? "comma-separated",
+				multi: true,
 			};
 			if (wrap.defaultValue !== undefined && Array.isArray(wrap.defaultValue)) {
 				spec.default = wrap.defaultValue.map(String).join(",");

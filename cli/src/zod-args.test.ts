@@ -49,6 +49,7 @@ describe("walkSchema", () => {
 			type: "string",
 			required: false,
 			description: "comma-separated",
+			multi: true,
 		});
 	});
 
