@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 import { defineCommand, runMain } from "citty";
 import pkg from "../package.json" with { type: "json" };
+import bareLaunch, { ARGV_USER_OFFSET } from "./bare.ts";
 
 const bare = defineCommand({
 	meta: { name: "__bare__", hidden: true },
-	run: () => {
-		throw new Error("not yet implemented: bare launch");
-	},
+	run: (ctx) => bareLaunch(ctx.rawArgs ?? process.argv.slice(ARGV_USER_OFFSET)),
 });
 
 const root = defineCommand({
