@@ -1,2 +1,4 @@
-// Placeholder to satisfy tsc until source lands.
-export const __placeholder = true;
+#!/usr/bin/env node
+// Verb routing lands in the next commit.
+console.error("d3r: not yet wired");
+process.exit(0);

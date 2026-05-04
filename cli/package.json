@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/cli.ts"
   },
+  "bin": {
+    "d3r": "./dist/cli.js"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -17,6 +20,7 @@
   "dependencies": {
     "@d3r/core": "workspace:*",
     "@d3r/tools": "workspace:*",
+    "citty": "^0.2.2",
     "zod": "^3"
   }
 }
