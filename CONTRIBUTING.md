@@ -18,6 +18,14 @@ Source code does not reference vault documents -- no decision IDs, section
 numbers, or commit-schema labels in comments or commit messages. The code stands
 on its own; the vault is for humans.
 
+## Code comments
+
+Only include comments where necessary to explain intention. A good
+comment explains how the code got to this state, _not_ what the code does.
+A description of intention will not drift, a mechanical description will.
+
+All top-level items should have a brief jsdoc style comment.
+
 ## Adding a harness adapter
 
 Mirror the shape of `adapters/pi/`: a workspace package with a `prebuild` script
@@ -50,3 +58,24 @@ else needs to move.
 
 Avoid writing shell scripts. All code in this repo should be cross-platform
 scripts written in TypeScript.
+
+## Tests
+
+ALWAYS add tests when writing new code, I don't care what the schema says. See
+docs/testing.md for best practices.
+
+## Imports
+
+Don't do this.
+
+```ts
+import type { AdapterEntry } from "../utils/data.ts";
+// oxlint-disable-next-line no-duplicate-imports
+import { ADAPTERS } from "../utils/data.ts";
+```
+
+Do this.
+
+```ts
+import { ADAPTERS, type AdapterEntry } from "../utils/data.ts";
+```

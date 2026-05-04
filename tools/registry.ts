@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import { type z } from "zod";
 import { FmReadParams, fmRead } from "./fm/read.ts";
 import { FmWriteParams, fmWrite } from "./fm/write.ts";
 import { VaultEditParams, vaultEdit } from "./vault/edit.ts";

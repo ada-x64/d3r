@@ -3,13 +3,14 @@
 // caller opts in explicitly.
 
 import { rm, stat } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import { type Stats } from "node:fs";
 import { z } from "zod";
 
-import type { Result } from "../common/result.ts";
-// oxlint-disable-next-line no-duplicate-imports
-import { error } from "../common/result.ts";
-import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
+import { error, type Result } from "../common/result.ts";
+import {
+	type VaultAccessor,
+	type VaultPathError,
+} from "../common/vault-root.ts";
 import { acceptRoot } from "./_lib.ts";
 
 export const VaultRmParams = z.object({

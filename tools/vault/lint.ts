@@ -10,8 +10,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type { Result } from "../common/result.ts";
-import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
+import { type Result } from "../common/result.ts";
+import {
+	type VaultAccessor,
+	type VaultPathError,
+} from "../common/vault-root.ts";
 import { parseFm } from "../fm/_lib.ts";
 import { acceptRoot, resolveRoot, walkVault } from "./_lib.ts";
 import { lintSchemas } from "./lint/index.ts";

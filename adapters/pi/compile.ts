@@ -15,9 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { parse as parseYaml } from "yaml";
-import type { ChainStep } from "@d3r/core";
-// oxlint-disable-next-line no-duplicate-imports
-import { AgentSpec, Workflow } from "@d3r/core";
+import { AgentSpec, Workflow, type ChainStep } from "@d3r/core";
 import { piToolMap } from "./capability-map.ts";
 
 export interface BuildReport {

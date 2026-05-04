@@ -8,9 +8,7 @@
 
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import type { Result } from "./result.ts";
-// oxlint-disable-next-line no-duplicate-imports
-import { error as fail, ok } from "./result.ts";
+import { error as fail, ok, type Result } from "./result.ts";
 
 // Implementations are owned by harness adapters or higher-level
 // orchestration. The tools package only consumes the interface so the
