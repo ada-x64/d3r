@@ -1,0 +1,30 @@
+import { spawn } from "node:child_process";
+
+/**
+ * Bare-launch handler: forwards the user's argv to `pi` in routing mode
+ * (`pi --d3r <...argv>`). v1 hardcodes `pi` as the harness; alternative
+ * harnesses are deferred until concretely needed.
+ */
+
+const EXIT_USAGE = 1;
+const EXIT_NOT_FOUND = 127;
+const EXIT_SIGNAL_BASE = 128;
+const ARGV_USER_OFFSET = 2;
+
+const bare = async (argv: string[]): Promise<never> => {
+	const child = spawn("pi", ["--d3r", ...argv], { stdio: "inherit" });
+	child.on("error", (err: NodeJS.ErrnoException) => {
+		const msg =
+			err.code === "ENOENT" ? "pi binary not found on PATH" : err.message;
+		process.stderr.write(`error: ${msg}\n`);
+		process.exit(EXIT_NOT_FOUND);
+	});
+	child.on("exit", (code, signal) => {
+		process.exit(code ?? (signal ? EXIT_SIGNAL_BASE : EXIT_USAGE));
+	});
+
+	return new Promise<never>(() => {});
+};
+
+export { ARGV_USER_OFFSET };
+export default bare;

@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "test:dist": "vitest --run --project=dist --passWithNoTests",
     "test:coverage": "vitest --run --coverage --passWithNoTests",
-    "cli": "pnpm -r build && node dist/cli.js"
+    "cli": "pnpm -r build && node cli/dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^22",
