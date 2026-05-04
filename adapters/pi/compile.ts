@@ -8,20 +8,9 @@
 //      from coreDir/agents/orchestrator.md plus the rendered chains
 //      from coreDir/workflow.yaml. Single source of truth for the
 //      d3r system prompt.
-//   4. Force-symlink extensions/subagent and extensions/mode
-//      into distDir/extensions/.
-//   5. Force-symlink coreDir/templates -> distDir/templates.
-//   6. Return BuildReport. Throw on any zod failure.
+//   4. Return BuildReport. Throw on any zod failure.
 
-import {
-	mkdir,
-	readFile,
-	readdir,
-	rm,
-	stat,
-	symlink,
-	writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
@@ -33,27 +22,16 @@ import { piToolMap } from "./capability-map.ts";
 
 export interface BuildReport {
 	agents: number;
-	extensions: string[];
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXTENSIONS_SRC = path.join(HERE, "extensions");
-const WANTED_EXTENSIONS = ["subagent", "mode"] as const;
 const ORCHESTRATOR_AGENT_FILE = "orchestrator.md";
 const ORCHESTRATOR_CONTRACT_OUT = path.join(
 	EXTENSIONS_SRC,
 	"mode",
 	"orchestrator-contract.generated.ts",
 );
-
-const forceSymlink = async (
-	target: string,
-	linkPath: string,
-): Promise<void> => {
-	await rm(linkPath, { force: true, recursive: true });
-	await mkdir(path.dirname(linkPath), { recursive: true });
-	await symlink(target, linkPath);
-};
 
 const renderStep = (step: ChainStep, depth = 0): string => {
 	const indent = "  ".repeat(depth);
@@ -90,9 +68,8 @@ const renderChains = (wf: Workflow): string => {
 // Read orchestrator.md, strip frontmatter, append the rendered chain
 // definitions from workflow.yaml, and emit a TS module the mode
 // extension can import. Generated file is gitignored; it lives inside
-// the extension dir because the extension is symlinked into dist (and
-// from there into the user's pi config), so a sibling file is the
-// only path-stable way to ship the contract body.
+// the extension dir because mode/index.ts imports it as a sibling
+// source file when pi loads the extension.
 const compileOrchestratorContract = async (coreDir: string): Promise<void> => {
 	const src = path.join(coreDir, "agents", ORCHESTRATOR_AGENT_FILE);
 	const raw = await readFile(src, "utf8");
@@ -146,29 +123,6 @@ const compileAgents = async (
 	return files.length;
 };
 
-const linkOneExtension = async (
-	name: string,
-	distDir: string,
-): Promise<string> => {
-	const src = path.join(EXTENSIONS_SRC, name);
-	const dest = path.join(distDir, "extensions", name);
-	await stat(src);
-	await forceSymlink(src, dest);
-	return name;
-};
-
-const linkExtensions = async (distDir: string): Promise<string[]> =>
-	Promise.all(WANTED_EXTENSIONS.map((name) => linkOneExtension(name, distDir)));
-
-const linkTemplates = async (
-	coreDir: string,
-	distDir: string,
-): Promise<void> => {
-	const src = path.join(coreDir, "templates");
-	const dest = path.join(distDir, "templates");
-	await forceSymlink(src, dest);
-};
-
 export const compile = async (
 	coreDir: string,
 	distDir: string,
@@ -176,11 +130,7 @@ export const compile = async (
 	await mkdir(distDir, { recursive: true });
 	await compileOrchestratorContract(coreDir);
 	const agents = await compileAgents(coreDir, distDir);
-	const extensions = await linkExtensions(distDir);
-	await linkTemplates(coreDir, distDir);
-	const report: BuildReport = { agents, extensions };
-	console.log(
-		`[compile:pi] agents=${agents} extensions=[${extensions.join(", ")}]`,
-	);
+	const report: BuildReport = { agents };
+	console.log(`[compile:pi] agents=${agents}`);
 	return report;
 };

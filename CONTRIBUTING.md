@@ -20,11 +20,14 @@ on its own; the vault is for humans.
 
 ## Adding a harness adapter
 
-Mirror the shape of `adapters/pi/` and add a case to `scripts/build.ts`'s target
-dispatch. The adapter owns capability-to-tool mapping, prompt rendering,
-extension vendoring, and the install script. If you find yourself wanting to
-edit `core/` to make your adapter work, the boundary is wrong somewhere -- stop
-and reconsider.
+Mirror the shape of `adapters/pi/`: a workspace package with a `prebuild` script
+that compiles `core/` into the package's own `dist/` and a `build` that
+type-checks and emits the package's TypeScript. `pnpm -r build` then picks the
+adapter up alongside everything else. The adapter owns capability-to-tool
+mapping, prompt rendering, and extension vendoring. End-user installation is the
+`d3r install <adapter>` verb's job, not a per-adapter shell script. If you find
+yourself wanting to edit `core/` to make your adapter work, the boundary is
+wrong somewhere -- stop and reconsider.
 
 ## Vault docs
 
