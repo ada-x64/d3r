@@ -5,7 +5,8 @@ export default defineCommand({
 		name: "migrate",
 		description: "Run pending vault migrations",
 	},
-	run: () => {
-		throw new Error("not yet implemented");
+	run: async () => {
+		const { runPendingMigrations } = await import("@d3r/core/vault/migrate");
+		await runPendingMigrations();
 	},
 });

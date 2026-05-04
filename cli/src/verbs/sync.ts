@@ -5,7 +5,8 @@ export default defineCommand({
 		name: "sync",
 		description: "Full sweep of all registered vault views",
 	},
-	run: () => {
-		throw new Error("not yet implemented");
+	run: async () => {
+		const { syncAll } = await import("@d3r/core/vault/sync");
+		await syncAll();
 	},
 });

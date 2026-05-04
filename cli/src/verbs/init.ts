@@ -5,7 +5,8 @@ export default defineCommand({
 		name: "init",
 		description: "Register a new repo-dir's vault view",
 	},
-	run: () => {
-		throw new Error("not yet implemented");
+	run: async () => {
+		const { initView } = await import("@d3r/core/vault/init");
+		await initView({ cwd: process.cwd() });
 	},
 });
