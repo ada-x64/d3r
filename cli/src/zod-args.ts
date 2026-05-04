@@ -88,29 +88,45 @@ const walkObject = (obj: z.ZodObject<z.ZodRawShape>): ArgsRecord => {
 interface Wrap {
 	required: boolean;
 	defaultValue: unknown;
+	description: string | undefined;
 }
 
-/** Peel ZodOptional / ZodDefault / ZodNullable layers off in any order. */
+/**
+ * Peel ZodOptional / ZodDefault / ZodNullable layers off in any order.
+ * Captures `.describe()` text from the outermost wrapper that carries it,
+ * since `z.string().optional().describe("x")` stores the description on
+ * the `ZodOptional` rather than the inner string.
+ */
 const unwrap = (
 	field: z.ZodTypeAny,
-	wrap: Wrap = { required: true, defaultValue: undefined },
+	wrap: Wrap = {
+		required: true,
+		defaultValue: undefined,
+		description: undefined,
+	},
 ): { inner: z.ZodTypeAny; wrap: Wrap } => {
-	const { typeName } = field._def as { typeName?: string };
-	if (typeName === "ZodOptional" || typeName === "ZodNullable") {
+	const def = field._def as { typeName?: string; description?: string };
+	const description = wrap.description ?? def.description;
+	if (def.typeName === "ZodOptional" || def.typeName === "ZodNullable") {
 		const { innerType } = field._def as { innerType: z.ZodTypeAny };
 		return unwrap(innerType, {
 			required: false,
 			defaultValue: wrap.defaultValue,
+			description,
 		});
 	}
-	if (typeName === "ZodDefault") {
+	if (def.typeName === "ZodDefault") {
 		const { innerType, defaultValue } = field._def as {
 			innerType: z.ZodTypeAny;
 			defaultValue: () => unknown;
 		};
-		return unwrap(innerType, { required: false, defaultValue: defaultValue() });
+		return unwrap(innerType, {
+			required: false,
+			defaultValue: defaultValue(),
+			description,
+		});
 	}
-	return { inner: field, wrap };
+	return { inner: field, wrap: { ...wrap, description } };
 };
 
 interface DecorateArgs<T extends ArgSpec> {
@@ -138,7 +154,10 @@ const decorate = <T extends ArgSpec>({
 
 const walkLeaf = (field: z.ZodTypeAny, path: string): ArgSpec => {
 	const { inner, wrap } = unwrap(field);
-	const { description } = inner._def as { description?: string };
+	// `wrap.description` already prefers the outermost `.describe()`; fall
+	// back to the leaf's own description for the unwrapped case.
+	const description =
+		wrap.description ?? (inner._def as { description?: string }).description;
 	const { typeName: tn } = inner._def as { typeName?: string };
 	switch (tn) {
 		case "ZodString": {

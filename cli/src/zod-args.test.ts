@@ -106,4 +106,46 @@ describe("walkSchema", () => {
 			/unsupported array element.*JSON file or stdin/,
 		);
 	});
+
+	it("preserves .describe() chained onto an optional wrapper", () => {
+		const schema = z.object({
+			name: z.string().optional().describe("note"),
+		});
+		const result = walkSchema(schema);
+		if (result.kind !== "object") {
+			throw new Error("expected object");
+		}
+		expect(result.args.name).toEqual({
+			type: "string",
+			required: false,
+			description: "note",
+		});
+	});
+
+	it("preserves .describe() chained onto a default wrapper", () => {
+		const schema = z.object({
+			count: z.number().default(0).describe("n"),
+		});
+		const result = walkSchema(schema);
+		if (result.kind !== "object") {
+			throw new Error("expected object");
+		}
+		expect(result.args.count).toEqual({
+			type: "number",
+			required: false,
+			default: 0,
+			description: "n",
+		});
+	});
+
+	it("prefers the outer .describe() when both inner and outer set one", () => {
+		const schema = z.object({
+			name: z.string().describe("a").optional().describe("b"),
+		});
+		const result = walkSchema(schema);
+		if (result.kind !== "object") {
+			throw new Error("expected object");
+		}
+		expect(result.args.name).toMatchObject({ description: "b" });
+	});
 });
