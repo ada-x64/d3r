@@ -18,7 +18,8 @@
     "dist",
     "test/**",
     "extensions/subagent/**",
-    "extensions/mode/**"
+    "extensions/mode/**",
+    "extensions/d3r-tools/**"
   ],
   "references": [
     { "path": "../../core/tsconfig.build.json" },

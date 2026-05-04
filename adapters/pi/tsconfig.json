@@ -1,5 +1,10 @@
 {
   "extends": "../../tsconfig.json",
   "include": ["**/*.ts"],
-  "exclude": ["extensions/subagent/**", "extensions/mode/**", "node_modules"]
+  "exclude": [
+    "extensions/subagent/**",
+    "extensions/mode/**",
+    "extensions/d3r-tools/**",
+    "node_modules"
+  ]
 }
