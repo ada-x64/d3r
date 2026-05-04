@@ -20,9 +20,9 @@ on its own; the vault is for humans.
 
 ## Code comments
 
-Only include comments where necessary to explain intention. A good
-comment explains how the code got to this state, _not_ what the code does.
-A description of intention will not drift, a mechanical description will.
+Only include comments where necessary to explain intention. A good comment
+explains how the code got to this state, _not_ what the code does. A description
+of intention will not drift, a mechanical description will.
 
 All top-level items should have a brief jsdoc style comment.
 
