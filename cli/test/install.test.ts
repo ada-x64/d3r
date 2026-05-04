@@ -6,6 +6,7 @@
 // and the `ADAPTERS` table respectively so this fixture cannot
 // silently drift from production.
 
+import { runCommand } from "citty";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,6 +234,29 @@ describe("install / executeInstall", () => {
 		const err = state.stderr.join("");
 		expect(err.startsWith("error: ")).toBe(true);
 		expect(err).toContain("npm not found on PATH");
+	});
+
+	it("defaults the adapter positional to `pi` when invoked bare", async () => {
+		const state = installExitSpies();
+		const command = await INSTALL_VERB.load();
+		await runCommand(command, { rawArgs: ["--dry-run"] });
+		// dry-run prints the planned argv; the package fragment proves the
+		// pi adapter was selected without the user typing it.
+		expect(state.stdout.join("\n")).toContain(`${piPkg()}@`);
+	});
+
+	it("still resolves an explicit `pi` positional", async () => {
+		const state = installExitSpies();
+		const command = await INSTALL_VERB.load();
+		await runCommand(command, { rawArgs: ["pi", "--dry-run"] });
+		expect(state.stdout.join("\n")).toContain(`${piPkg()}@`);
+	});
+
+	it("still honours an explicit version override on the positional", async () => {
+		const state = installExitSpies();
+		const command = await INSTALL_VERB.load();
+		await runCommand(command, { rawArgs: ["pi@1.2.3", "--dry-run"] });
+		expect(state.stdout.join("\n")).toContain(`${piPkg()}@1.2.3`);
 	});
 
 	it("translates non-ENOENT spawn errors into the standard die() shape", async () => {

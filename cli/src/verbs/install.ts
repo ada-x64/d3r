@@ -113,9 +113,9 @@ const command = defineCommand({
 	args: {
 		adapter: {
 			type: "positional",
-			required: true,
+			default: "pi",
 			description:
-				"Adapter id, optionally with @<version> suffix (e.g. pi, pi@1.2.3)",
+				"Adapter id, optionally with @<version> suffix (e.g. pi, pi@1.2.3); defaults to pi",
 		},
 		force: {
 			type: "boolean",
