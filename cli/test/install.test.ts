@@ -11,12 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-	ADAPTERS,
-	executeInstall,
-	planInstall,
-	readInstalledVersion,
-} from "../src/verbs/install.ts";
+import { ADAPTERS } from "../src/utils/data.ts";
+import { readInstalledVersion } from "../src/utils/helpers.ts";
+import { executeInstall, planInstall } from "../src/verbs/install.ts";
 import { VERBS } from "../src/verbs/registry.ts";
 
 // Sourced from the verb registry to keep the test honest about

@@ -1,73 +1,17 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
 import type { CommandDef } from "citty";
 // oxlint-disable-next-line no-duplicate-imports
 import { defineCommand } from "citty";
 import pkg from "../../package.json" with { type: "json" };
-
-interface AdapterEntry {
-	readonly pkg: string;
-	readonly target: (piConfigDir: string) => string;
-}
-
-export const ADAPTERS: Readonly<Record<string, AdapterEntry>> = {
-	pi: {
-		pkg: "@d3r/adapter-pi",
-		target: (piConfigDir) => path.join(piConfigDir, "extensions", "d3r-tools"),
-	},
-};
-
-const piConfigDir = (): string =>
-	process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), ".pi", "agent");
-
-const resolveNpmCommand = (configDir: string): string => {
-	try {
-		const raw = readFileSync(path.join(configDir, "settings.json"), "utf8");
-		const parsed: unknown = JSON.parse(raw);
-		if (
-			parsed &&
-			typeof parsed === "object" &&
-			"npmCommand" in parsed &&
-			typeof (parsed as { npmCommand: unknown }).npmCommand === "string"
-		) {
-			return (parsed as { npmCommand: string }).npmCommand;
-		}
-	} catch {
-		// missing or unparseable → fall through
-	}
-	return "npm";
-};
-
-export const readInstalledVersion = (
-	target: string,
-	pkgName: string,
-): string | null => {
-	try {
-		const raw = readFileSync(
-			path.join(target, "node_modules", pkgName, "package.json"),
-			"utf8",
-		);
-		const parsed: unknown = JSON.parse(raw);
-		if (
-			parsed &&
-			typeof parsed === "object" &&
-			"version" in parsed &&
-			typeof (parsed as { version: unknown }).version === "string"
-		) {
-			return (parsed as { version: string }).version;
-		}
-	} catch {
-		// not installed
-	}
-	return null;
-};
-
-const die = (msg: string): never => {
-	process.stderr.write(`error: ${msg}\n`);
-	process.exit(1);
-};
+import type { AdapterEntry } from "../utils/data.ts";
+// oxlint-disable-next-line no-duplicate-imports
+import { ADAPTERS } from "../utils/data.ts";
+import {
+	die,
+	piConfigDir,
+	readInstalledVersion,
+	resolveNpmCommand,
+} from "../utils/helpers.ts";
 
 export const runNpm = (cmd: string, args: readonly string[]): Promise<number> =>
 	new Promise((resolve, reject) => {
