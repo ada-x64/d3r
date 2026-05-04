@@ -5,7 +5,10 @@ export default defineCommand({
 		name: "status",
 		description: "Show view registry, dangling links, and run vault_lint",
 	},
-	run: () => {
-		throw new Error("not yet implemented");
+	run: async () => {
+		const { vaultStatus } = await import("@d3r/core/vault/status");
+		const result = await vaultStatus();
+		const JSON_INDENT = 2;
+		console.log(JSON.stringify(result, null, JSON_INDENT));
 	},
 });

@@ -21,6 +21,7 @@
     "@d3r/core": "workspace:*",
     "@d3r/tools": "workspace:*",
     "citty": "^0.2.2",
+    "yaml": "^2",
     "zod": "^3"
   }
 }

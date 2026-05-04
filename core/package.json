@@ -5,7 +5,8 @@
   "main": "./schema.ts",
   "types": "./schema.ts",
   "exports": {
-    ".": "./schema.ts"
+    ".": "./schema.ts",
+    "./vault/*": "./vault/*.ts"
   },
   "publishConfig": {
     "access": "public"
