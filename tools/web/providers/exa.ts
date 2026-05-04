@@ -7,14 +7,14 @@
 
 import { Exa } from "exa-js";
 
-import type {
-	WebDoc,
-	WebFetchParams,
-	WebFetchResult,
-	WebHit,
-	WebSearchParams,
-	WebSearchProvider,
-	WebSearchResult,
+import {
+	type WebDoc,
+	type WebFetchParams,
+	type WebFetchResult,
+	type WebHit,
+	type WebSearchParams,
+	type WebSearchProvider,
+	type WebSearchResult,
 } from "../search.ts";
 
 const ENV_VAR = "EXA_API_KEY";

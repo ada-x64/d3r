@@ -7,10 +7,12 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
-import type { Result } from "../common/result.ts";
-import type { VaultAccessor, VaultPathError } from "../common/vault-root.ts";
-// oxlint-disable-next-line no-duplicate-imports
-import { resolveUnderRoot } from "../common/vault-root.ts";
+import { type Result } from "../common/result.ts";
+import {
+	resolveUnderRoot,
+	type VaultAccessor,
+	type VaultPathError,
+} from "../common/vault-root.ts";
 import { stringifyFm } from "../fm/_lib.ts";
 
 export const acceptRoot = async (

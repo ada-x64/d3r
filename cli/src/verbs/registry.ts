@@ -1,4 +1,4 @@
-import type { CommandDef } from "citty";
+import { type CommandDef } from "citty";
 
 /**
  * Single source of truth for the CLI's user-facing verbs.

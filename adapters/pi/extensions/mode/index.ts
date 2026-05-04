@@ -26,21 +26,19 @@
 //   - `session_start`: read the `--d3r` flag on fresh start; backfill
 //     the status icon from the most recent transcript marker on resume.
 
-// oxlint-disable no-duplicate-imports -- separate type+value imports keep both
-// `consistent-type-specifier-style` and TS-erased imports happy.
-
-import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
+import { type AssistantMessage, type TextContent } from "@mariozechner/pi-ai";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { ORCHESTRATOR_CONTRACT } from "./orchestrator-contract.generated.ts";
-import type { ModeName, PhaseName } from "./utils.ts";
 import {
 	formatModeMarker,
 	isPhaseName,
 	scanForBlocked,
 	scanForModeMarker,
+	type ModeName,
+	type PhaseName,
 } from "./utils.ts";
 
 interface ExtensionState {

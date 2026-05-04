@@ -1,11 +1,7 @@
 import { spawn } from "node:child_process";
-import type { CommandDef } from "citty";
-// oxlint-disable-next-line no-duplicate-imports
-import { defineCommand } from "citty";
+import { defineCommand, type CommandDef } from "citty";
 import pkg from "../../package.json" with { type: "json" };
-import type { AdapterEntry } from "../utils/data.ts";
-// oxlint-disable-next-line no-duplicate-imports
-import { ADAPTERS } from "../utils/data.ts";
+import { ADAPTERS, type AdapterEntry } from "../utils/data.ts";
 import {
 	die,
 	piConfigDir,

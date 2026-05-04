@@ -3,7 +3,7 @@
 // consumes this map). Adding a new kind means a new sibling file plus
 // one entry in `modules` below.
 
-import type { z } from "zod";
+import { type z } from "zod";
 
 import {
 	frontmatterSchema as designSchema,
