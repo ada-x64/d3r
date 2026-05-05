@@ -6,6 +6,7 @@
 // than throwing, so tool entry points can propagate the refusal back to
 // the harness without unwinding.
 
+import assert from "node:assert/strict";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { error as fail, ok, type Result } from "./result.ts";
@@ -55,6 +56,12 @@ const realpathOrAncestor = async (
 		}
 		const nextTail =
 			tail === "" ? path.basename(target) : `${path.basename(target)}/${tail}`;
+		// Tail is rebuilt from basenames of the path we are walking up; a
+		// `..` segment here would mean the input was not lexically guarded.
+		assert(
+			!nextTail.split("/").includes(".."),
+			`realpathOrAncestor tail must not contain '..': ${nextTail}`,
+		);
 		return realpathOrAncestor(parent, nextTail);
 	}
 };
@@ -88,6 +95,12 @@ export const resolveUnderRoot = async (
 	}
 	try {
 		const realRoot = await realpath(root);
+		// Postcondition of `realpath` on an absolute input; the symlink-escape
+		// comparison below is meaningful only against an absolute canonical root.
+		assert(
+			path.isAbsolute(realRoot),
+			`realpath(root) must be absolute: ${realRoot}`,
+		);
 		const realRootSep = realRoot.endsWith(path.sep)
 			? realRoot
 			: realRoot + path.sep;
