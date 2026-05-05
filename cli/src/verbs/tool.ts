@@ -7,6 +7,7 @@
 // going through process.exit / process.std{out,err}.
 
 import { defineCommand, type CommandDef } from "citty";
+import assert from "node:assert/strict";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { registry, type ToolEntry } from "@d3r/tools";
 import { z } from "zod";
@@ -219,7 +220,16 @@ const parseAndValidate = ({
 		return undefined;
 	}
 	try {
-		return entry.schema.parse({ ...preset, ...coerce(values, args) });
+		// preset carries the discriminator (omitted from `args` upstream); the
+		// disjoint-keys invariant guarantees coerced flag values cannot shadow it.
+		const coerced = coerce(values, args);
+		for (const key of Object.keys(coerced)) {
+			assert(
+				!Object.hasOwn(preset, key),
+				`coerced arg '${key}' collides with preset key`,
+			);
+		}
+		return entry.schema.parse({ ...preset, ...coerced });
 	} catch (error) {
 		fail(
 			io,
@@ -246,6 +256,15 @@ export const dispatchTool = async ({
 	} catch (error) {
 		return void fail(io, errMessage(error));
 	}
+	// Walker postcondition: the cover-type branch matches its payload shape.
+	assert(
+		walked.kind === "union"
+			? Object.keys(walked.variants).length > 0
+			: walked.args !== null &&
+					typeof walked.args === "object" &&
+					!Array.isArray(walked.args),
+		`walkSchema returned malformed ${walked.kind} result`,
+	);
 	if (tail.includes("--help") || tail.includes("-h")) {
 		printUsage(io, entry, walked);
 		return;
