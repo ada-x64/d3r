@@ -18,6 +18,34 @@ Source code does not reference vault documents -- no decision IDs, section
 numbers, or commit-schema labels in comments or commit messages. The code stands
 on its own; the vault is for humans.
 
+## Code shape & data-oriented design
+
+d3r's TypeScript is reviewed against an opinionated, polemical stance, not a
+neutral style guide; PRs are evaluated against named principle IDs from
+`docs/data-oriented-design.md`, and disagreement is resolved by amending a
+principle on its own PR rather than ignoring it in code.
+
+The lineage is data-oriented design, functional programming, and transformation
+pipelines: rows of plain data flow through pure functions, with IO confined to a
+thin imperative shell.
+
+Headline principles (one phrase each):
+
+- `DOD-PRIORITY-ORDER` -- data-safety > clarity > anti-pessimization.
+- `DOD-LAYERED-SHELL-CORE` -- imperative shell (`cli/`, `adapters/`) wraps a
+  pure functional core (`core/`, `tools/`).
+- `DOD-NO-MUTABLE-STATE` -- no module-level `let`, no mutable singletons; inject
+  dependencies as parameters.
+- `DOD-PARSE-DONT-VALIDATE` -- at every untyped boundary, parse into a typed
+  value and operate on the typed value thereafter.
+- `DOD-AOS-DEFAULT` -- array-of-structs is the default in-memory layout for
+  collections of records.
+- `DOD-SCHEMA-AS-INTERFACE` -- the per-tool zod schema is the interface; no
+  wrapper classes around it.
+
+See `docs/data-oriented-design.md` for the canonical principle table and the
+full set of review-citable IDs.
+
 ## Code comments
 
 Only include comments where necessary to explain intention. A good comment
