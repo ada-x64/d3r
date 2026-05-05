@@ -52,7 +52,7 @@ const ConfigYaml = z
 		consumer: z.string().optional(),
 		path: z.string().optional(),
 		root: z.string().optional(),
-		vaults: z.array(VaultEntry).optional(),
+		vaults: z.array(VaultEntry).optional().catch(undefined),
 	})
 	.passthrough();
 

@@ -4,7 +4,7 @@
 // that an allow-listed verb passes through cleanly, and that a
 // gated verb in a directory with no registered vault produces the
 // byte-exact stderr copy and a non-zero exit. The latter mirrors
-// the `HOME=$(mktemp -d) … || echo $?` smoke documented in the
+// the `HOME=$(mktemp -d) ... || echo $?` smoke documented in the
 // task notes.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -146,6 +146,15 @@ describe("vault-gate", () => {
 
 	it("admits a workdir under a nested `vaults[].path` entry", async () => {
 		writeConfig(env.homeDir, `vaults:\n  - path: ${env.workDir}\n`);
+		silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+	});
+
+	it("admits a top-level root when `vaults` is a malformed object map", async () => {
+		writeConfig(
+			env.homeDir,
+			`root: ${env.workDir}\nvaults:\n  primary:\n    root: /nonexistent/should/be/ignored\n`,
+		);
 		silenceExitAndStderr();
 		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
 	});
