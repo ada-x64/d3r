@@ -2,6 +2,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 import { gateExemptVerbs } from "./verbs/registry.ts";
 
 /**
@@ -30,13 +31,48 @@ const realpathOrNull = (p: string): string | null => {
 };
 
 /**
+ * Shape admitted from `~/.d3r/config.yaml`. Each of `consumer`,
+ * `path`, and `root` may appear at the top level or on an entry of a
+ * top-level `vaults` array, and is treated as a candidate registered
+ * vault root. `.passthrough()` keeps unknown sibling fields from
+ * refusing the file -- the long-term schema for this config lives
+ * with the vault-architecture work; the gate's contract here is only
+ * "what shapes contribute a candidate root".
+ */
+const VaultEntry = z
+	.object({
+		consumer: z.string().optional(),
+		path: z.string().optional(),
+		root: z.string().optional(),
+	})
+	.passthrough();
+
+const ConfigYaml = z
+	.object({
+		consumer: z.string().optional(),
+		path: z.string().optional(),
+		root: z.string().optional(),
+		vaults: z.array(VaultEntry).optional(),
+	})
+	.passthrough();
+
+const candidateRoots = (cfg: z.infer<typeof ConfigYaml>): string[] => {
+	const top = [cfg.consumer, cfg.path, cfg.root];
+	const nested = (cfg.vaults ?? []).flatMap((v) => [
+		v.consumer,
+		v.path,
+		v.root,
+	]);
+	return [...top, ...nested].filter((s): s is string => typeof s === "string");
+};
+
+/**
  * Read `~/.d3r/config.yaml` and return the absolute paths of every
- * view-consumer symlink it declares. Missing or unparseable file
- * yields the empty list (treated as "no vault registered" by
- * {@link gate}). The schema for this file is owned by the (yet to
- * land) vault-architecture work; until then, `gate` walks the
- * parsed object loosely and treats any string-valued `consumer`,
- * `path`, or `root` field as a candidate symlink.
+ * view-consumer symlink it declares. Missing or unparseable file --
+ * or one that does not match {@link ConfigYaml} -- yields the empty
+ * list (treated as "no vault registered" by {@link gate}). The
+ * schema is the contract: any field outside it does not contribute a
+ * candidate root.
  */
 const readRegisteredRoots = (): string[] => {
 	const cfgPath = resolve(homedir(), ".d3r", "config.yaml");
@@ -46,35 +82,19 @@ const readRegisteredRoots = (): string[] => {
 	} catch {
 		return [];
 	}
-	let parsed: unknown = null;
+	let parsedYaml: unknown = null;
 	try {
-		parsed = parseYaml(raw);
+		parsedYaml = parseYaml(raw);
 	} catch {
 		return [];
 	}
-	const out: string[] = [];
-	const visit = (node: unknown): void => {
-		if (!node || typeof node !== "object") {
-			return;
-		}
-		for (const [key, value] of Object.entries(
-			node as Record<string, unknown>,
-		)) {
-			if (
-				typeof value === "string" &&
-				(key === "consumer" || key === "path" || key === "root")
-			) {
-				const real = realpathOrNull(value);
-				if (real !== null) {
-					out.push(real);
-				}
-			} else if (typeof value === "object") {
-				visit(value);
-			}
-		}
-	};
-	visit(parsed);
-	return out;
+	const result = ConfigYaml.safeParse(parsedYaml);
+	if (!result.success) {
+		return [];
+	}
+	return candidateRoots(result.data)
+		.map(realpathOrNull)
+		.filter((p): p is string => p !== null);
 };
 
 /**
