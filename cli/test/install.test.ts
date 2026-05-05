@@ -15,11 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ADAPTERS } from "../src/utils/data.ts";
 import { readInstalledVersion } from "../src/utils/helpers.ts";
 import { executeInstall, planInstall } from "../src/verbs/install.ts";
-import { VERBS } from "../src/verbs/registry.ts";
+import { ALL_VERBS } from "../src/verbs/registry.ts";
 
 // Sourced from the verb registry to keep the test honest about
 // which command this file actually exercises.
-const INSTALL_VERB = VERBS.find((v) => v.name === "install");
+const INSTALL_VERB = ALL_VERBS.find((v) => v.name === "install");
 if (!INSTALL_VERB) {
 	throw new Error("registry has no install verb");
 }

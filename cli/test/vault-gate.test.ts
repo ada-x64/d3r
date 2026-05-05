@@ -13,10 +13,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ALLOW_LIST, gate } from "../src/vault-gate.ts";
-import { VERBS, gateExemptVerbs } from "../src/verbs/registry.ts";
+import {
+	GATED_VERBS,
+	GATE_EXEMPT_VERBS,
+	gateExemptVerbs,
+} from "../src/verbs/registry.ts";
 
 const exemptName = (): string => {
-	const first = VERBS.find((v) => v.gateExempt);
+	const [first] = GATE_EXEMPT_VERBS;
 	if (!first) {
 		throw new Error("registry has no gate-exempt verbs");
 	}
@@ -24,7 +28,7 @@ const exemptName = (): string => {
 };
 
 const gatedName = (): string => {
-	const first = VERBS.find((v) => !v.gateExempt);
+	const [first] = GATED_VERBS;
 	if (!first) {
 		throw new Error("registry has no gated verbs");
 	}

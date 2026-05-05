@@ -3,7 +3,7 @@ import { defineCommand, runMain } from "citty";
 import pkg from "../package.json" with { type: "json" };
 import bareLaunch, { ARGV_USER_OFFSET } from "./bare.ts";
 import { gate } from "./vault-gate.ts";
-import { VERBS, verbNames } from "./verbs/registry.ts";
+import { ALL_VERBS, verbNames } from "./verbs/registry.ts";
 
 const KNOWN_VERBS = verbNames();
 
@@ -22,7 +22,7 @@ const bare = defineCommand({
 });
 
 const subCommands = {
-	...Object.fromEntries(VERBS.map((v) => [v.name, v.load])),
+	...Object.fromEntries(ALL_VERBS.map((v) => [v.name, v.load])),
 	__bare__: bare,
 };
 
