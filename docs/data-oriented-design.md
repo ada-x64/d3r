@@ -304,3 +304,124 @@ already covered by zod is not the target; mid-pipeline preconditions and
 postconditions are. The cost is assertion noise; the benefit is faster, clearer
 failure when an upstream change violates an assumption a downstream function
 silently relied on.
+
+## DOD-DATA-AS-ROWS
+
+A collection of records is rows in a table, not entities in a domain model. The
+shape is a packed `Array` of plain objects (or, when justified per
+DOD-AOS-DEFAULT and DOD-ELEMENT-KIND-DISCIPLINE, columnar arrays); the
+operations are filters, joins, mappings, and reductions over those rows, written
+as free functions. This binds the vault and any future store of documents,
+relationships, or derived indices: documents are rows, links between them are
+join keys, queries are transforms. Do not introduce an entity class with methods
+to represent a document, a link, or an index entry; the row plus a function over
+rows is the representation. Behavior that naturally clusters with one shape
+(e.g. a schema's `.parse()`, an ADT's constructors) still lives next to that
+shape — what is rejected is the rich-domain-model move of attaching mutable
+identity-bearing methods to every record kind.
+
+## DOD-IDENTITY-VALUE-STATE
+
+When the same logical thing changes over time, model it as three distinct
+concepts rather than as one mutable object. A **value** is the immutable content
+at an instant — the file bytes at this hash, the row at this timestamp, the
+parsed record at this revision. An **identity** is the stable handle that points
+to whichever value is current — a path, a slug, a primary key. **State** is the
+association between an identity and a value at a moment in time, and changing
+state means swapping which value the identity points at, not mutating the value
+in place. Any data structure where "the same thing changes" is in scope: vault
+documents under edit, recollection entries that get re-summarized, caches that
+get invalidated. Reading a record returns a value; updating it produces a new
+value and re-binds the identity. This composes with DOD-NO-MUTABLE-STATE (no
+in-place mutation of records) and DOD-DATA-AS-ROWS (the value is a row; the
+identity is the key).
+
+## DOD-IDS-OVER-REFS
+
+Cross-record references are stable IDs resolved through a central registry, not
+in-memory object pointers between records. A document that mentions another
+document carries the other document's id (path, slug, hash) as a plain string or
+branded primitive; the resolver — the vault index, the recollection store, the
+lookup table — turns the id into the row when needed. Object-graph
+representations (a `Document` whose `.links` field is an array of other
+`Document` instances) are rejected: they do not round-trip through JSON, they
+tangle ownership and lifetime, they make schema evolution painful, and they
+fight every other principle in this document that wants flat rows. The id +
+registry shape composes with DOD-DATA-AS-ROWS (links are join keys),
+DOD-TYPED-DOD (ids are branded primitives or schema fields, not bare numbers
+floating around), and DOD-IDENTITY-VALUE-STATE (the id is the identity).
+
+## DOD-PIPELINE-DATA-IS-PLAIN
+
+Data flowing between phases of an in-process pipeline is plain in-memory
+records, not bytes that get serialized at one phase boundary and parsed back at
+the next. The legitimate serialization boundaries are at IO: argv in, file
+contents in, tool output out — covered by DOD-PARSE-DONT-VALIDATE and
+DOD-ZOD-AT-BOUNDARIES. Inside the functional core, when a vault walk produces
+joined `(entry, frontmatter)` rows that feed a linter that feeds a reporter, the
+rows are passed through as the typed values they already are; no
+`JSON.stringify` between phases, no zod re-parse on data already known to be
+valid by construction, no "normalize via round-trip" idioms. Re-parsing
+in-memory data is duplicated work and a duplicated source of truth: the type is
+the contract once it is established.
+
+## DOD-SEGREGATE-BY-VARIANT-WATCH
+
+When a sequence of records carries a discriminator and a hot loop iterates the
+sequence in bulk, branching on the discriminator inside the loop is the worst
+shape: it produces a megamorphic call site and pays the discriminator cost on
+every element. The fix is to segregate the sequence into one packed array per
+variant up front, then loop each homogeneous array separately — each loop
+becomes monomorphic and the discriminator is implicit in which array you are in.
+d3r has no such hot loop today; this rule binds when one emerges. The likely
+first surface is bulk processing across heterogeneous result streams (lint
+output growing past per-doc serial scanning, a future analysis pass over many
+vault documents at once). When that day arrives, the answer is segregation, not
+a `switch` per element. Until then, the principle records the shape so a
+reviewer can name it the moment a bulk-iterated tagged union appears.
+
+## DOD-HOIST-RARE-FIELDS-WATCH
+
+When a record type accumulates fields that only a small fraction of instances
+ever use, those fields belong in a side table keyed by record id, not as
+optional fields on the hot type. Carrying a sparsely-populated optional on every
+row pays a hidden-class and reading-cost tax on the common case to serve the
+rare case; lifting the rare fields out leaves a smaller, more uniform hot type
+and concentrates the rare-case complexity in one explicit place. The shape is
+`Map<RecordId, Extra>` (or a parallel array indexed by id) alongside the main
+rows. This rule bites the moment a record gains a third or fourth optional field
+that genuinely is rare in practice, or when a schema review notices that a hot
+type has grown a long tail of `?:` fields each used by one caller. Until
+measured to matter on a specific record type, the default stays plain rows; the
+principle names the move so it can be reached for without debate when the
+conditions trigger.
+
+## DOD-DISPATCH-TABLE-IF-HOT-WATCH
+
+When a dispatch path becomes hot and currently branches polymorphically on the
+shape of its input — a chain of `instanceof` checks, a `switch` on a `kind` tag,
+an `if/else` ladder over feature presence — replace it with a dispatch table
+indexed by the discriminator, where each row is a homogeneous handler. The
+dispatched-to function then operates on a single subtype, the call site stays
+monomorphic, and adding a new variant is a one-row diff in one place rather than
+a new branch threaded through a switch. d3r's tool dispatch path is not
+currently hot in this sense, and the polymorphic shape there is not yet a
+problem. The watchlist trigger is: a dispatch site shows up in real profiles,
+_or_ adding a new variant has come to require edits in more than one branch of
+the same switch. Either condition turns this from a future-shape note into an
+active recommendation; absent both, plain dispatch is fine.
+
+## DOD-BOUNDED-LOOPS-WATCH
+
+Loops and queues that consume external input — directory walks, glob expansions,
+recursive tree traversals, retry loops, queue drains — are unbounded by default
+in JavaScript and that is fine until it is not. The watchlist rule: when an
+unbounded loop in d3r causes a real failure (a vault walk pathology, a glob that
+explodes, a recursion that does not terminate, a retry that hammers a flaky
+boundary), the fix is to add an articulated upper bound at that site — a maximum
+depth, a maximum count, a maximum wall-clock budget — chosen to be larger than
+any real workload and small enough to convert a runaway into a clean failure.
+Until then, do not pre-emptively sprinkle bounds on every loop in the codebase;
+that is the kind of ceremony DOD-MINIMUM-ABSTRACTIONS rejects. The principle
+exists so that when a real incident happens, the response is structural (bound
+the loop) rather than tactical (add a one-off guard).
