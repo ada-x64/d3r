@@ -7,10 +7,11 @@ import { gateExemptVerbs } from "./verbs/registry.ts";
 
 /**
  * Verbs that are allowed to run without a registered vault for the
- * current working directory. Derived from the verb registry's
- * `gateExempt` flag so the allow-list and the citty registration
- * cannot drift. Every other verb (and the bare-launch path) is
- * gated.
+ * current working directory. Derived from the `GATE_EXEMPT_VERBS`
+ * table in the verb registry -- membership in that table is the
+ * encoding of gate-exempt status -- so the allow-list and the citty
+ * registration cannot drift. Every other verb (and the bare-launch
+ * path) is gated.
  */
 export const ALLOW_LIST: ReadonlySet<string> = gateExemptVerbs();
 
