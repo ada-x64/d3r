@@ -86,7 +86,7 @@ will amend this principle, not show up as a one-off workaround in code.
 
 ## DOD-AOS-DEFAULT
 
-The default in-memory layout for a collection of records is array-of- structs
+The default in-memory layout for a collection of records is array-of-structs
 (rows of objects in a packed `Array`). Plain JavaScript struct-of-arrays buys at
 most ~1.2× on the kinds of microbenchmarks that flatter it and is sometimes
 negative; V8 specifically optimizes arrays-of-objects, and there is no
@@ -214,8 +214,8 @@ Duplication is a maintainability problem, not a performance or data-oriented
 problem. When you remove a repeated `errMessage`, an `isEnoent` check, or a
 `safeStat` wrapper, the justification is "changing this shouldn't require
 finding seven copies", not "V8 will inline it better" or "DOD wants tables".
-Frame the change honestly. The polemic stays sharp by refusing to dress
-maintainability findings in substrate vocabulary they do not earn.
+Frame the change honestly: do not dress maintainability findings in substrate
+vocabulary they have not earned.
 
 ## DOD-DRY-IS-LOAD-BEARING
 
@@ -223,7 +223,7 @@ DRY is positively load-bearing for this codebase, not merely tolerated. Removing
 duplication is worth a real cost in code volume, an extra indirection, or a
 small runtime hit, because d3r is one-off-task-shaped (CLI invocations) and has
 no hot path in the sense that "don't DRY in hot paths" arguments require. The
-general rejection of DRY-as-anti- pattern that some performance-oriented writing
+general rejection of DRY-as-anti-pattern that some performance-oriented writing
 trades in does not bind here. Any anti-DRY argument that wants to apply must
 show a specific hot path and a measured cost; absent that, DRY wins.
 
@@ -295,7 +295,7 @@ side is the kind that should not have been introduced.
 ## DOD-ASSERT-INVARIANTS
 
 At non-trivial transformation points inside the functional core, add runtime
-assertions for invariants the type system cannot express. "Non- trivial" means
+assertions for invariants the type system cannot express. "Non-trivial" means
 the function does more than direct field access — it performs joins, narrowings,
 parsing beyond a zod boundary, path resolutions, state transitions, or other
 computed transforms whose correctness the static types cannot prove. Use
