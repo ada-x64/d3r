@@ -7,7 +7,7 @@
 // the `HOME=$(mktemp -d) … || echo $?` smoke documented in the
 // task notes.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +43,28 @@ const makeEnv = (): Env => {
 	const savedHome = process.env.HOME;
 	process.env.HOME = homeDir;
 	return { homeDir, workDir, savedHome };
+};
+
+const writeConfig = (homeDir: string, body: string): void => {
+	const dir = join(homeDir, ".d3r");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "config.yaml"), body, "utf8");
+};
+
+const silenceExitAndStderr = (): { writes: string[] } => {
+	vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+		throw new Error(`exit:${code ?? 0}`);
+	}) as never);
+	const writes: string[] = [];
+	vi.spyOn(process.stderr, "write").mockImplementation(((
+		chunk: string | Uint8Array,
+	) => {
+		writes.push(
+			typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+		);
+		return true;
+	}) as never);
+	return { writes };
 };
 
 describe("vault-gate", () => {
@@ -105,6 +127,40 @@ describe("vault-gate", () => {
 		expect(writes.join("")).toBe(
 			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r init\`\n`,
 		);
+	});
+
+	it("admits a workdir under a flat `consumer` root", async () => {
+		writeConfig(env.homeDir, `consumer: ${env.workDir}\n`);
+		silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+	});
+
+	it("admits a workdir under a nested `vaults[].root` entry", async () => {
+		writeConfig(
+			env.homeDir,
+			`vaults:\n  - root: ${env.workDir}\n  - path: /nonexistent/should/be/ignored\n`,
+		);
+		silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+	});
+
+	it("admits a workdir under a nested `vaults[].path` entry", async () => {
+		writeConfig(env.homeDir, `vaults:\n  - path: ${env.workDir}\n`);
+		silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+	});
+
+	it("refuses a gated verb when ~/.d3r/config.yaml is malformed", async () => {
+		writeConfig(env.homeDir, ":\n\t- not: valid: yaml\n  ][\n");
+		const { writes } = silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
+		expect(writes.join("")).toContain("no d3r vault registered");
+	});
+
+	it("refuses a gated verb when ~/.d3r/config.yaml is absent", async () => {
+		const { writes } = silenceExitAndStderr();
+		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
+		expect(writes.join("")).toContain("no d3r vault registered");
 	});
 
 	it("refuses when no verb is supplied (bare-launch path)", async () => {
