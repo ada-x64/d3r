@@ -32,7 +32,7 @@ thin imperative shell.
 Headline principles (one phrase each):
 
 - `DOD-PRIORITY-ORDER` -- data-safety > clarity > anti-pessimization.
-- `DOD-LAYERED-SHELL-CORE` -- imperative shell (`cli/`, `adapters/`) wraps a
+- `DOD-LAYERED-SHELL-CORE` -- imperative shell (`cli/`, `adapters/pi/`) wraps a
   pure functional core (`core/`, `tools/`).
 - `DOD-NO-MUTABLE-STATE` -- no module-level `let`, no mutable singletons; inject
   dependencies as parameters.
@@ -43,8 +43,8 @@ Headline principles (one phrase each):
 - `DOD-SCHEMA-AS-INTERFACE` -- the per-tool zod schema is the interface; no
   wrapper classes around it.
 
-See `docs/data-oriented-design.md` for the canonical principle table and the
-full set of review-citable IDs.
+See `docs/data-oriented-design.md` for the full list of `DOD-` codes and the
+review-citable IDs.
 
 ## Code comments
 
