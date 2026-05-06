@@ -1,5 +1,7 @@
 import { defineCommand } from "citty";
 
+import { JSON_INDENT } from "../utils/output.ts";
+
 export default defineCommand({
 	meta: {
 		name: "status",
@@ -8,7 +10,6 @@ export default defineCommand({
 	run: async () => {
 		const { vaultStatus } = await import("@d3r/core/vault/status");
 		const result = await vaultStatus();
-		const JSON_INDENT = 2;
 		console.log(JSON.stringify(result, null, JSON_INDENT));
 	},
 });

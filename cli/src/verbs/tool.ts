@@ -17,6 +17,7 @@ import {
 import { z } from "zod";
 
 import { parseWebProviderConfig } from "../utils/env.ts";
+import { JSON_INDENT, errMessage } from "../utils/output.ts";
 
 import {
 	walkSchema,
@@ -41,15 +42,11 @@ export interface DispatchArgs {
 }
 
 const EXIT_FAILURE = 1;
-const JSON_INDENT = 2;
 
 const fail = (io: DispatchIO, message: string): never => {
 	io.stderr(`error: ${message}\n`);
 	return io.exit(EXIT_FAILURE);
 };
-
-const errMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
 
 const parseOptionsFor = (
 	args: ArgsRecord,

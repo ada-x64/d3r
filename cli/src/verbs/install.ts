@@ -9,6 +9,7 @@ import {
 	resolveNpmCommand,
 	runNpm,
 } from "../utils/helpers.ts";
+import { errMessage } from "../utils/output.ts";
 
 export interface PlannedInstall {
 	readonly entry: AdapterEntry;
@@ -92,9 +93,7 @@ export const executeInstall = async (
 		if (isEnoent(error)) {
 			die(`npm not found on PATH (tried '${plan.npmCmd}')`);
 		}
-		die(
-			`failed to spawn npm: ${error instanceof Error ? error.message : String(error)}`,
-		);
+		die(`failed to spawn npm: ${errMessage(error)}`);
 		return;
 	}
 	if (code !== 0) {
