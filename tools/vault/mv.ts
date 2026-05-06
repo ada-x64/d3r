@@ -2,7 +2,7 @@
 // through the traversal guard. Refuses to clobber an existing target
 // unless `overwrite` is true.
 
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
@@ -11,7 +11,7 @@ import {
 	type VaultAccessor,
 	type VaultPathError,
 } from "../common/vault-root.ts";
-import { acceptRoot } from "./_lib.ts";
+import { acceptRoot, safeStat } from "./_lib.ts";
 
 export const VaultMvParams = z.object({
 	from: z.string(),
@@ -30,15 +30,6 @@ export type VaultMvError =
 	| { kind: "exists"; path: string }
 	| { kind: "missing"; path: string };
 
-const exists = async (p: string): Promise<boolean> => {
-	try {
-		await stat(p);
-		return true;
-	} catch {
-		return false;
-	}
-};
-
 export const vaultMv = async (
 	params: VaultMvParams,
 	accessor: VaultAccessor,
@@ -51,10 +42,10 @@ export const vaultMv = async (
 	if (!toRes.ok) {
 		return toRes;
 	}
-	if (!(await exists(fromRes.value))) {
+	if ((await safeStat(fromRes.value)) === null) {
 		return error({ kind: "missing", path: params.from });
 	}
-	if (!params.overwrite && (await exists(toRes.value))) {
+	if (!params.overwrite && (await safeStat(toRes.value)) !== null) {
 		return error({ kind: "exists", path: params.to });
 	}
 	await mkdir(path.dirname(toRes.value), { recursive: true });

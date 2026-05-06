@@ -2,8 +2,7 @@
 // from the vault. Refuses to descend into a directory unless the
 // caller opts in explicitly.
 
-import { rm, stat } from "node:fs/promises";
-import { type Stats } from "node:fs";
+import { rm } from "node:fs/promises";
 import { z } from "zod";
 
 import { error, type Result } from "../common/result.ts";
@@ -11,7 +10,7 @@ import {
 	type VaultAccessor,
 	type VaultPathError,
 } from "../common/vault-root.ts";
-import { acceptRoot } from "./_lib.ts";
+import { acceptRoot, safeStat } from "./_lib.ts";
 
 export const VaultRmParams = z.object({
 	path: z.string(),
@@ -27,14 +26,6 @@ export type VaultRmError =
 	| VaultPathError
 	| { kind: "is-directory"; path: string }
 	| { kind: "missing"; path: string };
-
-const safeStat = async (p: string): Promise<Stats | null> => {
-	try {
-		return await stat(p);
-	} catch {
-		return null;
-	}
-};
 
 export const vaultRm = async (
 	params: VaultRmParams,

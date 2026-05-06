@@ -4,7 +4,8 @@
 // we deliberately avoid pulling in fast-glob/picomatch and stick to
 // `node:fs/promises` to keep the dep surface flat.
 
-import { readFile, readdir } from "node:fs/promises";
+import { type Stats } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { type Result } from "../common/result.ts";
@@ -14,6 +15,17 @@ import {
 	type VaultPathError,
 } from "../common/vault-root.ts";
 import { parseFm, stringifyFm } from "../fm/_lib.ts";
+
+// Wrap `stat` so callers can branch on existence without a try/catch
+// at every site. Returns `null` on any thrown error; ENOENT is not
+// distinguished from other errnos today (callers only need presence).
+export const safeStat = async (p: string): Promise<Stats | null> => {
+	try {
+		return await stat(p);
+	} catch {
+		return null;
+	}
+};
 
 export const acceptRoot = async (
 	accessor: VaultAccessor,
