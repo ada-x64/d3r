@@ -26,18 +26,21 @@ commands:
       - { kind: agent, name: summarizer }
       - { kind: agent, name: archivist }
 vault:
-  dirs: [designs, tasks, notes, issues, archive, templates, reference]
+  dirs: [blueprints, notes, process, issues, reference, .misc]
   template_kinds:
     [
-      task,
+      audit,
+      blueprint,
+      design,
+      implementation-log,
+      issue,
+      note,
+      plan,
+      README,
       remember,
       research,
-      design,
-      plan,
-      schema,
       review,
-      audit,
+      schema,
       summary,
-      note,
-      implementation-log,
+      umbrella-issue,
     ]

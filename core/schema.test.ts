@@ -28,7 +28,7 @@ describe("Workflow", () => {
 					reviews_default: REVIEWS,
 				},
 			},
-			vault: { dirs: ["tasks"], template_kinds: ["schema"] },
+			vault: { dirs: ["process"], template_kinds: ["schema"] },
 		};
 		const parsed = Workflow.parse(input);
 		expect(parsed.commands.ship?.reviews_default).toBe(REVIEWS);
