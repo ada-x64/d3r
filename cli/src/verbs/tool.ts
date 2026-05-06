@@ -13,7 +13,6 @@ import {
 	buildRegistry,
 	selectWebSearchProvider,
 	type ToolEntry,
-	type WebSearchAccessor,
 } from "@d3r/tools";
 import { z } from "zod";
 
@@ -321,19 +320,29 @@ const command = defineCommand({
 			},
 			exit: (code) => process.exit(code),
 		};
+		const name = String(ctx.args.name);
 		// Composition root: the env is parsed once at the shell, the
 		// web-search provider is constructed against the typed config,
 		// and the registry is built fully wired before dispatch. The
-		// missing-api-key precondition is carried in the accessor's
-		// Result so the registry remains importable without a key set.
+		// missing-api-key precondition is a typed Result here, not an
+		// in-band error inside `tools/`: when a `web_*` verb is invoked
+		// without credentials, the shell surfaces the canonical message
+		// and exits before reaching the dispatcher; otherwise the web
+		// rows are simply omitted from the registry.
 		const webConfig = parseWebProviderConfig(process.env);
-		const webAccessor: WebSearchAccessor = {
-			provider: selectWebSearchProvider(webConfig),
-		};
-		const registry = buildRegistry({ web: webAccessor });
+		const webProvider = selectWebSearchProvider(webConfig);
+		if (!webProvider.ok && name.startsWith("web_")) {
+			return fail(
+				io,
+				`Missing required environment variable: ${webProvider.error.envVar}`,
+			);
+		}
+		const registry = buildRegistry({
+			web: webProvider.ok ? webProvider.value : undefined,
+		});
 		await dispatchTool({
 			registry,
-			name: String(ctx.args.name),
+			name,
 			tail,
 			io,
 		});

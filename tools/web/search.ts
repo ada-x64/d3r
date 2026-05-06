@@ -14,6 +14,15 @@ import {
 	type MissingApiKey,
 } from "./providers/exa.ts";
 
+// Typed view of the env-derived web-search configuration the shell
+// hands in. Parsing happens in the shell (cli/src/utils/env.ts);
+// this module operates on the typed value thereafter and never
+// reaches into process.env.
+export interface WebProviderConfig {
+	providerId: string;
+	exaApiKey?: string;
+}
+
 const MAX_RESULTS = 20;
 const DEFAULT_RESULTS = 5;
 const MAX_FETCH_URLS = 20;
@@ -93,15 +102,6 @@ const providers: Record<
 		createExaProvider({ apiKey: config.exaApiKey }),
 };
 
-// Typed view of the env-derived web-search configuration the shell
-// hands in. Parsing happens in the shell (cli/src/utils/env.ts);
-// this module operates on the typed value thereafter and never
-// reaches into process.env.
-export interface WebProviderConfig {
-	providerId: string;
-	exaApiKey?: string;
-}
-
 export const selectWebSearchProvider = (
 	config: WebProviderConfig,
 ): Result<WebSearchProvider, MissingApiKey> => {
@@ -114,12 +114,3 @@ export const selectWebSearchProvider = (
 	}
 	return factory(config);
 };
-
-// Accessor handed to the registry's web rows: carries the constructed
-// provider Result so the registry stays importable without an api key
-// set, and `web_*` dispatch surfaces the missing-key precondition
-// only when actually invoked. Same shape as `VaultAccessor` for
-// vault-aware tools.
-export interface WebSearchAccessor {
-	provider: Result<WebSearchProvider, MissingApiKey>;
-}

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { type z } from "zod";
 import { FmReadParams, fmRead } from "./fm/read.ts";
 import { FmWriteParams, fmWrite } from "./fm/write.ts";
@@ -12,7 +13,7 @@ import { VaultWriteParams, vaultWrite } from "./vault/write.ts";
 import {
 	WebFetchParams,
 	WebSearchParams,
-	type WebSearchAccessor,
+	type WebSearchProvider,
 } from "./web/search.ts";
 
 export interface ToolEntry {
@@ -24,29 +25,28 @@ export interface ToolEntry {
 }
 
 // Composition-root inputs threaded by the shell. The shell parses
-// env once at the boundary, constructs each accessor, and hands the
+// env once at the boundary, constructs each provider, and hands the
 // table back fully wired; tools never reach into env or singletons.
+// `web` is undefined when the missing-api-key precondition fires:
+// the shell short-circuits `web_*` dispatch with a typed message
+// before reaching the registry, so the rows are simply omitted here
+// rather than carrying an in-band error.
 export interface RegistryDeps {
-	web: WebSearchAccessor;
+	web: WebSearchProvider | undefined;
 }
 
-const unwrapWebProvider = (web: WebSearchAccessor) => {
-	if (!web.provider.ok) {
-		throw new Error(
-			`Missing required environment variable: ${web.provider.error.envVar}`,
-		);
-	}
-	return web.provider.value;
-};
-
 export const buildRegistry = (deps: RegistryDeps): ToolEntry[] => {
-	const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) =>
-		unwrapWebProvider(deps.web).search(params, signal);
+	const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) => {
+		assert(deps.web, "web_search dispatched without a configured provider");
+		return deps.web.search(params, signal);
+	};
 
-	const webFetchFn = async (params: WebFetchParams, signal?: AbortSignal) =>
-		unwrapWebProvider(deps.web).fetch(params, signal);
+	const webFetchFn = async (params: WebFetchParams, signal?: AbortSignal) => {
+		assert(deps.web, "web_fetch dispatched without a configured provider");
+		return deps.web.fetch(params, signal);
+	};
 
-	return [
+	const entries: ToolEntry[] = [
 		{
 			name: "fm_read",
 			label: "Frontmatter read",
@@ -125,21 +125,26 @@ export const buildRegistry = (deps: RegistryDeps): ToolEntry[] => {
 			schema: VaultLintParams,
 			fn: vaultLint as (...args: never[]) => unknown,
 		},
-		{
-			name: "web_search",
-			label: "Web search",
-			description:
-				"Search the web for relevant pages and return titled hits with highlight snippets.",
-			schema: WebSearchParams,
-			fn: webSearchFn as (...args: never[]) => unknown,
-		},
-		{
-			name: "web_fetch",
-			label: "Web fetch",
-			description:
-				"Retrieve the full extracted text of one or more web pages by URL.",
-			schema: WebFetchParams,
-			fn: webFetchFn as (...args: never[]) => unknown,
-		},
 	];
+	if (deps.web !== undefined) {
+		entries.push(
+			{
+				name: "web_search",
+				label: "Web search",
+				description:
+					"Search the web for relevant pages and return titled hits with highlight snippets.",
+				schema: WebSearchParams,
+				fn: webSearchFn as (...args: never[]) => unknown,
+			},
+			{
+				name: "web_fetch",
+				label: "Web fetch",
+				description:
+					"Retrieve the full extracted text of one or more web pages by URL.",
+				schema: WebFetchParams,
+				fn: webFetchFn as (...args: never[]) => unknown,
+			},
+		);
+	}
+	return entries;
 };

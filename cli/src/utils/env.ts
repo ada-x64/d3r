@@ -9,6 +9,7 @@
 import { z } from "zod";
 import {
 	DEFAULT_WEB_SEARCH_PROVIDER,
+	EXA_API_KEY_ENV,
 	WEB_SEARCH_PROVIDER_ENV,
 	type WebProviderConfig,
 } from "@d3r/tools";
@@ -20,7 +21,7 @@ import {
 const WebProviderEnv = z
 	.object({
 		[WEB_SEARCH_PROVIDER_ENV]: z.string().min(1).optional(),
-		EXA_API_KEY: z.string().min(1).optional(),
+		[EXA_API_KEY_ENV]: z.string().min(1).optional(),
 	})
 	.passthrough();
 
@@ -31,6 +32,6 @@ export const parseWebProviderConfig = (
 	const data = result.success ? result.data : {};
 	return {
 		providerId: data[WEB_SEARCH_PROVIDER_ENV] ?? DEFAULT_WEB_SEARCH_PROVIDER,
-		exaApiKey: data.EXA_API_KEY,
+		exaApiKey: data[EXA_API_KEY_ENV],
 	};
 };
