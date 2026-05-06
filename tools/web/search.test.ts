@@ -13,9 +13,9 @@ import {
 	selectWebSearchProvider,
 } from "./search.ts";
 
-// Pin selector → Exa mapping by exercising the returned provider's
-// lazy key-read path: only the Exa factory throws MissingApiKeyError
-// for EXA_API_KEY, so a generic WebSearchProvider-shaped object would
+// Pin selector -> Exa mapping by exercising the returned construction
+// Result: only the Exa factory yields the missing-api-key variant for
+// EXA_API_KEY when no key is available, so a generic factory would
 // not satisfy this assertion.
 const ORIGINAL_KEY = process.env.EXA_API_KEY;
 
@@ -28,14 +28,15 @@ afterEach(() => {
 });
 
 describe("selectWebSearchProvider", () => {
-	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider when ${WEB_SEARCH_PROVIDER_ENV} is unset`, async () => {
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider's missing-key Result when ${WEB_SEARCH_PROVIDER_ENV} is unset and no key is available`, () => {
 		delete process.env.EXA_API_KEY;
-		const provider = selectWebSearchProvider({});
-		expect(typeof provider.fetch).toBe("function");
-		await expect(
-			provider.search({ query: "ping", k: 1 }),
-		).rejects.toMatchObject({
-			name: "MissingApiKeyError",
+		const result = selectWebSearchProvider({});
+		expect(result.ok).toBe(false);
+		if (result.ok) {
+			return;
+		}
+		expect(result.error).toEqual({
+			kind: "missing-api-key",
 			envVar: "EXA_API_KEY",
 		});
 	});

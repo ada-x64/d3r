@@ -7,7 +7,12 @@
 
 import { z } from "zod";
 
-import { EXA_PROVIDER_ID, createExaProvider } from "./providers/exa.ts";
+import { type Result } from "../common/result.ts";
+import {
+	EXA_PROVIDER_ID,
+	createExaProvider,
+	type MissingApiKey,
+} from "./providers/exa.ts";
 
 const MAX_RESULTS = 20;
 const DEFAULT_RESULTS = 5;
@@ -76,14 +81,19 @@ export const WEB_SEARCH_PROVIDER_ENV = "D3R_WEB_SEARCH_PROVIDER";
 export const DEFAULT_WEB_SEARCH_PROVIDER = EXA_PROVIDER_ID;
 
 // Provider table: extending support to a new vendor is a one-line
-// addition here plus the provider module under ./providers.
-const providers: Record<string, () => WebSearchProvider> = {
-	[EXA_PROVIDER_ID]: createExaProvider,
+// addition here plus the provider module under ./providers. Each
+// factory returns a Result so missing-credential preconditions stay
+// in the same vocabulary the rest of `tools/` uses.
+const providers: Record<
+	string,
+	() => Result<WebSearchProvider, MissingApiKey>
+> = {
+	[EXA_PROVIDER_ID]: () => createExaProvider(),
 };
 
 export const selectWebSearchProvider = (
 	env: NodeJS.ProcessEnv = process.env,
-): WebSearchProvider => {
+): Result<WebSearchProvider, MissingApiKey> => {
 	const id = env[WEB_SEARCH_PROVIDER_ENV] ?? DEFAULT_WEB_SEARCH_PROVIDER;
 	const factory = providers[id];
 	if (!factory) {

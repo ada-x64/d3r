@@ -1,12 +1,15 @@
 // Exa-backed WebSearchProvider. Implements both the lightweight
 // `search` surface (hits with full highlights) and the full-text
-// `fetch` surface (extracted page bodies, no truncation). Reads
-// EXA_API_KEY lazily on first call so the registry stays importable
-// without the key set; throws a typed MissingApiKeyError when the key
-// is absent so callers can surface a clear message.
+// `fetch` surface (extracted page bodies, no truncation). Construction
+// is the moment the api-key precondition is checked: when neither an
+// explicit `client` nor an `apiKey` is available, the factory returns
+// a Result.error variant the shell can surface to the operator. The
+// returned provider closes over a single client constructed once;
+// there is no per-call cache to invalidate.
 
 import { Exa } from "exa-js";
 
+import { error as fail, ok, type Result } from "../../common/result.ts";
 import {
 	type WebDoc,
 	type WebFetchParams,
@@ -16,8 +19,6 @@ import {
 	type WebSearchProvider,
 	type WebSearchResult,
 } from "../search.ts";
-
-const ENV_VAR = "EXA_API_KEY";
 
 export const EXA_PROVIDER_ID = "exa";
 
@@ -102,20 +103,26 @@ export interface ExaLike {
 
 export interface CreateExaProviderOptions {
 	// Inject a client directly. When supplied, the provider will not
-	// read EXA_API_KEY or construct an Exa instance; this is the seam
+	// look at `apiKey` or construct an Exa instance; this is the seam
 	// tests use to exercise abort and cancellation paths without
 	// touching the network.
 	client?: ExaLike;
+	// Operator-supplied api key, parsed at the shell boundary. When
+	// absent (and no `client` is supplied) the factory returns a
+	// Result.error variant rather than throwing.
+	apiKey?: string;
 }
 
-export class MissingApiKeyError extends Error {
-	override readonly name = "MissingApiKeyError";
-	readonly envVar: string;
-	constructor(envVar: string) {
-		super(`Missing required environment variable: ${envVar}`);
-		this.envVar = envVar;
-	}
+// Construction-time precondition signal: the provider could not be
+// built because the operator did not supply an api key. A plain row,
+// not a class, so callers compose it through the same Result vocabulary
+// the rest of `tools/` uses.
+export interface MissingApiKey {
+	kind: "missing-api-key";
+	envVar: string;
 }
+
+export const EXA_API_KEY_ENV = "EXA_API_KEY";
 
 const abortError = (signal: AbortSignal): unknown =>
 	signal.reason ?? new DOMException("Aborted", "AbortError");
@@ -153,20 +160,18 @@ const raceWithSignal = async <T>(
 
 export const createExaProvider = (
 	options: CreateExaProviderOptions = {},
-): WebSearchProvider => {
-	let client: ExaLike | null = options.client ?? null;
-	const getClient = (): ExaLike => {
-		if (client) {
-			return client;
-		}
-		const apiKey = process.env[ENV_VAR];
-		if (!apiKey) {
-			throw new MissingApiKeyError(ENV_VAR);
-		}
-		client = new Exa(apiKey);
-		return client;
-	};
-	return {
+): Result<WebSearchProvider, MissingApiKey> => {
+	// Resolve the client once at construction. When no explicit client
+	// is supplied we fall back to the api-key path; if neither yields a
+	// usable client the precondition surfaces as a Result.error variant
+	// and the caller never sees a half-constructed provider.
+	const apiKey = options.apiKey ?? process.env[EXA_API_KEY_ENV];
+	const client: ExaLike | undefined =
+		options.client ?? (apiKey ? new Exa(apiKey) : undefined);
+	if (!client) {
+		return fail({ kind: "missing-api-key", envVar: EXA_API_KEY_ENV });
+	}
+	return ok({
 		search: async (
 			params: WebSearchParams,
 			signal?: AbortSignal,
@@ -174,9 +179,8 @@ export const createExaProvider = (
 			if (signal?.aborted) {
 				throw abortError(signal);
 			}
-			const c = getClient();
 			const response = await raceWithSignal(
-				c.searchAndContents(params.query, {
+				client.searchAndContents(params.query, {
 					numResults: params.k,
 					highlights: true,
 				}),
@@ -191,12 +195,11 @@ export const createExaProvider = (
 			if (signal?.aborted) {
 				throw abortError(signal);
 			}
-			const c = getClient();
 			const response = await raceWithSignal(
-				c.getContents(params.urls, { text: true }),
+				client.getContents(params.urls, { text: true }),
 				signal,
 			);
 			return mapFetchResponse(response);
 		},
-	};
+	});
 };

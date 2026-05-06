@@ -1,19 +1,32 @@
 // Smoke tests for the Exa-backed WebSearchProvider. These pin the
 // d3r-side seams: the search and fetch response mappers (id/url
 // fallback, highlight passthrough, optional-field carry, full-text
-// passthrough), the typed MissingApiKeyError contract callers rely
-// on, and the AbortSignal cancellation wrapper. The mappers are
+// passthrough), the missing-api-key construction-time precondition
+// callers rely on, and the AbortSignal cancellation wrapper. The mappers are
 // exercised as pure units because the SDK boundary itself is
 // upstream and not what the tests should be pinning.
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-	MissingApiKeyError,
 	createExaProvider,
 	mapFetchResponse,
 	mapSearchResponse,
 } from "./exa.ts";
+
+// Tiny helper: tests that exercise the search/fetch surfaces want a
+// constructed provider, not the Result wrapper. Centralised here so
+// any future shape change to createExaProvider's return type touches
+// one site.
+const makeProvider = (
+	options: Parameters<typeof createExaProvider>[0] = {},
+) => {
+	const result = createExaProvider(options);
+	if (!result.ok) {
+		throw new Error(`expected provider, got ${JSON.stringify(result.error)}`);
+	}
+	return result.value;
+};
 
 const ORIGINAL_KEY = process.env.EXA_API_KEY;
 
@@ -170,17 +183,15 @@ describe("mapFetchResponse", () => {
 });
 
 describe("createExaProvider - search()", () => {
-	it("throws MissingApiKeyError lazily when EXA_API_KEY is unset", async () => {
+	it("returns a missing-api-key Result when EXA_API_KEY is unset", () => {
 		delete process.env.EXA_API_KEY;
-		const provider = createExaProvider();
-
-		await expect(
-			provider.search({ query: "ping", k: 1 }),
-		).rejects.toBeInstanceOf(MissingApiKeyError);
-		await expect(
-			provider.search({ query: "ping", k: 1 }),
-		).rejects.toMatchObject({
-			name: "MissingApiKeyError",
+		const result = createExaProvider();
+		expect(result.ok).toBe(false);
+		if (result.ok) {
+			return;
+		}
+		expect(result.error).toEqual({
+			kind: "missing-api-key",
 			envVar: "EXA_API_KEY",
 		});
 	});
@@ -189,7 +200,7 @@ describe("createExaProvider - search()", () => {
 		// Stub client whose methods throw if invoked. The short-circuit
 		// on `signal.aborted` happens before the SDK call, so reaching
 		// either method indicates a regression.
-		const provider = createExaProvider({
+		const provider = makeProvider({
 			client: {
 				searchAndContents: () => {
 					throw new Error("searchAndContents must not be invoked when aborted");
@@ -210,7 +221,7 @@ describe("createExaProvider - search()", () => {
 	it("rejects promptly when the caller's signal fires mid-flight", async () => {
 		// Stub returns a promise that never resolves, so the only way
 		// the test completes is via the abort race rejecting.
-		const provider = createExaProvider({
+		const provider = makeProvider({
 			client: {
 				searchAndContents: () => new Promise(() => {}),
 				getContents: () => new Promise(() => {}),
@@ -225,23 +236,21 @@ describe("createExaProvider - search()", () => {
 });
 
 describe("createExaProvider - fetch()", () => {
-	it("throws MissingApiKeyError lazily when EXA_API_KEY is unset", async () => {
+	it("returns a missing-api-key Result when EXA_API_KEY is unset", () => {
 		delete process.env.EXA_API_KEY;
-		const provider = createExaProvider();
-
-		await expect(
-			provider.fetch({ urls: ["https://x.example/"] }),
-		).rejects.toBeInstanceOf(MissingApiKeyError);
-		await expect(
-			provider.fetch({ urls: ["https://x.example/"] }),
-		).rejects.toMatchObject({
-			name: "MissingApiKeyError",
+		const result = createExaProvider();
+		expect(result.ok).toBe(false);
+		if (result.ok) {
+			return;
+		}
+		expect(result.error).toEqual({
+			kind: "missing-api-key",
 			envVar: "EXA_API_KEY",
 		});
 	});
 
 	it("rejects synchronously when the caller's signal is already aborted", async () => {
-		const provider = createExaProvider({
+		const provider = makeProvider({
 			client: {
 				searchAndContents: () => {
 					throw new Error("searchAndContents must not be invoked when aborted");
@@ -260,7 +269,7 @@ describe("createExaProvider - fetch()", () => {
 	});
 
 	it("rejects promptly when the caller's signal fires mid-flight", async () => {
-		const provider = createExaProvider({
+		const provider = makeProvider({
 			client: {
 				searchAndContents: () => new Promise(() => {}),
 				getContents: () => new Promise(() => {}),

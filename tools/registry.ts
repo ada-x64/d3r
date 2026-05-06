@@ -15,11 +15,21 @@ import {
 	selectWebSearchProvider,
 } from "./web/search.ts";
 
+const unwrapProvider = () => {
+	const selected = selectWebSearchProvider();
+	if (!selected.ok) {
+		throw new Error(
+			`Missing required environment variable: ${selected.error.envVar}`,
+		);
+	}
+	return selected.value;
+};
+
 const webSearchFn = async (params: WebSearchParams, signal?: AbortSignal) =>
-	selectWebSearchProvider().search(params, signal);
+	unwrapProvider().search(params, signal);
 
 const webFetchFn = async (params: WebFetchParams, signal?: AbortSignal) =>
-	selectWebSearchProvider().fetch(params, signal);
+	unwrapProvider().fetch(params, signal);
 
 export interface ToolEntry {
 	name: string;
