@@ -80,3 +80,43 @@ This blueprint is **maintained**, not archived. Revisions happen in-place; git
 history is the change record. If the area itself is dissolved or absorbed,
 archive the directory under `.misc/archive/blueprints/<area-slug>/` with a final
 commit noting the supersession (and ideally a link to whatever absorbed it).
+
+---
+
+<!--
+Frontmatter notes:
+- `area` is the kebab-case slug and matches the parent directory
+  name (`blueprints/<area>/blueprint.md`).
+- `repos` may be empty for cross-cutting areas not tied to a
+  specific repo.
+- `tags` aids discovery and vector-DB routing.
+- `created` / `updated` are ISO dates; `updated` is bumped on
+  every non-trivial revision (this blueprint is maintained, not
+  archived, so `updated` is the freshness signal).
+- `summary` is a one-line statement used by readers (and the
+  Researcher) to decide whether to load the full blueprint.
+
+Filling in the body:
+- Populate `## Purpose`, `## Scope`, `## Principles`,
+  `## Conventions`, `## Open questions`, `## References`, and
+  `## Lifecycle` in that order. All sections are required;
+  empty sections SHOULD say so explicitly rather than be
+  omitted.
+- Principles are operator-ratified and append-only. Number them
+  `P1`, `P2`, ... and never renumber. Supersede with a new
+  principle that cites the prior one by id rather than editing
+  in place.
+- Decisions made inside designs that draw on this blueprint cite
+  principles by id (`P3`) and cite this file by path
+  (`blueprints/<area>/blueprint.md`). Do not invent a separate
+  decision-numbering scheme inside the blueprint itself; that
+  belongs in the design that ratified the decision.
+- `## Lifecycle` should state, in one paragraph, whether the
+  blueprint is maintained in place (the default) or has a
+  scheduled review cadence, and what an absorption / dissolution
+  looks like. The default text shipped with this template covers
+  the maintained-in-place case; rewrite if the area's lifecycle
+  differs.
+
+Shape reference: notes/template-shapes/blueprint.md section 4.
+-->
