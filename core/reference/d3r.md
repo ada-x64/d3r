@@ -2,13 +2,6 @@
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119.
 
-## Authority
-
-The vault's on-disk shape is governed by `blueprints/vault-shape/blueprint.md`.
-This file describes the workflow that produces and consumes documents within
-that shape; where the two appear to disagree, the blueprint wins and this file
-is the bug.
-
 ## Phases
 
 D3R is three phases plus housekeeping. Each phase produces named documents and

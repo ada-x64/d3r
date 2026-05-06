@@ -112,7 +112,3 @@ entry or adding a sibling test that goes through the entry.
 
 A test belongs in this repo when it pins the d3r mapping, error-translation, or
 assembly logic that USES the upstream -- not when it pins the upstream itself.
-
----
-
-Design: `.agents/vault/designs/testing-strategy/design.md`.

@@ -1,14 +1,12 @@
-# `.agents/vault/.misc/templates/`
+# Templates
 
 Document templates, one per kind. Every output document MUST follow the matching
 template; deviations break downstream agents.
 
-The vault root holds three governance files (`README.md`, `AGENTS.md`, `d3r.md`)
-and six top-level directories (`blueprints/`, `notes/`, `process/`, `issues/`,
-`reference/`, `.misc/`). The full layout — bucket semantics, loading-tier
-gradient, and graduation rules — is governed by
-`blueprints/vault-shape/blueprint.md`. Templates here scaffold the documents
-that flow through that layout.
+The vault root holds three governance files (`README.md`, `AGENTS.md`,
+`d3r.md`) and six top-level directories (`blueprints/`, `notes/`, `process/`,
+`issues/`, `reference/`, `.misc/`). Templates here scaffold the documents that
+flow through that layout.
 
 See `../../d3r.md` for which phase produces which kind.
 
