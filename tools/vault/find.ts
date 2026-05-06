@@ -4,8 +4,6 @@
 // matching uses a small in-package translator (`*` and `**` only) to
 // avoid pulling in picomatch/minimatch.
 
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 
 import { type Result } from "../common/result.ts";
@@ -13,8 +11,7 @@ import {
 	type VaultAccessor,
 	type VaultPathError,
 } from "../common/vault-root.ts";
-import { parseFm } from "../fm/_lib.ts";
-import { resolveRoot, walkVault } from "./_lib.ts";
+import { resolveRoot, walkVault, walkVaultDocs } from "./_lib.ts";
 
 export const VaultFindParams = z.object({
 	glob: z.string().optional(),
@@ -64,56 +61,41 @@ const compileGlob = (glob: string): RegExp => {
 	return new RegExp(`^${out}$`);
 };
 
-interface BodyInfo {
-	rel: string;
-	body: string;
-	kind: string | undefined;
-}
-
-const loadBodyInfo = async (root: string, rel: string): Promise<BodyInfo> => {
-	const abs = path.join(root, rel);
-	const raw = await readFile(abs, "utf8");
-	if (!rel.endsWith(".md")) {
-		return { rel, body: raw, kind: undefined };
-	}
-	const { data, body } = parseFm(raw);
-	const kindValue = data.kind;
-	const kind = typeof kindValue === "string" ? kindValue : undefined;
-	return { rel, body, kind };
-};
-
 export const vaultFind = async (
 	params: VaultFindParams,
 	accessor: VaultAccessor,
 ): Promise<Result<VaultFindResult, VaultPathError>> => {
 	const root = await resolveRoot(accessor);
-	const files = await walkVault(root);
 	const globRe = params.glob ? compileGlob(params.glob) : null;
-	const candidates = globRe ? files.filter((p) => globRe.test(p)) : files;
 
 	const needsBody = params.query !== undefined || params.kind !== undefined;
 	if (!needsBody) {
+		const files = await walkVault(root);
+		const candidates = globRe ? files.filter((p) => globRe.test(p)) : files;
 		const matches = candidates.map((rel) => ({
 			path: rel,
 			...(globRe ? { matchedGlob: true } : {}),
 		}));
 		return { ok: true, value: { matches } };
 	}
-	const infos = await Promise.all(
-		candidates.map((rel) => loadBodyInfo(root, rel)),
-	);
-	const matches = infos.flatMap<VaultFindMatch>((info) => {
-		const kindOk = params.kind === undefined ? true : info.kind === params.kind;
+	const rows = await walkVaultDocs(root, { includeNonMarkdown: true });
+	const matches = rows.flatMap<VaultFindMatch>((row) => {
+		if (globRe && !globRe.test(row.rel)) {
+			return [];
+		}
+		const kindValue = row.frontmatter?.kind;
+		const kind = typeof kindValue === "string" ? kindValue : undefined;
+		const kindOk = params.kind === undefined ? true : kind === params.kind;
 		const matchedQuery =
-			params.query === undefined ? undefined : info.body.includes(params.query);
+			params.query === undefined ? undefined : row.body.includes(params.query);
 		const queryOk = params.query === undefined ? true : matchedQuery === true;
 		if (!kindOk || !queryOk) {
 			return [];
 		}
 		return [
 			{
-				path: info.rel,
-				...(info.kind === undefined ? {} : { kind: info.kind }),
+				path: row.rel,
+				...(kind === undefined ? {} : { kind }),
 				...(globRe ? { matchedGlob: true } : {}),
 				...(matchedQuery === undefined ? {} : { matchedQuery }),
 			},

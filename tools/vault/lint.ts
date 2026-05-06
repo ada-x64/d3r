@@ -7,7 +7,6 @@
 // frontmatter.
 
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 
 import { type Result } from "../common/result.ts";
@@ -16,7 +15,12 @@ import {
 	type VaultPathError,
 } from "../common/vault-root.ts";
 import { parseFm } from "../fm/_lib.ts";
-import { acceptRoot, resolveRoot, walkVault } from "./_lib.ts";
+import {
+	acceptRoot,
+	resolveRoot,
+	walkVaultDocs,
+	type VaultWalkRow,
+} from "./_lib.ts";
 import { lintSchemas } from "./lint/index.ts";
 
 export const VaultLintParams = z.object({
@@ -45,28 +49,69 @@ export interface VaultLintResult {
 	summary: VaultLintSummary;
 }
 
-const lintOne = async (abs: string, rel: string): Promise<VaultLintFinding> => {
-	const raw = await readFile(abs, "utf8");
-	const { data } = parseFm(raw);
+const lintRow = (
+	row: Pick<VaultWalkRow, "rel" | "frontmatter">,
+): VaultLintFinding => {
+	const data = row.frontmatter ?? {};
 	const kindValue = typeof data.kind === "string" ? data.kind : undefined;
 	if (kindValue === undefined) {
-		return { path: rel, ok: false, reason: "no-kind" };
+		return { path: row.rel, ok: false, reason: "no-kind" };
 	}
 	const schema = lintSchemas[kindValue];
 	if (!schema) {
-		return { path: rel, kind: kindValue, ok: false, reason: "unknown-kind" };
+		return {
+			path: row.rel,
+			kind: kindValue,
+			ok: false,
+			reason: "unknown-kind",
+		};
 	}
 	const result = schema.safeParse(data);
 	if (!result.success) {
 		return {
-			path: rel,
+			path: row.rel,
 			kind: kindValue,
 			ok: false,
 			reason: "schema-fail",
 			errors: result.error.issues,
 		};
 	}
-	return { path: rel, kind: kindValue, ok: true };
+	return { path: row.rel, kind: kindValue, ok: true };
+};
+
+const lintPath = async (
+	abs: string,
+	rel: string,
+): Promise<VaultLintFinding> => {
+	const raw = await readFile(abs, "utf8");
+	const { data } = parseFm(raw);
+	return lintRow({ rel, frontmatter: data });
+};
+
+const collectFindings = async (
+	params: VaultLintParams,
+	accessor: VaultAccessor,
+	root: string,
+): Promise<Result<VaultLintFinding[], VaultPathError>> => {
+	if (params.paths === undefined) {
+		const rows = await walkVaultDocs(root);
+		return { ok: true, value: rows.map(lintRow) };
+	}
+	const resolutions = await Promise.all(
+		params.paths.map((rel) => acceptRoot(accessor, rel)),
+	);
+	const targets: { abs: string; rel: string }[] = [];
+	for (let i = 0; i < resolutions.length; i++) {
+		const resolved = resolutions[i];
+		if (!resolved.ok) {
+			return resolved;
+		}
+		targets.push({ abs: resolved.value, rel: params.paths[i] });
+	}
+	const findings = await Promise.all(
+		targets.map(({ abs, rel }) => lintPath(abs, rel)),
+	);
+	return { ok: true, value: findings };
 };
 
 export const vaultLint = async (
@@ -74,29 +119,11 @@ export const vaultLint = async (
 	accessor: VaultAccessor,
 ): Promise<Result<VaultLintResult, VaultPathError>> => {
 	const root = await resolveRoot(accessor);
-	const targets: { abs: string; rel: string }[] = [];
-	if (params.paths === undefined) {
-		const walked = await walkVault(root);
-		for (const rel of walked) {
-			if (rel.endsWith(".md")) {
-				targets.push({ abs: path.join(root, rel), rel });
-			}
-		}
-	} else {
-		const resolutions = await Promise.all(
-			params.paths.map((rel) => acceptRoot(accessor, rel)),
-		);
-		for (let i = 0; i < resolutions.length; i++) {
-			const resolved = resolutions[i];
-			if (!resolved.ok) {
-				return resolved;
-			}
-			targets.push({ abs: resolved.value, rel: params.paths[i] });
-		}
+	const findingsResult = await collectFindings(params, accessor, root);
+	if (!findingsResult.ok) {
+		return findingsResult;
 	}
-	const findings = await Promise.all(
-		targets.map(({ abs, rel }) => lintOne(abs, rel)),
-	);
+	const findings = findingsResult.value;
 	const okCount = findings.filter((f) => f.ok).length;
 	return {
 		ok: true,
