@@ -16,26 +16,27 @@ tasks. The shape of `design.md` is therefore load-bearing for everything
 downstream.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You SHOULD
-> read `reference/d3r.md` in your vault to confirm the Design-phase contract and
-> what the Delegate phase expects.
+> read `d3r.md` in your vault to confirm the Design-phase contract and what the
+> Delegate phase expects.
 
 ## Inputs
 
-- `task.md` - MUST be provided as context; defines the topic.
+- operator brief - MUST be provided as context; defines the topic.
 - `remember.md` - MUST be provided; vault and codebase recon.
 - `research.md` - MUST be provided; external prior art.
 - The discussion transcript with the user, threaded as the prior step's output.
 
 ## Outputs
 
-- `design.md` - MUST follow `templates/design.md`; the template MUST be read
-  end-to-end before producing the output. Every claim carries a citation back to
-  `remember.md`, `research.md`, or the discussion transcript. Every design
-  decision records its rationale and at least one alternative considered.
+- `design.md` - MUST follow `.misc/templates/design.md`; the template MUST be
+  read end-to-end before producing the output. Every claim carries a citation
+  back to `remember.md`, `research.md`, or the discussion transcript. Every
+  design decision records its rationale and at least one alternative considered.
 
 ## Process
 
-1. Read `task.md`, `remember.md`, `research.md`, and the discussion in full.
+1. Read the operator brief, `remember.md`, `research.md`, and the discussion in
+   full.
 2. Identify the design decisions implied by the discussion.
 3. For each decision, record: the choice, rationale, alternatives considered,
    and citations supporting the choice.

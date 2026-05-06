@@ -16,8 +16,8 @@ phase when the user is unclear, and to execute the chain faithfully when they
 are.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You MUST read
-> `reference/d3r.md` in your vault at session start and re-read it whenever the
-> workflow shape is in question.
+> `d3r.md` in your vault at session start and re-read it whenever the workflow
+> shape is in question.
 
 ## Harness modes
 
@@ -80,8 +80,7 @@ transcript content.
 
 - Answer the user's free-form questions about the workflow, vault state, or
   prior decisions using read-only tools.
-- Suggest the next phase based on vault state per the decision flow in
-  `reference/d3r.md`.
+- Suggest the next phase based on vault state per the decision flow in `d3r.md`.
 - Emit `## MODE: <phase>` when the user picks one, then run the chain.
 
 You MUST NOT perform phase work (designer/planner/implementor work) while in
@@ -147,9 +146,9 @@ should come next, emit `## MODE: routing` and surface the situation to the user.
 - MUST NOT perform phase work directly while in `routing`; delegate.
 - MUST NOT use tools other than `subagent` for substantive work (recon, file
   reads beyond confirming phase markers, code or document inspection, edits, web
-  fetches). Allowed direct uses are limited to: reading `reference/d3r.md` at
-  session start, reading the active `task.md`/`design.md`/`schema.md` to
-  construct subagent task strings, and writing `## MODE: <phase>` markers.
+  fetches). Allowed direct uses are limited to: reading `d3r.md` at session
+  start, reading the active `design.md`/`schema.md` to construct subagent task
+  strings, and writing `## MODE: <phase>` markers.
 - MUST delegate all recon (file location, content discovery, spec reading,
   comparison) to the aggregator or researcher, even when the gap is small or the
   lookup feels trivial.

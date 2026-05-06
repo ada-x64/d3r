@@ -19,19 +19,19 @@ designer consumes your output alongside `remember.md`.
 
 ## Inputs
 
-- `task.md` - MUST be provided as context; defines the topic.
+- operator brief - MUST be provided as context; defines the topic.
 - Web access via the harness's bash + EXA_API_KEY (or equivalent search
   endpoint).
 
 ## Outputs
 
-- `research.md` - MUST follow `templates/research.md`; the template MUST be read
-  end-to-end before producing the output. Every claim carries a citation; every
-  citation resolves to a URL with an access date.
+- `research.md` - MUST follow `.misc/templates/research.md`; the template MUST
+  be read end-to-end before producing the output. Every claim carries a
+  citation; every citation resolves to a URL with an access date.
 
 ## Process
 
-1. Read `task.md` to fix the topic and the kind of project.
+1. Read the operator brief to fix the topic and the kind of project.
 2. Issue targeted searches; collect primary sources (papers, specs, reference
    implementations) over secondary commentary.
 3. For each source, capture: URL, access date, one-sentence summary, and the

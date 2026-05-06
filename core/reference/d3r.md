@@ -2,17 +2,24 @@
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119.
 
+## Authority
+
+The vault's on-disk shape is governed by `blueprints/vault-shape/blueprint.md`.
+This file describes the workflow that produces and consumes documents within
+that shape; where the two appear to disagree, the blueprint wins and this file
+is the bug.
+
 ## Phases
 
 D3R is three phases plus housekeeping. Each phase produces named documents and
 consumes the prior phase's output.
 
-| Phase     | Command      | Produces                                               | Consumes                                                       |
-| --------- | ------------ | ------------------------------------------------------ | -------------------------------------------------------------- |
-| Design    | `/design`    | `design.md`                                            | `task.md`                                                      |
-| Delegate  | `/delegate`  | `plan.md`, `schema.md`                                 | `task.md`, `design.md`                                         |
-| Develop   | `/develop`   | code, `review.md`, `implementation-log.md`, `audit.md` | `schema.md`                                                    |
-| Summarize | `/summarize` | `summary.md`, archive                                  | `task.md`, `design.md`, `schema.md`, `audit.md`, reviews, diff |
+| Phase     | Command      | Produces                                               | Consumes                                            |
+| --------- | ------------ | ------------------------------------------------------ | --------------------------------------------------- |
+| Design    | `/design`    | `design.md`                                            | operator brief                                      |
+| Delegate  | `/delegate`  | `plan.md`, `schema.md`                                 | `design.md`                                         |
+| Develop   | `/develop`   | code, `review.md`, `implementation-log.md`, `audit.md` | `schema.md`                                         |
+| Summarize | `/summarize` | `summary.md`, archive                                  | `design.md`, `schema.md`, `audit.md`, reviews, diff |
 
 The Design phase additionally produces `remember.md` (vault recon) and
 `research.md` (external recon) as inputs to the designer.
@@ -23,24 +30,36 @@ The vault is the single source of truth for D3R documents. Paths below are
 vault-relative.
 
 ```text
-designs/<topic>/      task.md, remember.md, research.md, design.md, plan.md
-tasks/<task>/         schema.md, reviews/<n>.md, implementation-log.md,
-                      audit.md, summary.md
-notes/                free-form long-lived notes
-notes/audits/         standalone audits (not tied to a task)
-issues/               open design questions
-archive/              completed tasks (moved here by archivist)
-templates/            document templates (one per kind)
-reference/            this file and other shared agent references
+README.md                                  # human entry-point
+AGENTS.md                                  # agent steering (cascading)
+d3r.md                                     # this file
+blueprints/<area>/                         # substrate (per-area entry point)
+notes/<topic>/                             # accumulated knowledge
+process/designs/<topic>/                   # design+delegate bundle:
+                                           #   remember.md, research.md,
+                                           #   design.md, plan.md
+process/tasks/<task>/                      # develop bundle:
+                                           #   schema.md, reviews/<n>.md,
+                                           #   implementation-log.md,
+                                           #   audit.md, summary.md
+issues/0-backlog/                          # kanban: backlog column
+issues/1-todo/                             # kanban: todo column
+issues/2-in-progress/                      # kanban: in-progress column
+issues/3-in-review/                        # kanban: in-review column
+issues/.umbrellas/                         # umbrella issues (no WIP count)
+reference/<kind>/                          # external-consumed templates
+                                           # (issue-templates, pr-templates, ...)
+.misc/archive/<bucket>/<slug>/             # frozen / completed
+.misc/templates/<kind>.md                  # internal doc templates
 ```
 
-`plan.md` lives under `designs/<topic>/` because planning happens on a finished
-design; the per-task `tasks/<task>/` directory is created when planning splits
-the design into tasks. `implementation-log.md` is appended to in the Develop
-loop when the implementor runs in auto mode; in semi mode the human is in the
-loop and no log is required. `audit.md` lives under `tasks/<task>/` for
-task-tied (PR-level) audits and under `notes/audits/<label>.md` for standalone
-audits.
+`plan.md` lives under `process/designs/<topic>/` because planning happens on a
+finished design; the per-task `process/tasks/<task>/` directory is created when
+planning splits the design into tasks. `implementation-log.md` is appended to in
+the Develop loop when the implementor runs in auto mode; in semi mode the human
+is in the loop and no log is required. Standalone audits are tasks too — they
+live as `process/tasks/<audit-slug>/audit.md`, not in any separate audits
+bucket.
 
 Agents MUST write to the path their phase owns and MUST NOT write outside it.
 The archivist is the only agent that moves files between top-level vault
@@ -64,7 +83,7 @@ finished task        -> /summarize
 ## Document contracts
 
 Every output document MUST follow the matching template under
-`templates/<kind>.md`. Templates define required frontmatter and section
+`.misc/templates/<kind>.md`. Templates define required frontmatter and section
 structure; deviations break downstream agents.
 
 ## Phase boundaries

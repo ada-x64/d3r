@@ -13,9 +13,9 @@ created: <ISO Date>
 
 ## Problem framing
 
-One paragraph restating from `task.md`: the _kind_ of problem and the _kind_ of
-codebase. Sets the lens for what counts as relevant prior art - keeps the survey
-from sprawling.
+One paragraph restating the operator brief: the _kind_ of problem and the _kind_
+of codebase. Sets the lens for what counts as relevant prior art - keeps the
+survey from sprawling.
 
 ---
 

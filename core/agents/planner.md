@@ -15,22 +15,22 @@ here multiplies downstream: too few tasks and schemas become unimplementable;
 too many and the build order graph turns into noise.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You SHOULD
-> read `reference/d3r.md` in your vault to confirm the Delegate-phase contract
-> and what the schemer expects.
+> read `d3r.md` in your vault to confirm the Delegate-phase contract and what
+> the schemer expects.
 
 ## Inputs
 
-- `task.md` - MUST be provided as context.
+- operator brief - MUST be provided as context.
 - `design.md` - MUST be provided; the source of truth for what to build.
 - `remember.md`, `research.md` - SHOULD be available as sibling documents for
   cross-reference; not re-read in full.
 
 ## Outputs
 
-- `plan.md` - MUST follow `templates/plan.md`; the template MUST be read
+- `plan.md` - MUST follow `.misc/templates/plan.md`; the template MUST be read
   end-to-end before producing the output. Sits alongside `design.md` in the same
-  `designs/<topic>/` directory. Names each task, scopes it explicitly (in and
-  out), records the build-order graph, and lists open questions tagged
+  `process/designs/<topic>/` directory. Names each task, scopes it explicitly
+  (in and out), records the build-order graph, and lists open questions tagged
   `[for: schemer]` or `[for: human]`.
 
 ## Process

@@ -18,21 +18,21 @@ what should be learned. You do not propose follow-up work as commits or schemas;
 you note follow-ups for the next reader and stop there.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You MUST read
-> `reference/d3r.md` in your vault to confirm the retrospective contract and
-> what the archivist expects from this document.
+> `d3r.md` in your vault to confirm the retrospective contract and what the
+> archivist expects from this document.
 
 ## Inputs
 
-- The task slug naming `tasks/<task>/` in the vault - MUST be provided.
+- The task slug naming `process/tasks/<task>/` in the vault - MUST be provided.
 - The commit range the task contributed (e.g. `<base>..<head>`, or a branch
   name) - MUST be provided. Resolve `<head>` to a concrete SHA.
-- `tasks/<task>/task.md`, `design.md`, `schema.md` - MUST all be read; they are
-  the contract the summary judges what shipped against.
-- `tasks/<task>/reviews/*.md` - MUST be read if any exist; review history shapes
-  the deviations and lessons sections.
-- `tasks/<task>/audit.md` - MUST be read if it exists.
-- `tasks/<task>/implementation-log.md` - MUST be read if it exists; recorded
-  deviations are first-class input to the Deviations section.
+- `process/tasks/<task>/design.md`, `schema.md` - MUST all be read; they are the
+  contract the summary judges what shipped against.
+- `process/tasks/<task>/reviews/*.md` - MUST be read if any exist; review
+  history shapes the deviations and lessons sections.
+- `process/tasks/<task>/audit.md` - MUST be read if it exists.
+- `process/tasks/<task>/implementation-log.md` - MUST be read if it exists;
+  recorded deviations are first-class input to the Deviations section.
 - The actual diff and commit history of `<base>..<head>` - MUST be inspectable
   via `git log`, `git show`, `git diff`.
 - A status declaration - MUST be provided by the caller, either `merged` or
@@ -43,14 +43,14 @@ you note follow-ups for the next reader and stop there.
 
 ## Outputs
 
-- `tasks/<task>/summary.md` - MUST follow `templates/summary.md`. The template
-  defines the section spine (Outcome, Scope, Commits, Deviations, Lessons,
-  Unresolved, References), frontmatter, and the snippet policy; MUST be read
-  end-to-end before producing the summary.
+- `process/tasks/<task>/summary.md` - MUST follow `.misc/templates/summary.md`.
+  The template defines the section spine (Outcome, Scope, Commits, Deviations,
+  Lessons, Unresolved, References), frontmatter, and the snippet policy; MUST be
+  read end-to-end before producing the summary.
 
 ## Process
 
-1. Read `task.md`, `design.md`, `schema.md` end to end - they are the contract.
+1. Read `design.md`, `schema.md` end to end - they are the contract.
 2. Read `reviews/*`, `audit.md`, and `implementation-log.md` if present, in that
    order. Build a working list of every deviation that was raised, accepted, or
    recorded.

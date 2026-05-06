@@ -5,17 +5,17 @@ created: <ISO Date>
 # Design: <task-slug>
 
 > One-paragraph orientation. What this design is about and what question it
-> answers. Sibling docs (`task.md`, `remember.md`, `research.md`) carry the
-> briefing, the prior context, and the investigation; this doc is the resolved
-> direction.
+> answers. Sibling docs (`remember.md`, `research.md`) carry the prior context
+> and the investigation; this doc is the resolved direction.
 
 ---
 
 ## Context
 
-What `task.md` asked for, in your own words. Pointers to sibling `remember.md` /
-`research.md` for prior context and investigation narrative - do not duplicate
-them here. If the design supersedes or amends an earlier design, link it.
+What the operator brief asked for, in your own words. Pointers to sibling
+`remember.md` / `research.md` for prior context and investigation narrative - do
+not duplicate them here. If the design supersedes or amends an earlier design,
+link it.
 
 ---
 
@@ -121,7 +121,7 @@ invoked in Decisions.
 <!--
 Frontmatter notes:
 - `created` is the ISO date the design was drafted.
-- Path encodes the design name (`designs/<name>/design.md`); no
+- Path encodes the design name (`process/designs/<name>/design.md`); no
   separate `task` or `design` field needed.
 
 Shape reference: notes/template-shapes/design.md section 4.

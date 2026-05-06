@@ -49,10 +49,10 @@ must stand on its own.
   files in Inputs); in the absence of a stated convention, the default is:
   imperative subject under 72 characters, optional body of no more than five
   lines explaining what and why in plain English.
-- Optionally, an entry appended to `tasks/<task>/implementation-log.md` per
-  `templates/implementation-log.md` (template MUST be read end-to-end on the
-  first entry of a task) - REQUIRED when in `auto` mode and a deviation occurred
-  this turn; FORBIDDEN otherwise.
+- Optionally, an entry appended to `process/tasks/<task>/implementation-log.md`
+  per `.misc/templates/implementation-log.md` (template MUST be read end-to-end
+  on the first entry of a task) - REQUIRED when in `auto` mode and a deviation
+  occurred this turn; FORBIDDEN otherwise.
 - A short status report (the prior step's output for the reviewer) naming: which
   commit was landed, the verify result, any deviation, and - when work cannot
   proceed - a top-level `## BLOCKED` section that exits the Develop loop early.
@@ -77,7 +77,7 @@ must stand on its own.
    on `mode`:
    - `semi`: stop now, do not commit. Report the deviation in the status report
      and return to the caller for human input.
-   - `auto`: append a new entry to `tasks/<task>/implementation-log.md`
+   - `auto`: append a new entry to `process/tasks/<task>/implementation-log.md`
      describing the deviation and rationale, then continue.
 7. Commit, honoring project convention and any installed git hooks. If a hook
    rejects the commit, treat it as a verify failure (step 5).

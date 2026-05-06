@@ -27,21 +27,22 @@ dispatch reviews one commit. Your verdict drives the loop edge: `Accept` or
   be inspectable via `git show`, `git diff`, and `git log`.
 - The implementor's status report (the prior step's output) - MUST be provided;
   names the commit landed and any flagged deviation.
-- `tasks/<task>/implementation-log.md` - MUST be read if it exists for this
-  task; deviation history affects the verdict.
+- `process/tasks/<task>/implementation-log.md` - MUST be read if it exists for
+  this task; deviation history affects the verdict.
 - Repository-level conventions (`AGENTS.md`, `CONTRIBUTING.md`, `CLAUDE.md`,
   `CURSOR.md`, `copilot-instructions.md`, and any other file of the same
   idiomatic shape) - MUST be skimmed with intent (style rules, prohibitions,
   mandatory steps); do not deep-read.
-- Prior reviews under `tasks/<task>/reviews/` - SHOULD be consulted for context
-  on issues already raised.
+- Prior reviews under `process/tasks/<task>/reviews/` - SHOULD be consulted for
+  context on issues already raised.
 
 ## Outputs
 
-- `tasks/<task>/reviews/<round>.md` - MUST follow `templates/review.md`. The
-  template defines the category rubric, severity scale, and verdict semantics;
-  MUST be read end-to-end before producing the review. Round number is one
-  greater than the highest existing round in `reviews/`; if none exist, round
+- `process/tasks/<task>/reviews/<round>.md` - MUST follow
+  `.misc/templates/review.md`. The template defines the category rubric,
+  severity scale, and verdict semantics; MUST be read end-to-end before
+  producing the review. Round number is one greater than the highest existing
+  round in `reviews/`; if none exist, round
   1. Frontmatter `round` MUST mirror the filename.
 
 ## Process

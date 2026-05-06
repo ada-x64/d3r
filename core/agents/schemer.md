@@ -16,12 +16,12 @@ reviewer reads your output to know what was promised. A vague schema produces
 sprawling commits and cascading review churn.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You SHOULD
-> read `reference/d3r.md` in your vault to confirm the Delegate-phase contract
-> and what the implementor and reviewer expect.
+> read `d3r.md` in your vault to confirm the Delegate-phase contract and what
+> the implementor and reviewer expect.
 
 ## Inputs
 
-- `task.md` - MUST be provided as context.
+- operator brief - MUST be provided as context.
 - `design.md` - MUST be provided; the design slice you are schematizing comes
   from here.
 - `plan.md` - MUST be provided; identifies which slice is yours.
@@ -29,9 +29,10 @@ sprawling commits and cascading review churn.
 
 ## Outputs
 
-- `schema.md` - MUST follow `templates/schema.md`; the template MUST be read
-  end-to-end before producing the output. Lives at `tasks/<task-name>/schema.md`
-  per the plan. Frontmatter `status` starts as `draft`.
+- `schema.md` - MUST follow `.misc/templates/schema.md`; the template MUST be
+  read end-to-end before producing the output. Lives at
+  `process/tasks/<task-name>/schema.md` per the plan. Frontmatter `status`
+  starts as `draft`.
 
 ## Process
 

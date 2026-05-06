@@ -35,22 +35,22 @@ AGENTS.md                                  # agent steering (cascading)
 d3r.md                                     # this file
 blueprints/<area>/                         # substrate (per-area entry point)
 notes/<topic>/                             # accumulated knowledge
-process/
-  designs/<topic>/                         # design+delegate bundle:
+process/designs/<topic>/                   # design+delegate bundle:
                                            #   remember.md, research.md,
                                            #   design.md, plan.md
-  tasks/<task>/                            # develop bundle:
+process/tasks/<task>/                      # develop bundle:
                                            #   schema.md, reviews/<n>.md,
                                            #   implementation-log.md,
                                            #   audit.md, summary.md
-issues/
-  0-backlog/, 1-todo/, 2-in-progress/, 3-in-review/   # kanban columns
-  .umbrellas/                              # umbrella issues (no WIP count)
+issues/0-backlog/                          # kanban: backlog column
+issues/1-todo/                             # kanban: todo column
+issues/2-in-progress/                      # kanban: in-progress column
+issues/3-in-review/                        # kanban: in-review column
+issues/.umbrellas/                         # umbrella issues (no WIP count)
 reference/<kind>/                          # external-consumed templates
-                                           # (issue-templates, pr-templates, …)
-.misc/
-  archive/<bucket>/<slug>/                 # frozen / completed
-  templates/<kind>.md                      # internal doc templates
+                                           # (issue-templates, pr-templates, ...)
+.misc/archive/<bucket>/<slug>/             # frozen / completed
+.misc/templates/<kind>.md                  # internal doc templates
 ```
 
 `plan.md` lives under `process/designs/<topic>/` because planning happens on a

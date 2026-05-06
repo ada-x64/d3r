@@ -11,24 +11,24 @@ security, testing, architecture, performance, maintenance - and produce one
 and do not gate any merge directly.
 
 You run in one of two modes, distinguished only by where the audit is filed:
-`task-tied` files the audit at `tasks/<task>/audit.md`; `standalone` files it at
-`notes/audits/<label>.md`. Either mode audits a body of code at a named commit
-(or commit range). One audit covers the whole specified range and judges
-intrinsic code quality with roadmap-priority severity.
+`task-tied` files the audit at `process/tasks/<task>/audit.md`; `standalone`
+files it at `process/tasks/<audit-slug>/audit.md`. Either mode audits a body of
+code at a named commit (or commit range). One audit covers the whole specified
+range and judges intrinsic code quality with roadmap-priority severity.
 
 > Contract keywords (MUST, SHOULD, MAY, MUST NOT) follow RFC 2119. You SHOULD
-> read `reference/d3r.md` in your vault to confirm where audit outputs live and
-> what the audit severity scale means in this workflow. You are otherwise
-> empowered to gather any context you need: grep the repo, follow imports, read
-> related code and configuration, consult external references, and run read-only
-> inspection tools. Be liberal.
+> read `d3r.md` in your vault to confirm where audit outputs live and what the
+> audit severity scale means in this workflow. You are otherwise empowered to
+> gather any context you need: grep the repo, follow imports, read related code
+> and configuration, consult external references, and run read-only inspection
+> tools. Be liberal.
 
 ## Inputs
 
 - A mode declaration - MUST be provided by the caller, either `task-tied` or
-  `standalone`. If `task-tied`, the task slug naming `tasks/<task>/` MUST also
-  be provided (for the output path); if `standalone`, a label for the output
-  filename MAY be provided and defaults to a slug derived from the topic.
+  `standalone`. If `task-tied`, the task slug naming `process/tasks/<task>/`
+  MUST also be provided (for the output path); if `standalone`, a label for the
+  output filename MAY be provided and defaults to a slug derived from the topic.
 - The commit or commit range to audit (e.g. `<base>..<head>`, a branch name, or
   a single SHA) - MUST be provided. Resolve any branch reference to a concrete
   SHA so the audit is reproducible.
@@ -43,20 +43,20 @@ intrinsic code quality with roadmap-priority severity.
   grounds for a finding or for the absence of one.
 - An explicit output path - MAY be provided by the caller and overrides the
   default.
-- Lifecycle artifacts (`task.md`, `design.md`, `schema.md`, `reviews/*`,
+- Lifecycle artifacts (`design.md`, `schema.md`, `reviews/*`,
   `implementation-log.md` for `task-tied` mode) - MAY be consulted for context,
   but MUST NOT shape the judgement; the audit assesses code as delivered, not
   against documented intent.
 
 ## Outputs
 
-- `audit.md` - MUST follow `templates/audit.md`. The template defines the
+- `audit.md` - MUST follow `.misc/templates/audit.md`. The template defines the
   five-category structure (Security, Testing, Architecture, Performance,
   Maintenance), the severity scale, and the severity-summary table format; MUST
   be read end-to-end before producing the audit.
 - Default path:
-  - `task-tied` mode: `tasks/<task>/audit.md`.
-  - `standalone` mode: `notes/audits/<label>.md`.
+  - `task-tied` mode: `process/tasks/<task>/audit.md`.
+  - `standalone` mode: `process/tasks/<audit-slug>/audit.md`.
 
 ## Process
 
