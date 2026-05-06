@@ -9,8 +9,24 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { registry, type ToolEntry } from "@d3r/tools";
+import {
+	buildRegistry,
+	type ToolEntry,
+	type WebSearchAccessor,
+} from "@d3r/tools";
 import { dispatchTool, type DispatchIO } from "../src/verbs/tool.ts";
+
+// Stub accessor: the fm_read end-to-end exercise below does not
+// touch the web rows, but buildRegistry needs an accessor to wire
+// the table. Surfacing a missing-key Result keeps the registry
+// importable without an api key, which is the production shape.
+const webAccessor: WebSearchAccessor = {
+	provider: {
+		ok: false,
+		error: { kind: "missing-api-key", envVar: "EXA_API_KEY" },
+	},
+};
+const registry = buildRegistry({ web: webAccessor });
 
 class ExitError extends Error {
 	code: number;

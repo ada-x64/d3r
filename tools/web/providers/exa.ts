@@ -161,13 +161,14 @@ const raceWithSignal = async <T>(
 export const createExaProvider = (
 	options: CreateExaProviderOptions = {},
 ): Result<WebSearchProvider, MissingApiKey> => {
-	// Resolve the client once at construction. When no explicit client
-	// is supplied we fall back to the api-key path; if neither yields a
-	// usable client the precondition surfaces as a Result.error variant
-	// and the caller never sees a half-constructed provider.
-	const apiKey = options.apiKey ?? process.env[EXA_API_KEY_ENV];
+	// Resolve the client once at construction. The api-key is supplied
+	// by the shell after parsing process.env at the boundary; this
+	// module never reaches into env itself. When neither an explicit
+	// client nor an api-key is available the precondition surfaces as
+	// a Result.error variant and the caller never sees a half-
+	// constructed provider.
 	const client: ExaLike | undefined =
-		options.client ?? (apiKey ? new Exa(apiKey) : undefined);
+		options.client ?? (options.apiKey ? new Exa(options.apiKey) : undefined);
 	if (!client) {
 		return fail({ kind: "missing-api-key", envVar: EXA_API_KEY_ENV });
 	}

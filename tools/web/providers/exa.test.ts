@@ -6,7 +6,7 @@
 // exercised as pure units because the SDK boundary itself is
 // upstream and not what the tests should be pinning.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
 	createExaProvider,
@@ -17,7 +17,8 @@ import {
 // Tiny helper: tests that exercise the search/fetch surfaces want a
 // constructed provider, not the Result wrapper. Centralised here so
 // any future shape change to createExaProvider's return type touches
-// one site.
+// one site. The api-key is supplied via options; this test module
+// does not reach into process.env.
 const makeProvider = (
 	options: Parameters<typeof createExaProvider>[0] = {},
 ) => {
@@ -27,16 +28,6 @@ const makeProvider = (
 	}
 	return result.value;
 };
-
-const ORIGINAL_KEY = process.env.EXA_API_KEY;
-
-afterEach(() => {
-	if (ORIGINAL_KEY === undefined) {
-		delete process.env.EXA_API_KEY;
-	} else {
-		process.env.EXA_API_KEY = ORIGINAL_KEY;
-	}
-});
 
 describe("mapSearchResponse", () => {
 	it("passes every highlight through, not just the first", () => {
@@ -183,8 +174,7 @@ describe("mapFetchResponse", () => {
 });
 
 describe("createExaProvider - search()", () => {
-	it("returns a missing-api-key Result when EXA_API_KEY is unset", () => {
-		delete process.env.EXA_API_KEY;
+	it("returns a missing-api-key Result when no api key is supplied", () => {
 		const result = createExaProvider();
 		expect(result.ok).toBe(false);
 		if (result.ok) {
@@ -236,8 +226,7 @@ describe("createExaProvider - search()", () => {
 });
 
 describe("createExaProvider - fetch()", () => {
-	it("returns a missing-api-key Result when EXA_API_KEY is unset", () => {
-		delete process.env.EXA_API_KEY;
+	it("returns a missing-api-key Result when no api key is supplied", () => {
 		const result = createExaProvider();
 		expect(result.ok).toBe(false);
 		if (result.ok) {

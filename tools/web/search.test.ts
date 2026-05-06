@@ -1,11 +1,11 @@
-// Smoke tests for selectWebSearchProvider. The intent is to pin the
-// d3r-owned routing logic (default provider, unknown-value rejection)
-// the registry relies on, exercised through a hand-passed env so the
-// test does not depend on process.env at run time. The provider
-// interface itself is exercised via a DI fake in callers; those tests
-// live next to those callers.
+// Smoke tests for selectWebSearchProvider. Pin selector -> Exa
+// mapping by exercising the missing-api-key Result variant the Exa
+// factory yields when the parsed config carries no key. A generic
+// factory would not satisfy this assertion. The test never touches
+// process.env: the typed config is supplied directly, mirroring how
+// the shell threads it in.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
 	DEFAULT_WEB_SEARCH_PROVIDER,
@@ -13,24 +13,11 @@ import {
 	selectWebSearchProvider,
 } from "./search.ts";
 
-// Pin selector -> Exa mapping by exercising the returned construction
-// Result: only the Exa factory yields the missing-api-key variant for
-// EXA_API_KEY when no key is available, so a generic factory would
-// not satisfy this assertion.
-const ORIGINAL_KEY = process.env.EXA_API_KEY;
-
-afterEach(() => {
-	if (ORIGINAL_KEY === undefined) {
-		delete process.env.EXA_API_KEY;
-	} else {
-		process.env.EXA_API_KEY = ORIGINAL_KEY;
-	}
-});
-
 describe("selectWebSearchProvider", () => {
-	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider's missing-key Result when ${WEB_SEARCH_PROVIDER_ENV} is unset and no key is available`, () => {
-		delete process.env.EXA_API_KEY;
-		const result = selectWebSearchProvider({});
+	it(`returns the ${DEFAULT_WEB_SEARCH_PROVIDER} provider's missing-key Result when the config carries no api key`, () => {
+		const result = selectWebSearchProvider({
+			providerId: DEFAULT_WEB_SEARCH_PROVIDER,
+		});
 		expect(result.ok).toBe(false);
 		if (result.ok) {
 			return;
@@ -42,9 +29,7 @@ describe("selectWebSearchProvider", () => {
 	});
 
 	it("throws a clear error naming the env var and value when the selector is unknown", () => {
-		expect(() =>
-			selectWebSearchProvider({ [WEB_SEARCH_PROVIDER_ENV]: "nope" }),
-		).toThrow(
+		expect(() => selectWebSearchProvider({ providerId: "nope" })).toThrow(
 			new RegExp(`${WEB_SEARCH_PROVIDER_ENV}.*nope.*supported.*exa`, "i"),
 		);
 	});

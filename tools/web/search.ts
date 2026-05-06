@@ -82,25 +82,44 @@ export const DEFAULT_WEB_SEARCH_PROVIDER = EXA_PROVIDER_ID;
 
 // Provider table: extending support to a new vendor is a one-line
 // addition here plus the provider module under ./providers. Each
-// factory returns a Result so missing-credential preconditions stay
-// in the same vocabulary the rest of `tools/` uses.
+// factory takes the parsed shell config and returns a Result so
+// missing-credential preconditions stay in the same vocabulary the
+// rest of `tools/` uses.
 const providers: Record<
 	string,
-	() => Result<WebSearchProvider, MissingApiKey>
+	(config: WebProviderConfig) => Result<WebSearchProvider, MissingApiKey>
 > = {
-	[EXA_PROVIDER_ID]: () => createExaProvider(),
+	[EXA_PROVIDER_ID]: (config) =>
+		createExaProvider({ apiKey: config.exaApiKey }),
 };
 
+// Typed view of the env-derived web-search configuration the shell
+// hands in. Parsing happens in the shell (cli/src/utils/env.ts);
+// this module operates on the typed value thereafter and never
+// reaches into process.env.
+export interface WebProviderConfig {
+	providerId: string;
+	exaApiKey?: string;
+}
+
 export const selectWebSearchProvider = (
-	env: NodeJS.ProcessEnv = process.env,
+	config: WebProviderConfig,
 ): Result<WebSearchProvider, MissingApiKey> => {
-	const id = env[WEB_SEARCH_PROVIDER_ENV] ?? DEFAULT_WEB_SEARCH_PROVIDER;
-	const factory = providers[id];
+	const factory = providers[config.providerId];
 	if (!factory) {
 		const supported = Object.keys(providers).join(", ");
 		throw new Error(
-			`Unknown ${WEB_SEARCH_PROVIDER_ENV} value: ${id} (supported: ${supported})`,
+			`Unknown ${WEB_SEARCH_PROVIDER_ENV} value: ${config.providerId} (supported: ${supported})`,
 		);
 	}
-	return factory();
+	return factory(config);
 };
+
+// Accessor handed to the registry's web rows: carries the constructed
+// provider Result so the registry stays importable without an api key
+// set, and `web_*` dispatch surfaces the missing-key precondition
+// only when actually invoked. Same shape as `VaultAccessor` for
+// vault-aware tools.
+export interface WebSearchAccessor {
+	provider: Result<WebSearchProvider, MissingApiKey>;
+}
