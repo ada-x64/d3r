@@ -4,7 +4,7 @@
 // we deliberately avoid pulling in fast-glob/picomatch and stick to
 // `node:fs/promises` to keep the dep surface flat.
 
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import { type Result } from "../common/result.ts";
@@ -13,7 +13,7 @@ import {
 	type VaultAccessor,
 	type VaultPathError,
 } from "../common/vault-root.ts";
-import { stringifyFm } from "../fm/_lib.ts";
+import { parseFm, stringifyFm } from "../fm/_lib.ts";
 
 export const acceptRoot = async (
 	accessor: VaultAccessor,
@@ -84,4 +84,47 @@ export const walkVault = async (
 		return [segments.join("/")];
 	});
 	return rels;
+};
+
+export interface VaultWalkRow {
+	rel: string;
+	abs: string;
+	body: string;
+	// Present only when the file ended in `.md`; non-`.md` rows surface
+	// with the raw body and no frontmatter.
+	frontmatter?: Record<string, unknown>;
+}
+
+export interface WalkDocsOptions {
+	// Include non-`.md` files in the result. When false (default), the
+	// walk is filtered to `.md` before any read happens, so callers do
+	// not pay the cost of reading files they will discard.
+	includeNonMarkdown?: boolean;
+	walk?: WalkOptions;
+}
+
+// Materialised join over `walkVault`: read each file once and parse
+// frontmatter on `.md` rows, returning the combined rows. Centralising
+// the join lets every vault tool consume the same shape instead of
+// each one re-implementing the read+parse fan-out.
+export const walkVaultDocs = async (
+	root: string,
+	opts: WalkDocsOptions = {},
+): Promise<VaultWalkRow[]> => {
+	const includeNonMarkdown = opts.includeNonMarkdown ?? false;
+	const all = await walkVault(root, opts.walk);
+	const rels = includeNonMarkdown
+		? all
+		: all.filter((rel) => rel.endsWith(".md"));
+	return Promise.all(
+		rels.map(async (rel): Promise<VaultWalkRow> => {
+			const abs = path.join(root, rel);
+			const raw = await readFile(abs, "utf8");
+			if (!rel.endsWith(".md")) {
+				return { rel, abs, body: raw };
+			}
+			const { data, body } = parseFm(raw);
+			return { rel, abs, body, frontmatter: data };
+		}),
+	);
 };
