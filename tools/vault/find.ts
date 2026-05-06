@@ -78,11 +78,11 @@ export const vaultFind = async (
 		}));
 		return { ok: true, value: { matches } };
 	}
-	const rows = await walkVaultDocs(root, { includeNonMarkdown: true });
+	const rows = await walkVaultDocs(root, {
+		includeNonMarkdown: true,
+		...(globRe ? { filterRel: (rel) => globRe.test(rel) } : {}),
+	});
 	const matches = rows.flatMap<VaultFindMatch>((row) => {
-		if (globRe && !globRe.test(row.rel)) {
-			return [];
-		}
 		const kindValue = row.frontmatter?.kind;
 		const kind = typeof kindValue === "string" ? kindValue : undefined;
 		const kindOk = params.kind === undefined ? true : kind === params.kind;

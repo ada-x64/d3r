@@ -100,6 +100,12 @@ export interface WalkDocsOptions {
 	// walk is filtered to `.md` before any read happens, so callers do
 	// not pay the cost of reading files they will discard.
 	includeNonMarkdown?: boolean;
+	// Optional predicate over the vault-relative path, applied after
+	// the walk and before any read. Lets callers (e.g. a glob filter)
+	// drop relpaths without paying the read+parse cost. Independent of
+	// `includeNonMarkdown`; both filters must accept a row for it to be
+	// read.
+	filterRel?: (rel: string) => boolean;
 	walk?: WalkOptions;
 }
 
@@ -111,11 +117,14 @@ export const walkVaultDocs = async (
 	root: string,
 	opts: WalkDocsOptions = {},
 ): Promise<VaultWalkRow[]> => {
-	const includeNonMarkdown = opts.includeNonMarkdown ?? false;
+	const { includeNonMarkdown = false, filterRel } = opts;
 	const all = await walkVault(root, opts.walk);
-	const rels = includeNonMarkdown
-		? all
-		: all.filter((rel) => rel.endsWith(".md"));
+	const rels = all.filter((rel) => {
+		if (!includeNonMarkdown && !rel.endsWith(".md")) {
+			return false;
+		}
+		return filterRel ? filterRel(rel) : true;
+	});
 	return Promise.all(
 		rels.map(async (rel): Promise<VaultWalkRow> => {
 			const abs = path.join(root, rel);

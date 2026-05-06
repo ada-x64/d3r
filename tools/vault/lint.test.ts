@@ -15,8 +15,7 @@ vi.mock("node:fs/promises");
 const accessor = { vaultRoot: "/vault" };
 
 const fixture = {
-	"/vault/notes/good.md":
-		"---\nkind: task\ncreated: 2026-05-05\n---\nbody\n",
+	"/vault/notes/good.md": "---\nkind: task\ncreated: 2026-05-05\n---\nbody\n",
 	"/vault/notes/no-kind.md": "---\ntitle: hi\n---\nbody\n",
 	"/vault/notes/unknown.md": "---\nkind: bogus\n---\nbody\n",
 	"/vault/raw.txt": "plain text\n",

@@ -1,9 +1,10 @@
 // Pin the join shape produced by walkVaultDocs in both modes. The
-// flag controls whether non-`.md` rows participate at all; the
-// behaviour difference is the audit-noted divergence between the
-// vault find/lint call sites, surfaced here as one parameter.
+// `includeNonMarkdown` flag covers the two existing call-site
+// behaviours (markdown-only vs. all files) without forcing either
+// to take the other's, and `filterRel` lets a caller drop relpaths
+// before they get read.
 
-import { vol } from "memfs";
+import { fs as memfs, vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { walkVaultDocs } from "./_lib.ts";
@@ -46,5 +47,17 @@ describe("walkVaultDocs", () => {
 			kind: "note",
 			title: "hi",
 		});
+	});
+
+	it("skips reads for relpaths the filter rejects", async () => {
+		const readSpy = vi.spyOn(memfs.promises, "readFile");
+		const rows = await walkVaultDocs("/vault", {
+			includeNonMarkdown: true,
+			filterRel: (rel) => rel === "raw.txt",
+		});
+		expect(rows.map((r) => r.rel)).toEqual(["raw.txt"]);
+		const readPaths = readSpy.mock.calls.map(([p]) => String(p));
+		expect(readPaths).toEqual(["/vault/raw.txt"]);
+		readSpy.mockRestore();
 	});
 });
