@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { errMessage } from "./_lib.ts";
 
 /**
  * Bare-launch handler: forwards the user's argv to `pi` in routing mode
@@ -15,7 +16,7 @@ const bare = async (argv: string[]): Promise<never> => {
 	const child = spawn("pi", ["--d3r", ...argv], { stdio: "inherit" });
 	child.on("error", (err: NodeJS.ErrnoException) => {
 		const msg =
-			err.code === "ENOENT" ? "pi binary not found on PATH" : err.message;
+			err.code === "ENOENT" ? "pi binary not found on PATH" : errMessage(err);
 		process.stderr.write(`error: ${msg}\n`);
 		process.exit(EXIT_NOT_FOUND);
 	});

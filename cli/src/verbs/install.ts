@@ -9,7 +9,7 @@ import {
 	resolveNpmCommand,
 	runNpm,
 } from "../utils/helpers.ts";
-import { errMessage } from "../utils/output.ts";
+import { errMessage } from "../_lib.ts";
 
 export interface PlannedInstall {
 	readonly entry: AdapterEntry;

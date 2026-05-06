@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
 
-import { JSON_INDENT } from "../utils/output.ts";
+import { JSON_INDENT } from "../_lib.ts";
 
 export default defineCommand({
 	meta: {

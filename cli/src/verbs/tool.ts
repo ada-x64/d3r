@@ -17,7 +17,7 @@ import {
 import { z } from "zod";
 
 import { parseWebProviderConfig } from "../utils/env.ts";
-import { JSON_INDENT, errMessage } from "../utils/output.ts";
+import { JSON_INDENT, errMessage } from "../_lib.ts";
 
 import {
 	walkSchema,
