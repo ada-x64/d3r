@@ -119,6 +119,6 @@ export const gate = async (
 		}
 	}
 	process.stderr.write(`error: no d3r vault registered for ${cwd}\n`);
-	process.stderr.write("hint: run `d3r init`\n");
+	process.stderr.write("hint: run `d3r vault init`\n");
 	process.exit(1);
 };

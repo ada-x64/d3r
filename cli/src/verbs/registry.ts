@@ -32,12 +32,8 @@ export const GATED_VERBS: readonly VerbEntry[] = [
 		load: () => import("./tool.ts").then((m) => m.default),
 	},
 	{
-		name: "sync",
-		load: () => import("./sync.ts").then((m) => m.default),
-	},
-	{
-		name: "status",
-		load: () => import("./status.ts").then((m) => m.default),
+		name: "vault",
+		load: () => import("./vault/index.ts").then((m) => m.default),
 	},
 ];
 
@@ -50,10 +46,6 @@ export const GATE_EXEMPT_VERBS: readonly VerbEntry[] = [
 	{
 		name: "init",
 		load: () => import("./init.ts").then((m) => m.default),
-	},
-	{
-		name: "migrate",
-		load: () => import("./migrate.ts").then((m) => m.default),
 	},
 	{
 		name: "version",

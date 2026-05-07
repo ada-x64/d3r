@@ -129,7 +129,7 @@ describe("vault-gate", () => {
 		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
 		expect(exit).toHaveBeenCalledWith(1);
 		expect(writes.join("")).toBe(
-			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r init\`\n`,
+			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r vault init\`\n`,
 		);
 	});
 
@@ -192,7 +192,7 @@ describe("vault-gate", () => {
 
 		await expect(gate(undefined, env.workDir)).rejects.toThrow("exit:1");
 		expect(writes.join("")).toBe(
-			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r init\`\n`,
+			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r vault init\`\n`,
 		);
 	});
 });
