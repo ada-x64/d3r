@@ -8,7 +8,7 @@ and six top-level directories (`blueprints/`, `notes/`, `process/`, `issues/`,
 `reference/`, `.misc/`). Templates here scaffold the documents that flow through
 that layout.
 
-See `../../d3r.md` for which phase produces which kind.
+See `../seed/d3r.md` for which phase produces which kind.
 
 ## Frontmatter conventions
 

@@ -11,7 +11,6 @@
   "files": [
     "agents/**",
     "schema.ts",
-    "scripts/**",
     "seed/**",
     "vault/**",
     "workflow.yaml",
@@ -22,8 +21,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "postbuild": "node scripts/copy-seed.mjs",
+    "build": "tsc -p tsconfig.build.json && rm -rf dist/seed && cp -r seed dist/seed",
     "check": "tsc --noEmit"
   },
   "dependencies": {

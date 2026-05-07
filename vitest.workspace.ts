@@ -16,6 +16,11 @@ export default defineWorkspace([
 		extends: "./vitest.config.ts",
 		resolve: {
 			alias: {
+				// NOTE: order matters. The longer `@d3r/core/vault/seed-root` key
+				// MUST precede `@d3r/core` — vite's resolver matches in
+				// declaration order, and `@d3r/core` would otherwise prefix-match
+				// first and rewrite seed-root imports incorrectly. Do not sort
+				// alphabetically.
 				"@d3r/core/vault/seed-root": r("core/dist/vault/seed-root.js"),
 				"@d3r/core": r("core/dist/schema.js"),
 				"@d3r/tools": r("tools/dist/index.js"),
