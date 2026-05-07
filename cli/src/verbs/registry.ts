@@ -44,10 +44,6 @@ export const GATE_EXEMPT_VERBS: readonly VerbEntry[] = [
 		load: () => import("./install.ts").then((m) => m.default),
 	},
 	{
-		name: "init",
-		load: () => import("./init.ts").then((m) => m.default),
-	},
-	{
 		name: "version",
 		load: () => import("./version.ts").then((m) => m.default),
 	},

@@ -1,6 +1,5 @@
-// Citty parent for the `vault` verb. Subverbs (`init`, `lint`,
-// `repair`) are wired in subsequent commits and registered here as
-// they land. The parent itself only describes the namespace.
+// Citty parent for the `vault` verb. The remaining subverbs
+// (`lint`, `repair`) are wired in subsequent commits.
 
 import { defineCommand, type CommandDef } from "citty";
 
@@ -9,7 +8,9 @@ const command = defineCommand({
 		name: "vault",
 		description: "Manage the per-repo D3R vault",
 	},
-	subCommands: {},
+	subCommands: {
+		init: () => import("./init.ts").then((m) => m.default),
+	},
 });
 
 export default command as CommandDef;

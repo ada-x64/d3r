@@ -4,6 +4,7 @@ import { FmReadParams, fmRead } from "./fm/read.ts";
 import { FmWriteParams, fmWrite } from "./fm/write.ts";
 import { VaultEditParams, vaultEdit } from "./vault/edit.ts";
 import { VaultFindParams, vaultFind } from "./vault/find.ts";
+import { VaultInitParams, vaultInit } from "./vault/init.ts";
 import { VaultLintParams, vaultLint } from "./vault/lint.ts";
 import { VaultLsParams, vaultLs } from "./vault/ls.ts";
 import { VaultMvParams, vaultMv } from "./vault/mv.ts";
@@ -62,6 +63,14 @@ export const buildRegistry = (deps: RegistryDeps): ToolEntry[] => {
 				"Serialise a frontmatter object plus body back to a single markdown string.",
 			schema: FmWriteParams,
 			fn: fmWrite as (...args: never[]) => unknown,
+		},
+		{
+			name: "vault_init",
+			label: "Vault init",
+			description:
+				"Initialise an empty directory as a fresh D3R vault: copies the canonical seed and creates a single chore commit.",
+			schema: VaultInitParams,
+			fn: vaultInit as (...args: never[]) => unknown,
 		},
 		{
 			name: "vault_read",
