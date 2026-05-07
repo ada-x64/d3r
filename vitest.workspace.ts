@@ -16,6 +16,7 @@ export default defineWorkspace([
 		extends: "./vitest.config.ts",
 		resolve: {
 			alias: {
+				"@d3r/core/vault/seed-root": r("core/dist/vault/seed-root.js"),
 				"@d3r/core": r("core/dist/schema.js"),
 				"@d3r/tools": r("tools/dist/index.js"),
 				"@d3r/cli": r("cli/dist/cli.js"),

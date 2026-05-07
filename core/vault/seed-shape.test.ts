@@ -8,7 +8,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SEED_ROOT = path.resolve(import.meta.dirname, "..", "seed");
+import { SEED_ROOT } from "@d3r/core/vault/seed-root";
 
 const collect = (dir: string, prefix = ""): string[] => {
 	const entries = readdirSync(dir, { withFileTypes: true });

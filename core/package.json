@@ -8,11 +8,22 @@
     ".": "./schema.ts",
     "./vault/*": "./vault/*.ts"
   },
+  "files": [
+    "agents/**",
+    "schema.ts",
+    "scripts/**",
+    "seed/**",
+    "vault/**",
+    "workflow.yaml",
+    "tsconfig*.json",
+    "dist/**"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "postbuild": "node scripts/copy-seed.mjs",
     "check": "tsc --noEmit"
   },
   "dependencies": {
