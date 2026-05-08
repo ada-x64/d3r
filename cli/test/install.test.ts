@@ -7,14 +7,28 @@
 // silently drift from production.
 
 import { runCommand } from "citty";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	readlinkSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ADAPTERS } from "../src/utils/data.ts";
 import { readInstalledVersion } from "../src/utils/helpers.ts";
-import { executeInstall, planInstall } from "../src/verbs/install.ts";
+import {
+	executeInstall,
+	materializeAgents,
+	planInstall,
+	type PlannedInstall,
+} from "../src/verbs/install.ts";
 import { ALL_VERBS } from "../src/verbs/registry.ts";
 
 // Sourced from the verb registry to keep the test honest about
@@ -163,13 +177,18 @@ describe("install / executeInstall", () => {
 	it("resolves workspace specs to the on-disk package directory", async () => {
 		const state = installExitSpies();
 		const runner = vi.fn().mockResolvedValue(0);
+		const materialize = vi.fn().mockResolvedValue(0);
 		// `cli/package.json` pins `@d3r/adapter-pi` at `workspace:*`. npm
 		// rejects the `workspace:` protocol with EUNSUPPORTEDPROTOCOL, so
 		// the verb must translate dev pins to the resolved adapter
 		// directory before invoking npm. We assert the runner sees an
 		// absolute path that ends in the adapter package layout, not the
 		// raw `workspace:*` token.
-		await executeInstall("pi", {}, { runner, readInstalled: () => null });
+		await executeInstall(
+			"pi",
+			{},
+			{ runner, readInstalled: () => null, materialize },
+		);
 		expect(runner).toHaveBeenCalledOnce();
 		const args = runner.mock.calls[0][1] as readonly string[];
 		const spec = args[args.length - 1];
@@ -194,10 +213,11 @@ describe("install / executeInstall", () => {
 	it("--force re-runs even when the version matches", async () => {
 		installExitSpies();
 		const runner = vi.fn(async () => 0);
+		const materialize = vi.fn().mockResolvedValue(0);
 		await executeInstall(
 			"pi@1.2.3",
 			{ force: true },
-			{ runner, readInstalled: () => "1.2.3" },
+			{ runner, readInstalled: () => "1.2.3", materialize },
 		);
 		expect(runner).toHaveBeenCalledTimes(1);
 	});
@@ -205,13 +225,76 @@ describe("install / executeInstall", () => {
 	it("prints the upgrade notice only after a successful npm exit", async () => {
 		const state = installExitSpies();
 		const runner = vi.fn(async () => 0);
+		const materialize = vi.fn().mockResolvedValue(0);
 		await executeInstall(
 			"pi@1.2.3",
 			{},
-			{ runner, readInstalled: () => "0.0.1" },
+			{ runner, readInstalled: () => "0.0.1", materialize },
 		);
 		expect(runner).toHaveBeenCalledTimes(1);
 		expect(state.stdout.join("\n")).toContain("upgraded 0.0.1 -> 1.2.3");
+	});
+
+	it("materializes adapter agents into <piConfigDir>/agents after a successful npm install", async () => {
+		const MATERIALIZED_COUNT = 7;
+		const state = installExitSpies();
+		const runner = vi.fn(async () => 0);
+		const materialize = vi.fn().mockResolvedValue(MATERIALIZED_COUNT);
+		await executeInstall(
+			"pi@1.2.3",
+			{},
+			{ runner, readInstalled: () => null, materialize },
+		);
+		expect(materialize).toHaveBeenCalledTimes(1);
+		const plan = materialize.mock.calls[0][0] as PlannedInstall;
+		expect(plan.entry.pkg).toBe(piPkg());
+		expect(state.stdout.join("\n")).toContain(
+			`materialized ${MATERIALIZED_COUNT} agents into ${plan.configDir}`,
+		);
+	});
+
+	it("skips materialize and the notice when npm exits non-zero", async () => {
+		const NPM_FAIL_CODE = 2;
+		const state = installExitSpies();
+		const runner = vi.fn(async () => NPM_FAIL_CODE);
+		const materialize = vi.fn();
+		await expect(
+			executeInstall(
+				"pi@1.2.3",
+				{},
+				{ runner, readInstalled: () => null, materialize },
+			),
+		).rejects.toThrow(`exit:${NPM_FAIL_CODE}`);
+		expect(materialize).not.toHaveBeenCalled();
+		expect(state.stdout.join("\n")).not.toContain("materialized");
+	});
+
+	it("translates a materialize failure into the standard die() shape", async () => {
+		const state = installExitSpies();
+		const runner = vi.fn(async () => 0);
+		const materialize = vi.fn().mockRejectedValue(new Error("disk full"));
+		await expect(
+			executeInstall(
+				"pi@1.2.3",
+				{},
+				{ runner, readInstalled: () => null, materialize },
+			),
+		).rejects.toThrow("exit:1");
+		expect(state.stderr.join("")).toContain(
+			"failed to materialize agents: disk full",
+		);
+	});
+
+	it("suppresses the materialize notice when zero agents land", async () => {
+		const state = installExitSpies();
+		const runner = vi.fn(async () => 0);
+		const materialize = vi.fn().mockResolvedValue(0);
+		await executeInstall(
+			"pi@1.2.3",
+			{},
+			{ runner, readInstalled: () => null, materialize },
+		);
+		expect(state.stdout.join("\n")).not.toContain("materialized");
 	});
 
 	it("suppresses the upgrade notice when npm exits non-zero", async () => {
@@ -274,5 +357,137 @@ describe("install / executeInstall", () => {
 			executeInstall("pi@1.2.3", {}, { runner, readInstalled: () => null }),
 		).rejects.toThrow("exit:1");
 		expect(state.stderr.join("")).toContain("failed to spawn npm");
+	});
+});
+
+describe("install / materializeAgents", () => {
+	let root = "";
+
+	const makePlan = (
+		overrides: Partial<PlannedInstall> = {},
+	): PlannedInstall => {
+		const entry = ADAPTERS.pi;
+		if (!entry) {
+			throw new Error("ADAPTERS.pi missing");
+		}
+		const configDir = join(root, "piconf");
+		const target = entry.target(configDir);
+		return {
+			entry,
+			id: "pi",
+			version: "1.2.3",
+			target,
+			configDir,
+			npmCmd: "npm",
+			npmArgs: [],
+			isDev: false,
+			...overrides,
+		};
+	};
+
+	const seedAdapterAgents = (plan: PlannedInstall, names: string[]): string => {
+		const pkgDir = join(plan.target, "node_modules", plan.entry.pkg);
+		const agentsSrc = join(pkgDir, "dist", "agents");
+		mkdirSync(agentsSrc, { recursive: true });
+		for (const name of names) {
+			writeFileSync(join(agentsSrc, name), `# ${name}\n`);
+		}
+		return agentsSrc;
+	};
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "d3r-install-mat-"));
+	});
+
+	afterEach(() => {
+		rmSync(root, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
+
+	it("copies every adapter agent into <configDir>/agents for published installs", async () => {
+		const MD_COUNT = 2; // README.txt is filtered out
+		const plan = makePlan({ isDev: false });
+		seedAdapterAgents(plan, ["orchestrator.md", "researcher.md", "README.txt"]);
+
+		const count = await materializeAgents(plan);
+
+		expect(count).toBe(MD_COUNT);
+		const dst = join(plan.configDir, "agents");
+		expect(readdirSync(dst).toSorted()).toEqual([
+			"orchestrator.md",
+			"researcher.md",
+		]);
+		for (const name of ["orchestrator.md", "researcher.md"]) {
+			const stat = lstatSync(join(dst, name));
+			expect(stat.isSymbolicLink()).toBe(false);
+			expect(readFileSync(join(dst, name), "utf8")).toBe(`# ${name}\n`);
+		}
+	});
+
+	it("symlinks every adapter agent into <configDir>/agents for dev installs", async () => {
+		const plan = makePlan({ isDev: true });
+		const src = seedAdapterAgents(plan, ["orchestrator.md"]);
+
+		const count = await materializeAgents(plan);
+
+		expect(count).toBe(1);
+		const link = join(plan.configDir, "agents", "orchestrator.md");
+		const stat = lstatSync(link);
+		expect(stat.isSymbolicLink()).toBe(true);
+		expect(readlinkSync(link)).toBe(join(src, "orchestrator.md"));
+	});
+
+	it("replaces a pre-existing entry with the same basename (idempotent upgrade)", async () => {
+		const plan = makePlan({ isDev: false });
+		seedAdapterAgents(plan, ["orchestrator.md"]);
+		// Pre-seed a stale file from a prior install at the destination.
+		const dst = join(plan.configDir, "agents");
+		mkdirSync(dst, { recursive: true });
+		writeFileSync(join(dst, "orchestrator.md"), "STALE\n");
+
+		await materializeAgents(plan);
+
+		expect(readFileSync(join(dst, "orchestrator.md"), "utf8")).toBe(
+			"# orchestrator.md\n",
+		);
+	});
+
+	it("replaces a pre-existing symlink at the destination on upgrade", async () => {
+		const plan = makePlan({ isDev: true });
+		const src = seedAdapterAgents(plan, ["orchestrator.md"]);
+		const dst = join(plan.configDir, "agents");
+		mkdirSync(dst, { recursive: true });
+		// Pre-seed a dangling symlink that an earlier dev install left behind.
+		const link = join(dst, "orchestrator.md");
+		const { symlinkSync } = await import("node:fs");
+		symlinkSync("/nowhere/old.md", link);
+
+		await materializeAgents(plan);
+
+		expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(link)).toBe(join(src, "orchestrator.md"));
+	});
+
+	it("is a no-op when the adapter ships no dist/agents directory", async () => {
+		const plan = makePlan();
+		// Note: do NOT seed an agents/ source. Adapter has nothing to mirror.
+		mkdirSync(join(plan.target, "node_modules", plan.entry.pkg), {
+			recursive: true,
+		});
+
+		const count = await materializeAgents(plan);
+
+		expect(count).toBe(0);
+		// Destination must not be created when there's nothing to write.
+		expect(() => readdirSync(join(plan.configDir, "agents"))).toThrow();
+	});
+
+	it("is a no-op when dist/agents exists but contains no markdown", async () => {
+		const plan = makePlan();
+		seedAdapterAgents(plan, ["README.txt"]);
+
+		const count = await materializeAgents(plan);
+
+		expect(count).toBe(0);
 	});
 });

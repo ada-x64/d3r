@@ -1,3 +1,4 @@
+import { copyFile, mkdir, readdir, rm, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { defineCommand, type CommandDef } from "citty";
@@ -12,6 +13,14 @@ import {
 	resolveNpmCommand,
 	runNpm,
 } from "../utils/helpers.ts";
+
+// Layout convention shared with `adapters/pi/scripts/build.ts`: agents
+// are emitted under `<adapter>/dist/agents/*.md`. pi's subagent
+// extension only ever discovers from `<piConfigDir>/agents/`, so the
+// install verb mirrors them across after npm finishes. Adapters that
+// ship no agents simply omit the directory; we treat ENOENT as a
+// no-op rather than an error.
+const ADAPTER_AGENTS_SUBDIR = path.join("dist", "agents");
 
 // Workspace specs (e.g. `workspace:*`) are a pnpm protocol; npm refuses
 // them with EUNSUPPORTEDPROTOCOL. For dev installs we resolve the
@@ -30,8 +39,14 @@ export interface PlannedInstall {
 	readonly id: string;
 	readonly version: string;
 	readonly target: string;
+	readonly configDir: string;
 	readonly npmCmd: string;
 	readonly npmArgs: readonly string[];
+	// True when the spec resolved to a workspace dev install (local
+	// path handed to npm); materialization uses symlinks so live edits
+	// in the source tree propagate without a reinstall. Published
+	// versions copy instead.
+	readonly isDev: boolean;
 }
 
 export const planInstall = (spec: string): PlannedInstall => {
@@ -81,7 +96,52 @@ export const planInstall = (spec: string): PlannedInstall => {
 		}
 	})();
 	const npmArgs = ["install", "--prefix", target, installSpec];
-	return { entry, id, version, target, npmCmd, npmArgs };
+	const isDev = version.startsWith("workspace:");
+	return { entry, id, version, target, configDir, npmCmd, npmArgs, isDev };
+};
+
+// Mirror the freshly-installed adapter's agents into
+// `<piConfigDir>/agents/` so pi's vendored subagent loader finds
+// them. Symlink for dev installs (live source edits visible without
+// reinstall); copy for published versions (so the user dir doesn't
+// hold a hard reference into a node_modules tree that may later be
+// pruned). Replaces any pre-existing entry with the same basename to
+// keep idempotent across upgrades; absent dist/agents/ is a no-op so
+// future agent-less adapters are not penalised.
+export const materializeAgents = async (
+	plan: PlannedInstall,
+): Promise<number> => {
+	const srcDir = path.join(
+		plan.target,
+		"node_modules",
+		plan.entry.pkg,
+		ADAPTER_AGENTS_SUBDIR,
+	);
+	const dstDir = path.join(plan.configDir, "agents");
+	const entries = await (async (): Promise<readonly string[]> => {
+		try {
+			const all = await readdir(srcDir);
+			return all.filter((n) => n.endsWith(".md"));
+		} catch (error) {
+			if (isEnoent(error)) {
+				return [];
+			}
+			throw error;
+		}
+	})();
+	if (entries.length === 0) {
+		return 0;
+	}
+	await mkdir(dstDir, { recursive: true });
+	await Promise.all(
+		entries.map(async (name) => {
+			const src = path.join(srcDir, name);
+			const dst = path.join(dstDir, name);
+			await rm(dst, { force: true });
+			await (plan.isDev ? symlink(src, dst) : copyFile(src, dst));
+		}),
+	);
+	return entries.length;
 };
 
 export interface InstallOpts {
@@ -92,6 +152,7 @@ export interface InstallOpts {
 export interface InstallDeps {
 	readonly runner?: (cmd: string, args: readonly string[]) => Promise<number>;
 	readonly readInstalled?: typeof readInstalledVersion;
+	readonly materialize?: (plan: PlannedInstall) => Promise<number>;
 }
 
 export const executeInstall = async (
@@ -101,6 +162,7 @@ export const executeInstall = async (
 ): Promise<void> => {
 	const runner = deps.runner ?? runNpm;
 	const readInstalled = deps.readInstalled ?? readInstalledVersion;
+	const materialize = deps.materialize ?? materializeAgents;
 	const plan = planInstall(spec);
 	if (opts.dryRun) {
 		console.log(`${plan.npmCmd} ${plan.npmArgs.join(" ")}`);
@@ -124,8 +186,18 @@ export const executeInstall = async (
 	if (code !== 0) {
 		process.exit(code);
 	}
+	let materialized = 0;
+	try {
+		materialized = await materialize(plan);
+	} catch (error) {
+		die(`failed to materialize agents: ${errMessage(error)}`);
+		return;
+	}
 	if (installed && installed !== plan.version) {
 		console.log(`upgraded ${installed} -> ${plan.version}`);
+	}
+	if (materialized > 0) {
+		console.log(`materialized ${materialized} agents into ${plan.configDir}`);
 	}
 };
 
