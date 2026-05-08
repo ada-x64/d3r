@@ -4,4 +4,8 @@ packages:
   - "adapters/pi"
   - "cli"
 allowBuilds:
+  '@google/genai': true
   esbuild: true
+  koffi: true
+  msw: true
+  protobufjs: true
