@@ -160,18 +160,23 @@ describe("install / executeInstall", () => {
 		expect(state.stdout.join("\n")).toContain(`${piPkg()}@`);
 	});
 
-	it("aborts with a workspace hint when the pinned dep is a workspace spec", async () => {
+	it("resolves workspace specs to the on-disk package directory", async () => {
 		const state = installExitSpies();
-		const runner = vi.fn();
-		// `cli/package.json` pins `@d3r/adapter-pi` at `workspace:*`, so a
-		// bare `pi` invocation must trip the dev-install guard before any
-		// runner work; this pins the boundary so future version bumps
-		// don't silently relax it.
-		await expect(
-			executeInstall("pi", {}, { runner, readInstalled: () => null }),
-		).rejects.toThrow("exit:1");
-		expect(runner).not.toHaveBeenCalled();
-		expect(state.stderr.join("")).toContain("dev install detected");
+		const runner = vi.fn().mockResolvedValue(0);
+		// `cli/package.json` pins `@d3r/adapter-pi` at `workspace:*`. npm
+		// rejects the `workspace:` protocol with EUNSUPPORTEDPROTOCOL, so
+		// the verb must translate dev pins to the resolved adapter
+		// directory before invoking npm. We assert the runner sees an
+		// absolute path that ends in the adapter package layout, not the
+		// raw `workspace:*` token.
+		await executeInstall("pi", {}, { runner, readInstalled: () => null });
+		expect(runner).toHaveBeenCalledOnce();
+		const args = runner.mock.calls[0][1] as readonly string[];
+		const spec = args[args.length - 1];
+		expect(spec.startsWith("/")).toBe(true);
+		expect(spec).toMatch(/adapters[\\/]pi$/);
+		expect(args.some((a) => a.includes("workspace:"))).toBe(false);
+		expect(state.stderr.join("")).not.toContain("dev install detected");
 	});
 
 	it("short-circuits when the requested version is already installed", async () => {
@@ -240,16 +245,17 @@ describe("install / executeInstall", () => {
 		const state = installExitSpies();
 		const command = await INSTALL_VERB.load();
 		await runCommand(command, { rawArgs: ["--dry-run"] });
-		// dry-run prints the planned argv; the package fragment proves the
-		// pi adapter was selected without the user typing it.
-		expect(state.stdout.join("\n")).toContain(`${piPkg()}@`);
+		// dry-run prints the planned argv; for workspace pins this is the
+		// resolved on-disk adapter directory, which proves the pi adapter
+		// was selected without the user typing it.
+		expect(state.stdout.join("\n")).toMatch(/adapters[\\/]pi/);
 	});
 
 	it("still resolves an explicit `pi` positional", async () => {
 		const state = installExitSpies();
 		const command = await INSTALL_VERB.load();
 		await runCommand(command, { rawArgs: ["pi", "--dry-run"] });
-		expect(state.stdout.join("\n")).toContain(`${piPkg()}@`);
+		expect(state.stdout.join("\n")).toMatch(/adapters[\\/]pi/);
 	});
 
 	it("still honours an explicit version override on the positional", async () => {

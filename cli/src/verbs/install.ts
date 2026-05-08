@@ -1,5 +1,8 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import { defineCommand, type CommandDef } from "citty";
 import pkg from "../../package.json" with { type: "json" };
+import { errMessage } from "../_lib.ts";
 import { ADAPTERS, type AdapterEntry } from "../utils/data.ts";
 import {
 	die,
@@ -9,7 +12,18 @@ import {
 	resolveNpmCommand,
 	runNpm,
 } from "../utils/helpers.ts";
-import { errMessage } from "../_lib.ts";
+
+// Workspace specs (e.g. `workspace:*`) are a pnpm protocol; npm refuses
+// them with EUNSUPPORTEDPROTOCOL. For dev installs we resolve the
+// workspace package on disk (pnpm symlinks it into our node_modules)
+// and hand npm the absolute directory, which it installs as a local
+// dependency. Resolution failure means the workspace isn't linked --
+// caller must `pnpm install` first.
+const resolveWorkspaceDir = (pkgName: string): string => {
+	const req = createRequire(import.meta.url);
+	const manifest = req.resolve(`${pkgName}/package.json`);
+	return path.dirname(manifest);
+};
 
 export interface PlannedInstall {
 	readonly entry: AdapterEntry;
@@ -50,7 +64,23 @@ export const planInstall = (spec: string): PlannedInstall => {
 	// the registry name) and only obscured npm error output. If a future
 	// adapter genuinely needs an alias, this and `readInstalledVersion`'s
 	// read path must move together.
-	const npmArgs = ["install", "--prefix", target, `${entry.pkg}@${version}`];
+	//
+	// `workspace:` specs come from a pnpm workspace pin and are not
+	// understood by npm. Translate to the resolved on-disk directory so
+	// `npm install <dir>` performs a local-path install of the dev copy.
+	const installSpec = ((): string => {
+		if (!version.startsWith("workspace:")) {
+			return `${entry.pkg}@${version}`;
+		}
+		try {
+			return resolveWorkspaceDir(entry.pkg);
+		} catch {
+			return die(
+				`could not resolve workspace package ${entry.pkg}; run \`pnpm install\` at the repo root first`,
+			);
+		}
+	})();
+	const npmArgs = ["install", "--prefix", target, installSpec];
 	return { entry, id, version, target, npmCmd, npmArgs };
 };
 
@@ -75,11 +105,6 @@ export const executeInstall = async (
 	if (opts.dryRun) {
 		console.log(`${plan.npmCmd} ${plan.npmArgs.join(" ")}`);
 		return;
-	}
-	if (plan.version.startsWith("workspace:")) {
-		die(
-			`dev install detected (${plan.version}); pass an explicit version: d3r install ${plan.id}@<version>`,
-		);
 	}
 	const installed = readInstalled(plan.target, plan.entry.pkg);
 	if (installed && installed === plan.version && !opts.force) {

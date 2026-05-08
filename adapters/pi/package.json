@@ -5,7 +5,8 @@
   "main": "./compile.ts",
   "types": "./compile.ts",
   "exports": {
-    ".": "./compile.ts"
+    ".": "./compile.ts",
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
