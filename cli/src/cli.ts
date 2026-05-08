@@ -2,19 +2,7 @@
 import { defineCommand, runMain } from "citty";
 import pkg from "../package.json" with { type: "json" };
 import bareLaunch, { ARGV_USER_OFFSET } from "./bare.ts";
-import { gate } from "./vault-gate.ts";
-import { ALL_VERBS, verbNames } from "./verbs/registry.ts";
-
-const KNOWN_VERBS = verbNames();
-
-const resolveVerb = (rawArgs: readonly string[]): string | undefined => {
-	for (const arg of rawArgs) {
-		if (!arg.startsWith("-")) {
-			return KNOWN_VERBS.has(arg) ? arg : undefined;
-		}
-	}
-	return undefined;
-};
+import { ALL_VERBS } from "./verbs/registry.ts";
 
 const bare = defineCommand({
 	meta: { name: "__bare__", hidden: true },
@@ -34,10 +22,6 @@ const root = defineCommand({
 	},
 	subCommands,
 	default: "__bare__",
-	setup: async (ctx) => {
-		const rawArgs = ctx.rawArgs ?? process.argv.slice(ARGV_USER_OFFSET);
-		await gate(resolveVerb(rawArgs), process.cwd());
-	},
 });
 
 runMain(root);

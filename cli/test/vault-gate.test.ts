@@ -1,39 +1,19 @@
-// Behavioural tests for the refuse-to-run gate. We pin three
-// things: that the allow-list is sourced from the verb registry
-// (no parallel list of verb names lives in the test fixture),
-// that an allow-listed verb passes through cleanly, and that a
-// gated verb in a directory with no registered vault produces the
-// byte-exact stderr copy and a non-zero exit. The latter mirrors
-// the `HOME=$(mktemp -d) ... || echo $?` smoke documented in the
-// task notes.
+// Behavioural tests for the per-verb refuse-to-run precondition.
+// We pin the byte-exact stderr copy and exit code on the refusal
+// path, and the admission paths for each shape of
+// `~/.d3r/config.yaml` we accept. There is no verb-name allow-list
+// to test: the gate is a plain function each verb opts in to, and
+// "which verbs opt in" is verified by the per-verb dist tests
+// (e.g. `vault-init-dist.test.ts` proves `vault init` does *not*
+// gate; `tool` and the bare-launch path gate by virtue of calling
+// `requireRegisteredVault` themselves).
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ALLOW_LIST, gate } from "../src/vault-gate.ts";
-import {
-	GATED_VERBS,
-	GATE_EXEMPT_VERBS,
-	gateExemptVerbs,
-} from "../src/verbs/registry.ts";
-
-const exemptName = (): string => {
-	const [first] = GATE_EXEMPT_VERBS;
-	if (!first) {
-		throw new Error("registry has no gate-exempt verbs");
-	}
-	return first.name;
-};
-
-const gatedName = (): string => {
-	const [first] = GATED_VERBS;
-	if (!first) {
-		throw new Error("registry has no gated verbs");
-	}
-	return first.name;
-};
+import { requireRegisteredVault } from "../src/vault-gate.ts";
 
 interface Env {
 	homeDir: string;
@@ -71,7 +51,7 @@ const silenceExitAndStderr = (): { writes: string[] } => {
 	return { writes };
 };
 
-describe("vault-gate", () => {
+describe("requireRegisteredVault", () => {
 	let env: Env = { homeDir: "", workDir: "", savedHome: undefined };
 
 	beforeEach(() => {
@@ -89,110 +69,54 @@ describe("vault-gate", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("derives ALLOW_LIST from the verb registry", () => {
-		expect([...ALLOW_LIST].toSorted()).toEqual(
-			[...gateExemptVerbs()].toSorted(),
-		);
-	});
-
-	it("passes through when the verb is allow-listed", async () => {
-		const exit = vi.spyOn(process, "exit").mockImplementation(((
-			code?: number,
-		) => {
-			throw new Error(`process.exit(${code ?? 0})`);
-		}) as never);
-		const stderr = vi
-			.spyOn(process.stderr, "write")
-			.mockImplementation(() => true);
-
-		await expect(gate(exemptName(), env.workDir)).resolves.toBeUndefined();
-		expect(exit).not.toHaveBeenCalled();
-		expect(stderr).not.toHaveBeenCalled();
-	});
-
-	it("refuses a gated verb outside any registered vault", async () => {
-		const exit = vi.spyOn(process, "exit").mockImplementation(((
-			code?: number,
-		) => {
-			throw new Error(`exit:${code ?? 0}`);
-		}) as never);
-		const writes: string[] = [];
-		vi.spyOn(process.stderr, "write").mockImplementation(((
-			chunk: string | Uint8Array,
-		) => {
-			writes.push(
-				typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
-			);
-			return true;
-		}) as never);
-
-		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
-		expect(exit).toHaveBeenCalledWith(1);
+	it("refuses when no config and no registered vault covers cwd", () => {
+		const { writes } = silenceExitAndStderr();
+		expect(() => requireRegisteredVault(env.workDir)).toThrow("exit:1");
 		expect(writes.join("")).toBe(
 			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r vault init\`\n`,
 		);
 	});
 
-	it("admits a workdir under a flat `consumer` root", async () => {
+	it("admits a workdir under a flat `consumer` root", () => {
 		writeConfig(env.homeDir, `consumer: ${env.workDir}\n`);
 		silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+		expect(() => requireRegisteredVault(env.workDir)).not.toThrow();
 	});
 
-	it("admits a workdir under a nested `vaults[].root` entry", async () => {
+	it("admits a workdir under a nested `vaults[].root` entry", () => {
 		writeConfig(
 			env.homeDir,
 			`vaults:\n  - root: ${env.workDir}\n  - path: /nonexistent/should/be/ignored\n`,
 		);
 		silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+		expect(() => requireRegisteredVault(env.workDir)).not.toThrow();
 	});
 
-	it("admits a workdir under a nested `vaults[].path` entry", async () => {
+	it("admits a workdir under a nested `vaults[].path` entry", () => {
 		writeConfig(env.homeDir, `vaults:\n  - path: ${env.workDir}\n`);
 		silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+		expect(() => requireRegisteredVault(env.workDir)).not.toThrow();
 	});
 
-	it("admits a top-level root when `vaults` is a malformed object map", async () => {
+	it("admits a top-level root when `vaults` is a malformed object map", () => {
 		writeConfig(
 			env.homeDir,
 			`root: ${env.workDir}\nvaults:\n  primary:\n    root: /nonexistent/should/be/ignored\n`,
 		);
 		silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).resolves.toBeUndefined();
+		expect(() => requireRegisteredVault(env.workDir)).not.toThrow();
 	});
 
-	it("refuses a gated verb when ~/.d3r/config.yaml is malformed", async () => {
+	it("refuses when ~/.d3r/config.yaml is malformed", () => {
 		writeConfig(env.homeDir, ":\n\t- not: valid: yaml\n  ][\n");
 		const { writes } = silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
+		expect(() => requireRegisteredVault(env.workDir)).toThrow("exit:1");
 		expect(writes.join("")).toContain("no d3r vault registered");
 	});
 
-	it("refuses a gated verb when ~/.d3r/config.yaml is absent", async () => {
+	it("refuses when ~/.d3r/config.yaml is absent", () => {
 		const { writes } = silenceExitAndStderr();
-		await expect(gate(gatedName(), env.workDir)).rejects.toThrow("exit:1");
+		expect(() => requireRegisteredVault(env.workDir)).toThrow("exit:1");
 		expect(writes.join("")).toContain("no d3r vault registered");
-	});
-
-	it("refuses when no verb is supplied (bare-launch path)", async () => {
-		vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-			throw new Error(`exit:${code ?? 0}`);
-		}) as never);
-		const writes: string[] = [];
-		vi.spyOn(process.stderr, "write").mockImplementation(((
-			chunk: string | Uint8Array,
-		) => {
-			writes.push(
-				typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
-			);
-			return true;
-		}) as never);
-
-		await expect(gate(undefined, env.workDir)).rejects.toThrow("exit:1");
-		expect(writes.join("")).toBe(
-			`error: no d3r vault registered for ${env.workDir}\nhint: run \`d3r vault init\`\n`,
-		);
 	});
 });

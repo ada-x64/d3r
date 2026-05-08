@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { errMessage } from "./_lib.ts";
+import { requireRegisteredVault } from "./vault-gate.ts";
 
 /**
  * Bare-launch handler: forwards the user's argv to `pi` in routing mode
@@ -13,6 +14,7 @@ const EXIT_SIGNAL_BASE = 128;
 const ARGV_USER_OFFSET = 2;
 
 const bare = async (argv: string[]): Promise<never> => {
+	requireRegisteredVault(process.cwd());
 	const child = spawn("pi", ["--d3r", ...argv], { stdio: "inherit" });
 	child.on("error", (err: NodeJS.ErrnoException) => {
 		const msg =

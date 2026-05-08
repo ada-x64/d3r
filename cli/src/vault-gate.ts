@@ -3,17 +3,6 @@ import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { gateExemptVerbs } from "./verbs/registry.ts";
-
-/**
- * Verbs that are allowed to run without a registered vault for the
- * current working directory. Derived from the `GATE_EXEMPT_VERBS`
- * table in the verb registry -- membership in that table is the
- * encoding of gate-exempt status -- so the allow-list and the citty
- * registration cannot drift. Every other verb (and the bare-launch
- * path) is gated.
- */
-export const ALLOW_LIST: ReadonlySet<string> = gateExemptVerbs();
 
 const withTrailingSep = (p: string): string => (p.endsWith(sep) ? p : p + sep);
 
@@ -71,9 +60,9 @@ const candidateRoots = (cfg: z.infer<typeof ConfigYaml>): string[] => {
  * Read `~/.d3r/config.yaml` and return the absolute paths of every
  * view-consumer symlink it declares. Missing or unparseable file --
  * or one that does not match {@link ConfigYaml} -- yields the empty
- * list (treated as "no vault registered" by {@link gate}). The
- * schema is the contract: any field outside it does not contribute a
- * candidate root.
+ * list (treated as "no vault registered" by the precondition
+ * {@link requireRegisteredVault}). The schema is the contract: any
+ * field outside it does not contribute a candidate root.
  */
 const readRegisteredRoots = (): string[] => {
 	const cfgPath = resolve(homedir(), ".d3r", "config.yaml");
@@ -99,18 +88,15 @@ const readRegisteredRoots = (): string[] => {
 };
 
 /**
- * Refuse-to-run gate. Resolves cleanly when `verbName` is
- * allow-listed or when some registered vault root is an ancestor of
- * `cwd`; otherwise writes the prescribed error/hint pair to stderr
- * and exits with code 1.
+ * Per-verb refuse-to-run precondition. Resolves cleanly when some
+ * registered vault root is an ancestor of `cwd`; otherwise writes the
+ * prescribed error/hint pair to stderr and exits with code 1. Each
+ * verb that requires a registered vault calls this from its own `run`
+ * handler -- there is no top-level allow-list. The verbs that must
+ * function without a registered vault (notably `vault init`, the only
+ * way to *register* one) simply do not call it.
  */
-export const gate = async (
-	verbName: string | undefined,
-	cwd: string,
-): Promise<void> => {
-	if (verbName !== undefined && ALLOW_LIST.has(verbName)) {
-		return;
-	}
+export const requireRegisteredVault = (cwd: string): void => {
 	const cwdReal = realpathOrNull(cwd) ?? cwd;
 	const roots = readRegisteredRoots();
 	for (const root of roots) {

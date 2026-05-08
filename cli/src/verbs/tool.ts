@@ -17,6 +17,7 @@ import {
 import { z } from "zod";
 
 import { parseWebProviderConfig } from "../utils/env.ts";
+import { requireRegisteredVault } from "../vault-gate.ts";
 import { JSON_INDENT, errMessage } from "../_lib.ts";
 
 import {
@@ -307,6 +308,7 @@ const command = defineCommand({
 		},
 	},
 	run: async (ctx) => {
+		requireRegisteredVault(process.cwd());
 		const tail = (ctx.rawArgs ?? []).slice(1);
 		const io: DispatchIO = {
 			stdout: (chunk) => {
