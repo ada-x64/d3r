@@ -7,12 +7,14 @@
   "exports": {
     ".": "./schema.ts",
     "./result": "./result.ts",
+    "./spawn": "./spawn.ts",
     "./vault/*": "./vault/*.ts"
   },
   "files": [
     "agents/**",
     "schema.ts",
     "result.ts",
+    "spawn.ts",
     "seed/**",
     "vault/**",
     "workflow.yaml",

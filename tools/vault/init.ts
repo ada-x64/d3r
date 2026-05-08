@@ -11,7 +11,7 @@ import {
 	type InitError,
 	type InitReport,
 } from "@d3r/core/vault/init";
-import { type Spawn } from "@d3r/core/vault/git";
+import { type Spawn } from "@d3r/core/spawn";
 import { type Result } from "@d3r/core/vault/seed";
 
 export { type InitError, type InitReport } from "@d3r/core/vault/init";

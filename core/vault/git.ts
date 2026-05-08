@@ -1,23 +1,13 @@
-// Minimal git-subprocess seam for vault initialisation. Exports a
-// `Spawn` type + tiny wrappers around `git init` / `git add` /
-// `git commit`. The lifecycle work that follows extends this module
-// with `gitMove`; the `Spawn` and `GitError` shapes are stable so
-// the extension can reuse them as-is.
+// Minimal git-subprocess seam for vault initialisation. Tiny
+// wrappers around `git init` / `git add` / `git commit` that
+// consume the generic `Spawn` seam from `core/spawn.ts`. The
+// lifecycle work that follows extends this module with `gitMove`;
+// the `Spawn` and `GitError` shapes are stable so the extension
+// can reuse them as-is.
 
-import { spawn } from "node:child_process";
+import { defaultSpawn, type Spawn, type SpawnResult } from "../spawn.ts";
 
-export interface SpawnResult {
-	stdout: string;
-	stderr: string;
-	exitCode: number | null;
-	signal: NodeJS.Signals | null;
-}
-
-export type Spawn = (
-	cmd: string,
-	args: readonly string[],
-	opts?: { cwd?: string },
-) => Promise<SpawnResult>;
+export { defaultSpawn, type Spawn, type SpawnResult };
 
 export interface GitError {
 	kind: "git-spawn-failed";
@@ -33,39 +23,6 @@ export type GitResult<T> =
 
 const okGit = <T>(value: T): GitResult<T> => ({ ok: true, value });
 const failGit = (error: GitError): GitResult<never> => ({ ok: false, error });
-
-/**
- * Default `Spawn` implementation that captures both stdout and
- * stderr and resolves with the child's close-event tuple. Mirrors
- * the test exemplar at `cli/test/exemplars/spawn-runner.ts` but
- * targets arbitrary executables (not just node) so it can run
- * `git`.
- */
-export const defaultSpawn: Spawn = (cmd, args, opts = {}) => {
-	const child = spawn(cmd, [...args], {
-		cwd: opts.cwd,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	const out: Buffer[] = [];
-	const err: Buffer[] = [];
-	child.stdout.on("data", (chunk: Buffer) => {
-		out.push(chunk);
-	});
-	child.stderr.on("data", (chunk: Buffer) => {
-		err.push(chunk);
-	});
-	return new Promise((resolve, reject) => {
-		child.on("error", reject);
-		child.on("close", (code, signal) => {
-			resolve({
-				stdout: Buffer.concat(out).toString("utf8"),
-				stderr: Buffer.concat(err).toString("utf8"),
-				exitCode: code,
-				signal,
-			});
-		});
-	});
-};
 
 const runGit = async (
 	cwd: string,
