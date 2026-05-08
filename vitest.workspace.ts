@@ -16,15 +16,15 @@ export default defineWorkspace([
 		extends: "./vitest.config.ts",
 		resolve: {
 			alias: [
-				// NOTE: order matters. The longer `@d3r/core/vault/*` regex
-				// MUST precede `@d3r/core` — vite matches in declaration
+				// NOTE: order matters. Longer / more-specific keys MUST
+				// precede shorter prefix keys — vite matches in declaration
 				// order, and `@d3r/core` would otherwise prefix-match first
-				// and rewrite vault subpath imports incorrectly. Do not
-				// reorder.
+				// and rewrite subpath imports incorrectly. Do not reorder.
 				{
 					find: /^@d3r\/core\/vault\/(.+)$/,
 					replacement: r("core/dist/vault/$1.js"),
 				},
+				{ find: "@d3r/core/result", replacement: r("core/dist/result.js") },
 				{ find: "@d3r/core", replacement: r("core/dist/schema.js") },
 				{ find: "@d3r/tools", replacement: r("tools/dist/index.js") },
 				{ find: "@d3r/cli", replacement: r("cli/dist/cli.js") },

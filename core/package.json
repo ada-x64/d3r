@@ -6,11 +6,13 @@
   "types": "./schema.ts",
   "exports": {
     ".": "./schema.ts",
+    "./result": "./result.ts",
     "./vault/*": "./vault/*.ts"
   },
   "files": [
     "agents/**",
     "schema.ts",
+    "result.ts",
     "seed/**",
     "vault/**",
     "workflow.yaml",

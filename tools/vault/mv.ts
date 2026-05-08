@@ -6,7 +6,7 @@ import { mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import { error, type Result } from "../common/result.ts";
+import { fail, type Result } from "@d3r/core/result";
 import {
 	type VaultAccessor,
 	type VaultPathError,
@@ -43,10 +43,10 @@ export const vaultMv = async (
 		return toRes;
 	}
 	if ((await safeStat(fromRes.value)) === null) {
-		return error({ kind: "missing", path: params.from });
+		return fail({ kind: "missing", path: params.from });
 	}
 	if (!params.overwrite && (await safeStat(toRes.value)) !== null) {
-		return error({ kind: "exists", path: params.to });
+		return fail({ kind: "exists", path: params.to });
 	}
 	await mkdir(path.dirname(toRes.value), { recursive: true });
 	await rename(fromRes.value, toRes.value);

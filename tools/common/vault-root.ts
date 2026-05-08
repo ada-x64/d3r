@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { error as fail, ok, type Result } from "./result.ts";
+import { fail, ok, type Result } from "@d3r/core/result";
 
 // Implementations are owned by harness adapters or higher-level
 // orchestration. The tools package only consumes the interface so the

@@ -5,7 +5,7 @@
 import { rm } from "node:fs/promises";
 import { z } from "zod";
 
-import { error, type Result } from "../common/result.ts";
+import { fail, type Result } from "@d3r/core/result";
 import {
 	type VaultAccessor,
 	type VaultPathError,
@@ -37,10 +37,10 @@ export const vaultRm = async (
 	}
 	const info = await safeStat(resolved.value);
 	if (info === null) {
-		return error({ kind: "missing", path: params.path });
+		return fail({ kind: "missing", path: params.path });
 	}
 	if (info.isDirectory() && !params.recursive) {
-		return error({ kind: "is-directory", path: params.path });
+		return fail({ kind: "is-directory", path: params.path });
 	}
 	await rm(resolved.value, { recursive: params.recursive, force: false });
 	return { ok: true, value: { removed: params.path } };

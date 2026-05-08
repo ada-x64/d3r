@@ -5,28 +5,18 @@
 // module lets sibling verbs reuse them without depending on the
 // init verb's full surface.
 //
-// This module also owns the generic `Result<T, E>` shape used by
-// the vault verbs. `git.ts` predates this file and ships its own
-// `GitResult<T>` aliased to `Result<T, GitError>`; later verbs
-// re-export `Result` from here.
+// `Result<T, E>` lives in `core/result.ts` (canonical home,
+// shared with the tools package). Re-exported here for the
+// convenience of sibling vault modules that already import
+// `assertSeedExists` / `defaultSeedDir` and would otherwise need
+// a second import line.
 
 import { stat } from "node:fs/promises";
 
+import { fail, ok, type Result } from "../result.ts";
 import { SEED_ROOT } from "./seed-root.ts";
 
-/**
- * Discriminated-union result type used across the vault verbs to
- * distinguish handled refusals (typed errors) from thrown
- * exceptions (genuine I/O faults, programmer errors).
- */
-export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-
-/** Tiny constructor helpers; mirror the `tools/common/result.ts` shape. */
-export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
-export const fail = <E>(err: E): Result<never, E> => ({
-	ok: false,
-	error: err,
-});
+export { fail, ok, type Result };
 
 /**
  * Absolute path to the canonical seed tree. In the source tier

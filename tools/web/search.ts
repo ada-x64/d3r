@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 
-import { type Result } from "../common/result.ts";
+import { type Result } from "@d3r/core/result";
 import {
 	EXA_PROVIDER_ID,
 	createExaProvider,

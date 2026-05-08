@@ -8,7 +8,7 @@ import { type Stats } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-import { type Result } from "../common/result.ts";
+import { type Result } from "@d3r/core/result";
 import {
 	resolveUnderRoot,
 	type VaultAccessor,

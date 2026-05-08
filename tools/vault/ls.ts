@@ -4,7 +4,7 @@
 import { readdir } from "node:fs/promises";
 import { z } from "zod";
 
-import { type Result } from "../common/result.ts";
+import { type Result } from "@d3r/core/result";
 import {
 	type VaultAccessor,
 	type VaultPathError,

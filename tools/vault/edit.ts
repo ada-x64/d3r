@@ -6,7 +6,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { z } from "zod";
 
-import { error, type Result } from "../common/result.ts";
+import { fail, type Result } from "@d3r/core/result";
 import {
 	type VaultAccessor,
 	type VaultPathError,
@@ -55,7 +55,7 @@ export const vaultEdit = async (
 	const text = await readFile(resolved.value, "utf8");
 	const actual = countOccurrences(text, params.find);
 	if (actual !== params.count) {
-		return error({ kind: "count-mismatch", expected: params.count, actual });
+		return fail({ kind: "count-mismatch", expected: params.count, actual });
 	}
 	const out = text.replaceAll(params.find, params.replace);
 	await writeFile(resolved.value, out, "utf8");

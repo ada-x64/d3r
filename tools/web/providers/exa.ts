@@ -9,7 +9,7 @@
 
 import { Exa } from "exa-js";
 
-import { error as fail, ok, type Result } from "../../common/result.ts";
+import { fail, ok, type Result } from "@d3r/core/result";
 import {
 	type WebDoc,
 	type WebFetchParams,
