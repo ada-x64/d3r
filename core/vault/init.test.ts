@@ -71,11 +71,11 @@ describe("initVault — happy path", () => {
 			seedDir: "/seed",
 			commit: "deadbeef",
 		});
-		expect(calls.map((c) => c.args.join(" "))).toEqual([
-			"-C /vault init",
-			"-C /vault add .",
-			"-C /vault commit -m chore: initial vault seed",
-			"-C /vault rev-parse HEAD",
+		expect(calls.map((c) => c.args)).toEqual([
+			["-C", "/vault", "init"],
+			["-C", "/vault", "add", "."],
+			["-C", "/vault", "commit", "-m", "chore: initial vault seed"],
+			["-C", "/vault", "rev-parse", "HEAD"],
 		]);
 	});
 });
@@ -163,5 +163,27 @@ describe("initVault — refusals", () => {
 		}
 		expect(vol.toJSON()["/fresh-vault/AGENTS.md"]).toBe("agents\n");
 		expect(vol.toJSON()["/fresh-vault/notes/.gitkeep"]).toBe("");
+	});
+
+	it("refuses when vaultRoot exists as a regular file (not a directory)", async () => {
+		vol.fromJSON({ ...seedJson, "/vault": "i am a file, not a dir\n" }, "/");
+		const { calls, spawn } = makeRecorder();
+
+		const result = await initVault(
+			{ vaultRoot: "/vault", seedDir: "/seed" },
+			{ spawn },
+		);
+
+		expect(result.ok).toBe(false);
+		if (result.ok) {
+			return;
+		}
+		expect(result.error).toEqual({
+			kind: "vault-not-a-directory",
+			path: "/vault",
+		});
+		expect(calls).toEqual([]);
+		// File contents preserved; no leakage into the path.
+		expect(vol.toJSON()["/vault"]).toBe("i am a file, not a dir\n");
 	});
 });

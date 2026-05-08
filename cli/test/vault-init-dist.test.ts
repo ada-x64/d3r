@@ -119,4 +119,34 @@ describe("d3r vault init (dist)", () => {
 		expect(exitCode).not.toBe(0);
 		expect(stderr).toMatch(/vault-not-empty/);
 	});
+
+	it("refuses a vault root with a pre-existing .git/", () => {
+		requireDistCli();
+		const vaultRoot = path.join(workdir, "v");
+		// First init succeeds and produces a .git/.
+		execFileSync(
+			process.execPath,
+			[distCli, "vault", "init", "--vault-root", vaultRoot],
+			{ stdio: ["ignore", "pipe", "pipe"] },
+		);
+		statSync(path.join(vaultRoot, ".git", "HEAD"));
+
+		// Second init refuses with the more-specific error than
+		// `vault-not-empty` (the `.git/` precondition wins).
+		let exitCode: number | null = 0;
+		let stderr = "";
+		try {
+			execFileSync(
+				process.execPath,
+				[distCli, "vault", "init", "--vault-root", vaultRoot],
+				{ stdio: ["ignore", "pipe", "pipe"] },
+			);
+		} catch (error) {
+			const e = error as { status: number | null; stderr: Buffer };
+			exitCode = e.status;
+			stderr = e.stderr.toString("utf8");
+		}
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toMatch(/git-already-initialized/);
+	});
 });

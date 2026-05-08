@@ -35,6 +35,7 @@ export interface InitReport {
 }
 
 export type InitError =
+	| { kind: "vault-not-a-directory"; path: string }
 	| { kind: "vault-not-empty"; path: string; entries: string[] }
 	| { kind: "git-already-initialized"; path: string }
 	| { kind: "seed-missing"; path: string }
@@ -48,13 +49,22 @@ export type InitError =
 
 const COMMIT_SUBJECT = "chore: initial vault seed";
 
-const safeReaddir = async (dir: string): Promise<string[] | null> => {
+type RootProbe =
+	| { kind: "missing" }
+	| { kind: "dir"; entries: string[] }
+	| { kind: "not-a-dir" };
+
+const probeRoot = async (target: string): Promise<RootProbe> => {
 	try {
-		return await readdir(dir);
+		const s = await stat(target);
+		if (!s.isDirectory()) {
+			return { kind: "not-a-dir" };
+		}
+		return { kind: "dir", entries: await readdir(target) };
 	} catch (error) {
 		const { code } = error as NodeJS.ErrnoException;
-		if (code === "ENOENT" || code === "ENOTDIR") {
-			return null;
+		if (code === "ENOENT") {
+			return { kind: "missing" };
 		}
 		throw error;
 	}
@@ -84,18 +94,24 @@ export const initVault = async (
 	}
 
 	// `.git/` precondition wins over the generic non-empty refusal so
-	// callers see the more specific message when both apply.
+	// callers see the more specific message when both apply. The root
+	// probe runs first to surface `vault-not-a-directory` for paths
+	// that exist but are regular files (agent-tool reachable).
+	const probe = await probeRoot(params.vaultRoot);
+	if (probe.kind === "not-a-dir") {
+		return fail({ kind: "vault-not-a-directory", path: params.vaultRoot });
+	}
+
 	const gitDir = path.join(params.vaultRoot, ".git");
 	if (await exists(gitDir)) {
 		return fail({ kind: "git-already-initialized", path: gitDir });
 	}
 
-	const entries = await safeReaddir(params.vaultRoot);
-	if (entries !== null && entries.length > 0) {
+	if (probe.kind === "dir" && probe.entries.length > 0) {
 		return fail({
 			kind: "vault-not-empty",
 			path: params.vaultRoot,
-			entries,
+			entries: probe.entries,
 		});
 	}
 

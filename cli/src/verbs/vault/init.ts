@@ -10,6 +10,9 @@ const formatError = (error: unknown): string => {
 	}
 	const e = error as { kind?: string; path?: string; stderr?: string };
 	switch (e.kind) {
+		case "vault-not-a-directory": {
+			return `vault-not-a-directory: ${e.path} is not a directory`;
+		}
 		case "vault-not-empty": {
 			return `vault-not-empty: ${e.path} is not empty`;
 		}
