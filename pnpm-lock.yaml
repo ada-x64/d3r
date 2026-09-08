@@ -51,6 +51,12 @@ importers:
         specifier: ^3
         version: 3.25.76
 
+  adapters/acp:
+    dependencies:
+      pi-acp:
+        specifier: 0.0.33
+        version: 0.0.33
+
   adapters/pi:
     dependencies:
       '@d3r/core':
@@ -86,6 +92,9 @@ importers:
 
   cli:
     dependencies:
+      '@d3r/adapter-acp':
+        specifier: workspace:*
+        version: link:../adapters/acp
       '@d3r/adapter-pi':
         specifier: workspace:*
         version: link:../adapters/pi
@@ -130,6 +139,11 @@ importers:
         version: 3.25.76
 
 packages:
+
+  '@agentclientprotocol/sdk@0.26.0':
+    resolution: {integrity: sha512-ialrcI+RzKOYe+fw+TfpyTdRmEoqIkXLlwbTi6XgaXXfdhNcdod7TmE1VsTnG3yTlox8TMTSMQgWbLLbz3r86Q==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@ampproject/remapping@2.3.0':
     resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
@@ -733,20 +747,24 @@ packages:
   '@mariozechner/pi-agent-core@0.72.1':
     resolution: {integrity: sha512-Z5XH9mUDsBymh7Prtk5Eun4Cs+s9C3uzynug+oWAjzQESjjnCuy7KU6Ek8E9Eg+b9yroCwVw2ItLDxp2E3vYjA==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-agent-core instead going forward
 
   '@mariozechner/pi-ai@0.72.1':
     resolution: {integrity: sha512-mOq71Pjnu72xxzwrh52VIiNwt+/a+Wpa11k5segi01/zTZJt8eMDc5Q2z6GhczYMr5+6EpZ8T+BaeHqq0jk5ag==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-ai instead going forward
     hasBin: true
 
   '@mariozechner/pi-coding-agent@0.72.1':
     resolution: {integrity: sha512-gKApiLfAYpvPnWThvwXrLjZIhsziSSUKBph7DHCy/1IomuIGN1MTxS/9ZtcuFqPy3/+VfEUOKegGlY6m+CRNlA==}
     engines: {node: '>=20.6.0'}
+    deprecated: please use @earendil-works/pi-coding-agent instead going forward
     hasBin: true
 
   '@mariozechner/pi-tui@0.72.1':
     resolution: {integrity: sha512-KjeqzMQp4vafomfkvI8HKv5/52PqRP5BmlowGC8WKyOaB+u0UkkTdfM5U1Ui3ty2gA7FOfglVRiyvcitiWwvMQ==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-tui instead going forward
 
   '@mistralai/mistralai@2.2.1':
     resolution: {integrity: sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==}
@@ -2211,6 +2229,11 @@ packages:
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
 
+  pi-acp@0.0.33:
+    resolution: {integrity: sha512-vX9kY1tK14E72G4dBAx+RGCk/k7XPjTHls6dLUxA8WSkBav6B6JHuSBv3eusp50LCR/GTRsR2kIKsG0Z5jANzw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -2681,6 +2704,10 @@ packages:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@0.26.0(zod@3.25.76)':
+    dependencies:
+      zod: 3.25.76
 
   '@ampproject/remapping@2.3.0':
     dependencies:
@@ -5137,6 +5164,11 @@ snapshots:
   pathval@2.0.1: {}
 
   pend@1.2.0: {}
+
+  pi-acp@0.0.33:
+    dependencies:
+      '@agentclientprotocol/sdk': 0.26.0(zod@3.25.76)
+      zod: 3.25.76
 
   picocolors@1.1.1: {}
 

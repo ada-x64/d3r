@@ -30,6 +30,14 @@ export default defineWorkspace([
 				{ find: "@d3r/tools", replacement: r("tools/dist/index.js") },
 				{ find: "@d3r/cli", replacement: r("cli/dist/cli.js") },
 				{
+					find: "@d3r/adapter-acp",
+					replacement: r("adapters/acp/dist/runtime.js"),
+				},
+				{
+					find: "@d3r/adapter-pi/runtime",
+					replacement: r("adapters/pi/dist/runtime.js"),
+				},
+				{
 					find: "@d3r/adapter-pi",
 					replacement: r("adapters/pi/dist/compile.js"),
 				},

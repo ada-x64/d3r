@@ -1,3 +1,4 @@
+import { planPiLaunch } from "@d3r/adapter-pi/runtime";
 import { spawn } from "node:child_process";
 import { errMessage } from "./_lib.ts";
 import { requireRegisteredVault } from "./vault-gate.ts";
@@ -15,7 +16,11 @@ const ARGV_USER_OFFSET = 2;
 
 const bare = async (argv: string[]): Promise<never> => {
 	requireRegisteredVault(process.cwd());
-	const child = spawn("pi", ["--d3r", ...argv], { stdio: "inherit" });
+	const plan = planPiLaunch(argv);
+	const child = spawn(plan.command, [...plan.args], {
+		stdio: "inherit",
+		shell: plan.shell,
+	});
 	child.on("error", (err: NodeJS.ErrnoException) => {
 		const msg =
 			err.code === "ENOENT" ? "pi binary not found on PATH" : errMessage(err);

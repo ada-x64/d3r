@@ -8,7 +8,8 @@
     ".": "./src/cli.ts"
   },
   "bin": {
-    "d3r": "./dist/cli.js"
+    "d3r": "./dist/cli.js",
+    "d3r-pi": "./dist/pi.js"
   },
   "publishConfig": {
     "access": "public"
@@ -18,6 +19,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@d3r/adapter-acp": "workspace:*",
     "@d3r/adapter-pi": "workspace:*",
     "@d3r/core": "workspace:*",
     "@d3r/tools": "workspace:*",

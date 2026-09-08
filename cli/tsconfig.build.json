@@ -16,6 +16,8 @@
   "exclude": ["**/*.test.ts", "node_modules", "dist", "test/**"],
   "references": [
     { "path": "../core/tsconfig.build.json" },
-    { "path": "../tools/tsconfig.build.json" }
+    { "path": "../tools/tsconfig.build.json" },
+    { "path": "../adapters/acp/tsconfig.build.json" },
+    { "path": "../adapters/pi/tsconfig.build.json" }
   ]
 }

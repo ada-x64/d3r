@@ -1,0 +1,25 @@
+{
+  "name": "@d3r/adapter-acp",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./runtime.ts",
+  "types": "./runtime.ts",
+  "exports": {
+    ".": "./runtime.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "acp",
+    "agent-client-protocol"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pi-acp": "0.0.33"
+  }
+}

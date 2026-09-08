@@ -88,16 +88,16 @@ the project default.
 
 ### `dist` project depth
 
-The `dist` project's resolve aliases rewrite only the four top-level package
-specifiers (`@d3r/core`, `@d3r/tools`, `@d3r/cli`, `@d3r/adapter-pi`) to their
-compiled entrypoints. Deep relative imports under test (anything resolved via
-`./foo.ts` or a non-entrypoint subpath) still go through Vite's TypeScript
-pipeline against source. In practice this means `dist` mode catches publish-path
-regressions for the four package entrypoints and their transitive imports, but a
-smoke test that imports a deep module by relative path will not exercise
-compiled JS for that module. Smoke tests SHOULD import only via the package
-entry; if you find yourself reaching for a deep import, prefer widening the
-entry or adding a sibling test that goes through the entry.
+The `dist` project's resolve aliases rewrite only the workspace package
+specifiers (`@d3r/core`, `@d3r/tools`, `@d3r/cli`, `@d3r/adapter-acp`,
+`@d3r/adapter-pi`) to their compiled entrypoints. Deep relative imports under
+test (anything resolved via `./foo.ts` or a non-entrypoint subpath) still go
+through Vite's TypeScript pipeline against source. In practice this means `dist`
+mode catches publish-path regressions for the five package entrypoints and their
+transitive imports, but a smoke test that imports a deep module by relative path
+will not exercise compiled JS for that module. Smoke tests SHOULD import only
+via the package entry; if you find yourself reaching for a deep import, prefer
+widening the entry or adding a sibling test that goes through the entry.
 
 ## What NOT to test
 

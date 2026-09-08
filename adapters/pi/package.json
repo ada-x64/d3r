@@ -6,6 +6,7 @@
   "types": "./compile.ts",
   "exports": {
     ".": "./compile.ts",
+    "./runtime": "./runtime.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {

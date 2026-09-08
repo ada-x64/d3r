@@ -24,6 +24,10 @@ export interface VerbEntry {
 /** Every verb the CLI exposes, in declaration order. */
 export const ALL_VERBS: readonly VerbEntry[] = [
 	{
+		name: "acp",
+		load: () => import("./acp.ts").then((m) => m.default),
+	},
+	{
 		name: "install",
 		load: () => import("./install.ts").then((m) => m.default),
 	},
