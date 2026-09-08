@@ -57,3 +57,25 @@ file-based commands. Pi extension commands are not exposed by `pi-acp`, so D3R
 starts directly in routing mode instead of relying on Zed to invoke `/d3r`.
 Nested D3R agents are currently rendered as the Pi `subagent` tool rather than
 first-class ACP child sessions.
+
+## Native server development
+
+`@d3r/adapter-acp/server` exports `connectNativeServer(stream, deps)` as an
+experimental library seam. It negotiates ACP v1, creates connection-local
+in-memory sessions through an injected runtime factory, streams text and thought
+chunks, and propagates cancellation. The returned `closed` promise waits for
+active prompts to settle and all runtimes to be disposed after disconnect.
+
+This is not yet a complete ACP agent: it rejects non-empty MCP server lists,
+additional workspace roots, and rich prompt blocks rather than silently ignoring
+them. Only text and resource-link inputs are currently accepted. The runtime
+factory is responsible for resolving resource links and retaining conversation
+context; it must honor abort signals and await emitted updates before returning.
+Session creation checks absolute paths, not filesystem access or workspace
+trust. Those policies must be supplied before a real runtime is exposed to
+users.
+
+There is no native CLI switch yet. `d3r acp` and terminal authentication still
+use the working proxy. The native tests exercise the protocol over
+newline-delimited byte streams with injected fake runtimes; they require neither
+Pi nor provider credentials and make no model requests.

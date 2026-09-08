@@ -53,9 +53,18 @@ importers:
 
   adapters/acp:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.4.0
+        version: 1.4.0(zod@3.25.76)
+      '@d3r/core':
+        specifier: workspace:*
+        version: link:../../core
       pi-acp:
         specifier: 0.0.33
         version: 0.0.33
+      zod:
+        specifier: ^3
+        version: 3.25.76
 
   adapters/pi:
     dependencies:
@@ -142,6 +151,11 @@ packages:
 
   '@agentclientprotocol/sdk@0.26.0':
     resolution: {integrity: sha512-ialrcI+RzKOYe+fw+TfpyTdRmEoqIkXLlwbTi6XgaXXfdhNcdod7TmE1VsTnG3yTlox8TMTSMQgWbLLbz3r86Q==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+
+  '@agentclientprotocol/sdk@1.4.0':
+    resolution: {integrity: sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -2706,6 +2720,10 @@ packages:
 snapshots:
 
   '@agentclientprotocol/sdk@0.26.0(zod@3.25.76)':
+    dependencies:
+      zod: 3.25.76
+
+  '@agentclientprotocol/sdk@1.4.0(zod@3.25.76)':
     dependencies:
       zod: 3.25.76
 

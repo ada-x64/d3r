@@ -12,5 +12,6 @@
     "rewriteRelativeImportExtensions": true
   },
   "include": ["**/*.ts"],
-  "exclude": ["**/*.test.ts", "node_modules", "dist", "test/**"]
+  "exclude": ["**/*.test.ts", "node_modules", "dist", "test/**"],
+  "references": [{ "path": "../../core/tsconfig.build.json" }]
 }
