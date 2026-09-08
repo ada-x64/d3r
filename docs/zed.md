@@ -103,3 +103,10 @@ honors its abort signal, and returns text; there is no automatic filesystem or
 network fallback. Authentication UI/storage, tools, compaction, persistence, and
 the native CLI switch remain separate work. Legacy Pi peer dependencies remain
 for the existing interactive extensions and proxy path.
+
+### Portable model presets
+
+The `.agents/models.json` parser and global/workspace loader are available for
+native startup composition. See [Model configuration](./model-config.md) for the
+versioned file shape, override rules, and credential restrictions. This loader
+is not wired into the legacy ACP command or provider authentication yet.

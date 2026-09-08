@@ -6,6 +6,7 @@
   "types": "./schema.ts",
   "exports": {
     ".": "./schema.ts",
+    "./model-config": "./model-config.ts",
     "./result": "./result.ts",
     "./runtime": "./runtime.ts",
     "./spawn": "./spawn.ts",
@@ -14,6 +15,7 @@
   "files": [
     "agents/**",
     "schema.ts",
+    "model-config.ts",
     "result.ts",
     "runtime.ts",
     "spawn.ts",

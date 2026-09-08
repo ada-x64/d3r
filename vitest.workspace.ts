@@ -24,11 +24,19 @@ export default defineWorkspace([
 					find: /^@d3r\/core\/vault\/(.+)$/,
 					replacement: r("core/dist/vault/$1.js"),
 				},
+				{
+					find: "@d3r/core/model-config",
+					replacement: r("core/dist/model-config.js"),
+				},
 				{ find: "@d3r/core/result", replacement: r("core/dist/result.js") },
 				{ find: "@d3r/core/runtime", replacement: r("core/dist/runtime.js") },
 				{ find: "@d3r/core/spawn", replacement: r("core/dist/spawn.js") },
 				{ find: "@d3r/core", replacement: r("core/dist/schema.js") },
 				{ find: "@d3r/tools", replacement: r("tools/dist/index.js") },
+				{
+					find: "@d3r/cli/model-config",
+					replacement: r("cli/dist/model-config.js"),
+				},
 				{ find: "@d3r/cli", replacement: r("cli/dist/cli.js") },
 				{
 					find: "@d3r/adapter-acp/server",

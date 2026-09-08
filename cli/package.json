@@ -5,7 +5,8 @@
   "main": "./src/cli.ts",
   "types": "./src/cli.ts",
   "exports": {
-    ".": "./src/cli.ts"
+    ".": "./src/cli.ts",
+    "./model-config": "./src/model-config.ts"
   },
   "bin": {
     "d3r": "./dist/cli.js",
