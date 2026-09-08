@@ -39,6 +39,10 @@ export default defineWorkspace([
 					replacement: r("adapters/acp/dist/runtime.js"),
 				},
 				{
+					find: "@d3r/adapter-pi/embedded",
+					replacement: r("adapters/pi/dist/embedded.js"),
+				},
+				{
 					find: "@d3r/adapter-pi/runtime",
 					replacement: r("adapters/pi/dist/runtime.js"),
 				},

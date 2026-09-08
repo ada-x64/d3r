@@ -79,3 +79,27 @@ There is no native CLI switch yet. `d3r acp` and terminal authentication still
 use the working proxy. The native tests exercise the protocol over
 newline-delimited byte streams with injected fake runtimes; they require neither
 Pi nor provider credentials and make no model requests.
+
+### Embedded model runtime
+
+`@d3r/adapter-pi/embedded` exports `createEmbeddedRuntime(options)`, a session
+factory accepted by the native server. It embeds `pi-ai` and `pi-agent-core`
+(version 0.85.1; Node 22.19+), without the Pi executable, extension loader, or
+Pi session files. The caller supplies a model, a model collection, a system
+prompt, and optionally a thinking level. Provider registration and credentials
+belong to the caller; importing this module does not discover configuration or
+log in.
+
+Each session retains completed and token-limited conversation turns in memory.
+Failed or cancelled turns are rolled back from the model context, though already
+streamed output may remain visible in the client. Text and thought deltas carry
+stable IDs per response block. Cancellation must settle before disposal, which
+releases only that runtime's provider resources.
+
+This slice exposes no tools and permits only one model turn per prompt.
+Unexpected tool requests fail instead of retrying indefinitely. Resource links
+require an explicit `resolveResource` callback that enforces access policy,
+honors its abort signal, and returns text; there is no automatic filesystem or
+network fallback. Authentication UI/storage, tools, compaction, persistence, and
+the native CLI switch remain separate work. Legacy Pi peer dependencies remain
+for the existing interactive extensions and proxy path.

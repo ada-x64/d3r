@@ -7,6 +7,7 @@
   "exports": {
     ".": "./compile.ts",
     "./runtime": "./runtime.ts",
+    "./embedded": "./embedded.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -30,6 +31,8 @@
   "dependencies": {
     "@d3r/core": "workspace:*",
     "@d3r/tools": "workspace:*",
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
     "gray-matter": "^4",
     "yaml": "^2",
     "zod": "^3"
