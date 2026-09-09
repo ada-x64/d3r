@@ -107,8 +107,11 @@ const promptTerminal = async (
 			: password({
 					message,
 					mask: "*",
+					// Providers interpret empty text settings (for example, the default GitHub host).
 					validate: (input: string) =>
-						input.trim() ? undefined : "A value is required",
+						prompt.type === "text" || input.trim()
+							? undefined
+							: "A value is required",
 				}));
 		if (combined.aborted) {
 			throw new Error("Authentication cancelled");

@@ -26,7 +26,9 @@ import {
 	parseSessionId,
 	type SessionParams,
 } from "./params.ts";
+import { responseNotifications } from "./response-notifications.ts";
 import {
+	commandUpdate,
 	configureSession,
 	disposeSession,
 	disposeSessions,
@@ -76,6 +78,7 @@ export const connectNativeServer = (
 		authEpoch: 0,
 		capabilities: {} as ClientCapabilities,
 	};
+	const output = responseNotifications(stream);
 	const sessions = new Map<string, Session>();
 	const opening = new Map<
 		string,
@@ -252,18 +255,48 @@ export const connectNativeServer = (
 				})(),
 			),
 		)
-		.onRequest("session/new", parseNewSession, ({ params, client, signal }) =>
-			track(
-				(async () => {
-					await authorize();
-					const session = await openSession(randomUUID(), params, {
-						client,
-						signal,
-						mode: "new",
-					});
-					return { sessionId: session.id, ...sessionMetadata(session) };
-				})(),
-			),
+		.onRequest(
+			"session/new",
+			parseNewSession,
+			({ params, client, signal, requestId }) =>
+				track(
+					(async () => {
+						await authorize();
+						const session = await openSession(randomUUID(), params, {
+							client,
+							signal,
+							mode: "new",
+						});
+						try {
+							const response = {
+								sessionId: session.id,
+								...sessionMetadata(session),
+							};
+							const update = commandUpdate(session.runtime);
+							signal.throwIfAborted();
+							if (update) {
+								// Clients register a new ID from the response, so earlier updates are lost.
+								output.defer(
+									requestId,
+									{
+										jsonrpc: "2.0",
+										method: "session/update",
+										params: { sessionId: session.id, update },
+									},
+									signal,
+								);
+							}
+							return response;
+						} catch (error) {
+							sessions.delete(session.id);
+							await disposeSession(session);
+							if (signal.aborted) {
+								throw RequestError.requestCancelled();
+							}
+							throw runtimeError(error, "Could not create agent runtime");
+						}
+					})(),
+				),
 		)
 		.onRequest("session/load", parseLoadSession, ({ params, client, signal }) =>
 			track(
@@ -359,9 +392,10 @@ export const connectNativeServer = (
 			sessions.get(params.sessionId)?.pending?.abort();
 			opening.get(params.sessionId)?.controller.abort();
 		})
-		.connect(stream);
+		.connect(output.stream);
 	const abort = () => {
 		state.closed = true;
+		output.close(connection.signal.reason);
 		opening.forEach((row) => row.controller.abort());
 		sessions.forEach((session) => session.pending?.abort());
 	};

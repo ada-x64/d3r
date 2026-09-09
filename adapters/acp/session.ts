@@ -96,25 +96,35 @@ export const checkpointSession = async (session: Session): Promise<void> => {
 		throw RequestError.internalError(undefined, "Could not checkpoint session");
 	}
 };
-/** Send runtime commands on new/load/resume and after turns that may change them. */
+/** Detach the runtime's command menu using the same mapping for setup and later turns. */
+export const commandUpdate = (
+	runtime: RuntimeSession,
+): SessionUpdate | undefined =>
+	runtime.getCommands
+		? {
+				sessionUpdate: "available_commands_update",
+				availableCommands: runtime
+					.getCommands()
+					.map(({ name, description, inputHint }) => ({
+						name,
+						description,
+						...(inputHint === undefined ? {} : { input: { hint: inputHint } }),
+					})),
+			}
+		: undefined;
+/** Load/resume already have a known ID; new sessions publish only after their response. */
 export const publishCommands = async (
 	session: Session,
 	client: AgentContext,
 	signal: AbortSignal,
 ): Promise<void> => {
-	if (!session.runtime.getCommands || signal.aborted) {
+	if (signal.aborted) {
 		return;
 	}
-	const update: SessionUpdate = {
-		sessionUpdate: "available_commands_update",
-		availableCommands: session.runtime
-			.getCommands()
-			.map(({ name, description, inputHint }) => ({
-				name,
-				description,
-				...(inputHint === undefined ? {} : { input: { hint: inputHint } }),
-			})),
-	};
+	const update = commandUpdate(session.runtime);
+	if (!update) {
+		return;
+	}
 	await waitFor(
 		client.notify("session/update", { sessionId: session.id, update }),
 		signal,

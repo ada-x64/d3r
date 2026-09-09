@@ -205,7 +205,9 @@ const activateSession = async (
 			}
 		}, Promise.resolve());
 	}
-	await publishCommands(session, request.client, request.signal);
+	if (request.mode !== "new") {
+		await publishCommands(session, request.client, request.signal);
+	}
 	request.signal.throwIfAborted();
 };
 /** Even setup failures release all resources, including a runtime whose restoration failed. */

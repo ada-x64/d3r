@@ -115,12 +115,52 @@ describe.skipIf(process.platform === "win32")("auth CLI", () => {
 		expect(password).toHaveBeenCalledWith(
 			expect.objectContaining({ mask: "*" }),
 		);
+		const [[keyPrompt]] = vi.mocked(password).mock.calls;
+		expect(keyPrompt.validate?.("")).toBe("A value is required");
+		expect(keyPrompt.validate?.("   ")).toBe("A value is required");
 		expect(login).toHaveBeenCalledWith(
 			"openai",
 			"api_key",
 			expect.objectContaining({ prompt: expect.any(Function) }),
 		);
 		expect(JSON.stringify(write.mock.calls)).not.toContain("fake-api-key");
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("passes a blank optional GitHub host through to the provider", async () => {
+		const models = await createModelRuntime({ stateDir });
+		const provider = models.getProvider("github-copilot")!;
+		const host = vi.fn();
+		models.setProvider({
+			...provider,
+			auth: {
+				oauth: {
+					...provider.auth.oauth!,
+					login: async (interaction) => {
+						host(
+							await interaction.prompt({
+								type: "text",
+								message: "GitHub Enterprise URL/domain (blank for github.com)",
+								placeholder: "company.ghe.com",
+							}),
+						);
+						return fakeOAuth;
+					},
+				},
+			},
+		});
+		vi.mocked(password).mockImplementationOnce(async (options) => {
+			expect(options.validate?.("")).toBeUndefined();
+			expect(options.validate?.("   ")).toBeUndefined();
+			return "";
+		});
+		await runTerminalLogin(
+			{ provider: "github-copilot", type: "oauth" },
+			{ models, stateDir, write: vi.fn(), interactive: () => true },
+		);
+		expect(host).toHaveBeenCalledWith("");
+		const store = await createCredentialStore({ stateDir });
+		expect(await store.read("github-copilot")).toEqual(fakeOAuth);
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
@@ -186,6 +226,8 @@ describe.skipIf(process.platform === "win32")("auth CLI", () => {
 		);
 		const freeFormPrompts = 2;
 		expect(password).toHaveBeenCalledTimes(freeFormPrompts);
+		const [[manualPrompt]] = vi.mocked(password).mock.calls;
+		expect(manualPrompt.validate?.("")).toBe("A value is required");
 		expect(JSON.stringify(write.mock.calls)).not.toContain("fake-api-key");
 		expect(JSON.stringify(write.mock.calls)).not.toContain("fake-access");
 		expect(fetch).not.toHaveBeenCalled();
