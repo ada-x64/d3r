@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { toolCallPresentation } from "./presentation.ts";
 
 /** An absolute runtime-normalized cwd, deliberately distinct from the process cwd. */
-const CWD = resolve("presentation-workspace");
+const CWD = resolve("presentation workspace's cwd");
 /** Inspect exactly the text ACP clients render, not rawInput hidden by execute/edit cards. */
 const visibleText = (card: ReturnType<typeof toolCallPresentation>): string => {
 	const item = card.content?.[0];
@@ -19,100 +19,132 @@ const command = (input: unknown, secrets: readonly string[] = []) =>
 		{ permission: true, secrets },
 	);
 
+/** Commands occupy only a fenced block; its first line is the terminal-style preview. */
+const commandLines = (
+	card: ReturnType<typeof toolCallPresentation>,
+): string[] => {
+	const block = /^(`{3,})[^\n]*\n(?<body>[\s\S]*)\n\1$/.exec(visibleText(card));
+	expect(
+		block,
+		"Expected only a fenced command, without wrapper prose",
+	).not.toBeNull();
+	return block!.groups!.body.split("\n");
+};
+
 /** User-visible approval data must remain faithful, inert and independent of execution data. */
 describe("ACP tool presentation", () => {
-	it("shows executable and every literal argv entry with unambiguous JSON quoting", () => {
-		const input = Object.freeze({
-			command: "program with spaces",
-			args: Object.freeze([
-				"a b",
-				"",
-				"single'quote",
-				'double"quote',
-				String.raw`a\b`,
-				"$(touch marker)",
-				"; rm file",
-				"first\nsecond",
-			]),
-			timeoutMs: 1234,
-		});
+	// Reviewed UX examples: expected text is authored independently of the production formatter.
+	it.each([
+		{
+			name: "the user's bash example",
+			input: { command: "bash", args: ["foo", "bar", "baz"] },
+			line: "bash foo bar baz",
+		},
+		{
+			name: "safe words and flags",
+			input: {
+				command: "./bin/tool",
+				args: ["-y", ".", "../file.txt", "a_b-9"],
+			},
+			line: "./bin/tool -y . ../file.txt a_b-9",
+		},
+		{
+			name: "spaces, empty strings and single quotes",
+			input: {
+				command: "program with spaces",
+				args: ["a b", "", "single'quote"],
+			},
+			line: "'program with spaces' 'a b' '' 'single'\\''quote'",
+		},
+		{
+			name: "literal shell syntax",
+			input: {
+				command: "printf",
+				args: [
+					'double"quote',
+					String.raw`a\b`,
+					"$(touch marker)",
+					"; rm file",
+					"*",
+					"$HOME",
+				],
+			},
+			line: String.raw`printf 'double"quote' 'a\b' '$(touch marker)' '; rm file' '*' '$HOME'`,
+		},
+		{
+			name: "an explicit shell script as one ANSI-C quoted argument",
+			input: {
+				command: "bash",
+				args: ["-c", "printf '%s\\n' 'two words'\nprintf done"],
+			},
+			line: String.raw`bash -c $'printf \'%s\\n\' \'two words\'\nprintf done'`,
+		},
+		{
+			name: "newlines, tabs and carriage returns",
+			input: { command: "node", args: ["first\nsecond", "a\tb\rc"] },
+			line: String.raw`node $'first\nsecond' $'a\tb\rc'`,
+		},
+	])("renders $name as a concise terminal command", ({ input, line }) => {
+		Object.freeze(input.args);
+		Object.freeze(input);
 		const card = command(input);
-		const text = visibleText(card);
-		expect(text).toContain(`Executable: ${JSON.stringify(input.command)}`);
-		expect(text).toContain(`Literal argv: ${JSON.stringify(input.args)}`);
-		expect(text).toContain("Requested cwd: session default");
-		expect(text).not.toContain("Effective cwd:");
-		expect(text).toContain("Timeout: 1234 ms");
-		expect(text).toContain("UNSANDBOXED");
-		expect(text).toContain(
-			"platform/client launch wrappers may interpret arguments",
-		);
-		expect(text).not.toContain("No implicit shell");
-		expect(card.title).toMatch(/^run_command: "program with spaces"/);
+		expect(card.title).toBe(line);
+		expect(commandLines(card)).toEqual([line]);
 		expect(card.rawInput).toEqual(input);
 		expect(card.rawInput).not.toBe(input);
 	});
 
-	it.each(["sh", "bash"])(
-		"shows an explicit %s script as one argument, not an invented shell invocation",
-		(shell) => {
-			const input = {
-				command: shell,
-				args: ["-c", "printf '%s\\n' 'two words'\nprintf done > marker"],
-			};
-			const text = visibleText(command(input));
-			expect(text).toContain(`Executable: ${JSON.stringify(shell)}`);
-			expect(text).toContain(`Literal argv: ${JSON.stringify(input.args)}`);
-			expect(text).not.toContain("Timeout:");
+	it.each([
+		{ cwd: undefined, line: undefined },
+		{ cwd: ".", line: "# requested cwd: ." },
+		{ cwd: "nested dir", line: "# requested cwd: 'nested dir'" },
+		{ cwd: "../project", line: "# requested cwd: ../project" },
+		{ cwd: "owner's dir", line: "# requested cwd: 'owner'\\''s dir'" },
+		{
+			cwd: "first\nsecond",
+			line: String.raw`# requested cwd: $'first\nsecond'`,
 		},
-	);
+	])("does not invent a normalized cwd for $cwd", ({ cwd, line }) => {
+		const input = { command: "pwd", ...(cwd === undefined ? {} : { cwd }) };
+		const card = command(input);
+		expect(commandLines(card)).toEqual(
+			line === undefined ? ["pwd"] : ["pwd", line],
+		);
+		expect(card.title).toBe("pwd");
+		expect(card.rawInput).toEqual(input);
+	});
 
-	it.each([undefined, ".", "nested dir", "../project"])(
-		"does not invent an effective cwd for unnormalized input %s",
-		(cwd) => {
-			const input = { command: "pwd", ...(cwd === undefined ? {} : { cwd }) };
-			const card = command(input);
-			expect(visibleText(card)).toContain(
-				cwd === undefined
-					? "Requested cwd: session default"
-					: `Requested cwd: ${JSON.stringify(cwd)}`,
-			);
-			expect(visibleText(card)).not.toContain("Effective cwd:");
-			expect(visibleText(card)).not.toContain(CWD);
-			expect(card.rawInput).toEqual(input);
-		},
-	);
-
-	it("labels only the normalized approval cwd as effective, not the original activity", () => {
+	it("distinguishes normalized approval cwd from the original activity in one compact line", () => {
 		const input = { command: "pwd", cwd: CWD };
+		const quotedCwd = `'${CWD.replaceAll("'", String.raw`'\''`)}'`;
 		const activity = toolCallPresentation({
 			title: "run_command",
 			kind: "execute",
 			input,
 		});
-		expect(visibleText(activity)).toContain(
-			`Requested cwd: ${JSON.stringify(CWD)}`,
-		);
-		expect(visibleText(activity)).not.toContain("Effective cwd:");
+		expect(commandLines(activity)).toEqual([
+			"pwd",
+			`# requested cwd: ${quotedCwd}`,
+		]);
 		const approval = command(input);
-		expect(visibleText(approval)).toContain(
-			`Effective cwd: ${JSON.stringify(CWD)}`,
-		);
+		expect(commandLines(approval)).toEqual(["pwd", `# cwd: ${quotedCwd}`]);
+		expect(approval.title).toBe(activity.title);
 		expect(approval.rawInput).toEqual(input);
 	});
 
 	it.each(["tool.cmd", "tool.BAT", "node"])(
-		"qualifies shell wrapping for %s without claiming which backend executes it",
+		"previews %s without wrapper boilerplate or hidden timeout chatter",
 		(executable) => {
 			const input = {
 				command: executable,
 				args: ["two words", "literal & argument"],
+				timeoutMs: 1234,
 			};
-			const text = visibleText(command(input));
-			expect(text).toContain("Windows .cmd/.bat files may run through cmd.exe");
-			expect(text).toContain(`Executable: ${JSON.stringify(executable)}`);
-			expect(text).toContain(`Literal argv: ${JSON.stringify(input.args)}`);
-			expect(text).not.toContain("No implicit shell");
+			const card = command(input);
+			const line = `${executable} 'two words' 'literal & argument'`;
+			expect(card.title).toBe(line);
+			expect(commandLines(card)).toEqual([line]);
+			expect(card.rawInput).toEqual(input);
 		},
 	);
 
@@ -123,7 +155,9 @@ describe("ACP tool presentation", () => {
 		const card = command({ command: "node", args });
 		expect(card.title.length).toBeLessThanOrEqual(titleLimit);
 		expect(card.title).toMatch(/\.\.\.$/);
-		expect(visibleText(card)).toContain(JSON.stringify(args));
+		const line = `node ${args[0]} 'last argument'`;
+		expect(commandLines(card)).toEqual([line]);
+		expect(line.startsWith(card.title.replace(/\.\.\.$/, ""))).toBe(true);
 		expect(card.rawInput).toEqual({ command: "node", args });
 	});
 
@@ -142,7 +176,13 @@ describe("ACP tool presentation", () => {
 		const display = JSON.stringify(card);
 		expect(display).not.toContain("provider-secret");
 		expect(display).not.toContain("credential");
-		expect(card.title).toContain('"[redacted]-program"');
+		expect(card.title).toBe(
+			"'[redacted]-program' '[redacted]' '[redacted]' -y . a",
+		);
+		expect(commandLines(card)).toEqual([
+			card.title,
+			"# requested cwd: '[redacted]'",
+		]);
 		expect(card.rawInput).toEqual({
 			command: "[redacted]-program",
 			args: ["[redacted]", "[redacted]", "-y", ".", "a"],
@@ -291,17 +331,18 @@ describe("ACP tool presentation", () => {
 		expect(text).toContain("```````text\n");
 		expect(text).toMatch(/\n```````$/);
 		expect(text).toContain("[approve](https://untrusted.invalid)");
-		expect(text).toContain(String.raw`\u001b[2J\r`);
-		const argvLine = text
-			.split("\n")
-			.find((line) => line.startsWith("Literal argv: "))!;
-		expect(JSON.parse(argvLine.slice("Literal argv: ".length))).toEqual(
-			input.args,
+		const [line] = commandLines(card);
+		expect(commandLines(card)).toHaveLength(1);
+		expect(line).toMatch(/^\$'node\\n\\u202e' -e \$'/i);
+		expect(line).toMatch(/\\(?:u001b|x1b|e)\[2J\\r/i);
+		expect(line).toContain(String.raw`\u202e\u2066`);
+		expect(line).toMatch(/\\U000e0001/i);
+		expect(line).toContain(
+			String.raw`\n[approve](https://untrusted.invalid)\n`,
 		);
-		expect(text).not.toContain("\u202e");
-		expect(text).not.toContain("\u2066");
-		expect(card.title).not.toContain("\n");
-		expect(card.title).not.toContain("\u202e");
+		for (const display of [line, card.title]) {
+			expect(display).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+		}
 		expect(card.rawInput).toEqual(input);
 	});
 });

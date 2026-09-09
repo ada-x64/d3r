@@ -213,12 +213,15 @@ Trust is not carried across restoration. File mutations, commands, MCP
 connections, and MCP calls require separate approval. Missing, denied, unknown,
 or cancelled permission results do not authorize execution.
 
-Command approvals show the executable, literal arguments, effective working
-directory, and execution warning in visible ACP content, not only raw input. The
-compact title may shorten a long command; the detail preview retains the
-arguments with JSON quoting and masks recognized credential values. It is not a
-shell command to copy verbatim. Platform/client wrappers may apply, including
-`cmd.exe` for Windows batch files. The choices remain **Allow once** and
+Command approvals use a terminal-style preview, such as `bash foo bar baz`,
+without warning paragraphs or JSON argument dumps. Spaces, empty arguments, and
+shell metacharacters are quoted; nonprinting characters use visible Bash-style
+escapes. A compact `# cwd: ...` line identifies the runtime-normalized directory
+when supplied; unnormalized activity uses `# requested cwd: ...` instead. The
+title may shorten a long command, but the detail retains every argument and
+masks recognized credentials. This formatting is display-only: execution still
+uses the original executable, argv, cwd, and timeout, including any
+platform/client launch wrappers. The choices remain **Allow once** and
 **Reject**; remembered approvals are not implemented.
 
 An approval-gated tool waits for its permission response before executing. This

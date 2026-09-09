@@ -1545,24 +1545,32 @@ describe("native ACP shipped-workflow journeys", () => {
 	);
 
 	it.each(["allowed", "denied", "cancelled"] as const)(
-		"shows literal command approval before a real process is %s",
+		"shows concise command approval before a real process is %s",
 		// oxlint-disable-next-line max-statements -- Keep the pending permission, process effect and workflow outcome together.
 		async (decision) => {
 			const markerName = "marker file.txt";
 			const literal = "literal value with spaces & no shell";
-			const args = [
-				"-e",
-				"require('node:fs').writeFileSync(process.argv[1], process.argv[2]); console.log(process.argv[2]);",
-				markerName,
-				literal,
-			];
+			const input = Object.freeze({
+				command: process.execPath,
+				args: Object.freeze([
+					"-e",
+					"require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(1), cwd: process.cwd() })); console.log(process.argv[2]);",
+					markerName,
+					literal,
+					"",
+					"single'quote",
+					'double"quote',
+					String.raw`a\b`,
+					"first\nsecond",
+					"$(touch should-not-exist)",
+					"last-safe-word",
+				]),
+				cwd: "command cwd",
+				timeoutMs: 10_000,
+			});
 			const scripts: JourneyScripts = {
 				aggregator: [
-					journeyCall("run_command", {
-						command: process.execPath,
-						args,
-						cwd: "command cwd",
-					}),
+					journeyCall("run_command", input),
 					journeyReport(
 						decision === "allowed"
 							? "The local probe completed."
@@ -1580,7 +1588,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				],
 			};
 			const j = await open(scripts);
-			const cwd = resolve(j.cwd, "command cwd");
+			const cwd = resolve(j.cwd, input.cwd);
 			const marker = resolve(cwd, markerName);
 			await mkdir(cwd);
 			const asked = deferred<RequestPermissionRequest>();
@@ -1611,28 +1619,47 @@ describe("native ACP shipped-workflow journeys", () => {
 					}),
 				]);
 				const preview = journeyToolText(permission.toolCall);
-				for (const text of [
-					JSON.stringify(process.execPath),
-					JSON.stringify(args),
-					JSON.stringify(cwd),
-				]) {
-					expect(preview).toContain(text);
-				}
-				expect(preview).toMatch(/UNSANDBOXED/);
-				expect(preview).toMatch(/outside the workspace/);
-				expect(preview).toMatch(/literal argv/i);
+				const block =
+					/^(`{3,})[^\n]*\n(?<line>[^\n]+)\n(?<cwdLine>[^\n]+)\n\1$/.exec(
+						preview,
+					);
+				expect(
+					block,
+					"Only the full command and compact cwd should be displayed",
+				).not.toBeNull();
+				const { line, cwdLine } = block!.groups!;
+				const executable = /^[A-Za-z0-9_./:-]+$/.test(input.command)
+					? input.command
+					: `'${input.command.replaceAll("'", String.raw`'\''`)}'`;
+				expect(line.startsWith(`${executable} -e `)).toBe(true);
+				expect(line).toContain("process.argv.slice(1)");
+				expect(
+					line.endsWith(
+						String.raw`'marker file.txt' 'literal value with spaces & no shell' '' 'single'\''quote' 'double"quote' 'a\b' $'first\nsecond' '$(touch should-not-exist)' last-safe-word`,
+					),
+				).toBe(true);
+				expect(cwdLine).toBe(
+					`# cwd: '${cwd.replaceAll("'", String.raw`'\''`)}'`,
+				);
+				expect(preview).not.toMatch(
+					/run_command:|UNSANDBOXED|wrappers|Executable:|Literal argv:|timeout/i,
+				);
+				expect(permission.toolCall.rawInput).toEqual({ ...input, cwd });
 
 				const { title } = permission.toolCall;
-				expect(title).toContain(
-					`run_command: ${JSON.stringify(process.execPath)}`,
-				);
-				expect(title).toContain('["-e",');
-				expect(journeyTools(f.updates)).toContainEqual(
-					expect.objectContaining({
-						toolCallId: permission.toolCall.toolCallId,
-						title,
-					}),
-				);
+				expect(title!.startsWith(`${executable} -e `)).toBe(true);
+				const titleLimit = 100;
+				expect(title!.length).toBeLessThanOrEqual(titleLimit);
+				expect(line.startsWith(title!.replace(/\.\.\.$/, ""))).toBe(true);
+				const initial = journeyTools(f.updates).find(
+					({ toolCallId }) => toolCallId === permission.toolCall.toolCallId,
+				)!;
+				expect(initial.title).toBe(title);
+				expect(journeyToolText(initial).split("\n").slice(1, -1)).toEqual([
+					line,
+					"# requested cwd: 'command cwd'",
+				]);
+				expect(initial.rawInput).toEqual(input);
 				await expect(readFile(marker)).rejects.toMatchObject({
 					code: "ENOENT",
 				});
@@ -1676,7 +1703,14 @@ describe("native ACP shipped-workflow journeys", () => {
 						decision === "allowed" ? "completed" : "failed",
 					);
 					if (decision === "allowed") {
-						await expect(readFile(marker, "utf8")).resolves.toBe(literal);
+						// The raw tool payload, never parsed preview text, is the execution oracle.
+						const observed = JSON.parse(await readFile(marker, "utf8"));
+						const nodeEvalArgCount = 2;
+						expect(observed).toEqual({
+							argv: input.args.slice(nodeEvalArgCount),
+							cwd,
+						});
+						expect(completed.rawInput).toEqual(input);
 						expect(JSON.stringify(result)).toContain(literal);
 						expect(journeyToolText(completed)).toContain(`${literal}\n`);
 						expect(journeyToolText(completed)).toContain("Exit code: 0");
@@ -1709,9 +1743,14 @@ describe("native ACP shipped-workflow journeys", () => {
 					code: "ENOENT",
 				});
 			}
+			await expect(
+				readFile(resolve(cwd, "should-not-exist")),
+			).rejects.toMatchObject({ code: "ENOENT" });
 			expect(
-				j.permissions.filter(({ toolCall }) =>
-					toolCall.title?.startsWith("run_command:"),
+				j.permissions.filter(
+					({ toolCall }) =>
+						(toolCall.rawInput as { command?: unknown } | undefined)
+							?.command === input.command,
 				),
 			).toHaveLength(1);
 			await f.peer.agent.request("session/close", { sessionId });

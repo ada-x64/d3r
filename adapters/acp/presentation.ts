@@ -68,8 +68,8 @@ const maskInput = (value: Json, secrets: readonly string[]): Json => {
 		]),
 	);
 };
-/** JSON Unicode escapes use four hexadecimal digits per UTF-16 code unit. */
-const UNICODE_ESCAPE = { radix: 16, width: 4 };
+/** Unicode escapes distinguish UTF-16 units from full code points. */
+const UNICODE_ESCAPE = { radix: 16, width: 4, codePointWidth: 8 };
 /** Control and formatting characters must not rewrite or visually reorder an approval. */
 const escapeControls = (text: string): string =>
 	text.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (character) =>
@@ -89,6 +89,43 @@ const quote = (value: Json, indent?: number): string =>
 		.split("\n")
 		.map(escapeControls)
 		.join("\n");
+/** Bash-style notation is presentation only; execution still receives literal argv. */
+const shellWord = (value: string): string => {
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) {
+		return value;
+	}
+	if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(value)) {
+		const escaped = [...value]
+			.map((character) => {
+				if (character === "\\") {
+					return String.raw`\\`;
+				}
+				if (character === "'") {
+					return String.raw`\'`;
+				}
+				if (character === "\n") {
+					return String.raw`\n`;
+				}
+				if (character === "\r") {
+					return String.raw`\r`;
+				}
+				if (character === "\t") {
+					return String.raw`\t`;
+				}
+				if (!/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(character)) {
+					return character;
+				}
+				const code = character.codePointAt(0)!;
+				const hex = code.toString(UNICODE_ESCAPE.radix);
+				return hex.length <= UNICODE_ESCAPE.width
+					? `\\u${hex.padStart(UNICODE_ESCAPE.width, "0")}`
+					: `\\U${hex.padStart(UNICODE_ESCAPE.codePointWidth, "0")}`;
+			})
+			.join("");
+		return `$'${escaped}'`;
+	}
+	return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+};
 /** A longer fence keeps embedded Markdown, links and fence terminators inert. */
 const codeBlock = (text: string): string => {
 	const fence = "`".repeat(
@@ -124,13 +161,12 @@ const commandCwd = (
 	cwd: string | undefined,
 	permission: boolean,
 	secrets: readonly string[],
-): string => {
+): string | undefined => {
 	if (cwd === undefined) {
-		return "Requested cwd: session default (resolved by the runtime before approval)";
+		return undefined;
 	}
-	const label =
-		permission && isAbsolute(cwd) ? "Effective cwd" : "Requested cwd";
-	return `${label}: ${quote(maskInput(cwd, secrets))}`;
+	const label = permission && isAbsolute(cwd) ? "cwd" : "requested cwd";
+	return `# ${label}: ${shellWord(redactSessionData(cwd, secrets))}`;
 };
 /** Render a detached, display-only ACP card; no execution or permission policy lives here. */
 export const toolCallPresentation = (
@@ -156,23 +192,13 @@ export const toolCallPresentation = (
 			: `Input (JSON; credential values may be redacted):\n${codeBlock(quote(rawInput!, JSON_INDENT))}`;
 	if (command?.success) {
 		const value = command.data;
-		const executable = quote(maskInput(value.command, orderedSecrets));
-		const args = quote(maskInput(value.args, orderedSecrets));
-		displayTitle = `run_command: ${executable} ${args}`;
-		text = [
-			"UNSANDBOXED: This program can access files and the network outside the workspace with your user permissions.",
-			"Executable and requested argv use JSON quoting, not shell command-line syntax. Explicit shells and platform/client launch wrappers may interpret arguments; Windows .cmd/.bat files may run through cmd.exe. Credential values may be redacted.",
-			codeBlock(
-				[
-					`Executable: ${executable}`,
-					`Literal argv: ${args}`,
-					commandCwd(value.cwd, permission, orderedSecrets),
-					...(value.timeoutMs === undefined
-						? []
-						: [`Timeout: ${value.timeoutMs} ms`]),
-				].join("\n"),
-			),
-		].join("\n\n");
+		displayTitle = [value.command, ...value.args]
+			.map((word) => shellWord(redactSessionData(word, orderedSecrets)))
+			.join(" ");
+		const cwd = commandCwd(value.cwd, permission, orderedSecrets);
+		text = codeBlock(
+			[displayTitle, ...(cwd === undefined ? [] : [cwd])].join("\n"),
+		);
 	}
 	return {
 		title: compactTitle(displayTitle),

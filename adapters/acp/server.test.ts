@@ -40,6 +40,17 @@ import { createEmbeddedRuntime } from "../pi/embedded.ts";
 import { MODEL_B, nativeFixture } from "../../cli/src/native-test-support.ts";
 import { type ClientServices } from "./client.ts";
 
+/** Inspect the preview clients render, independently of the hidden execution payload. */
+const visibleToolText = ({
+	content,
+}: Pick<RequestPermissionRequest["toolCall"], "content">): string => {
+	const part = content?.[0];
+	if (part?.type !== "content" || part.content.type !== "text") {
+		throw new Error("Missing visible tool preview");
+	}
+	return part.content.text;
+};
+
 /** Contract tests for native session ownership rather than SDK internals. */
 describe("native ACP session foundation", () => {
 	const cleanup: (() => Promise<void>)[] = [];
@@ -871,17 +882,17 @@ describe("native ACP full surface", () => {
 						update.sessionUpdate === "tool_call" ||
 						update.sessionUpdate === "tool_call_update",
 				);
-			expect(card.title).toMatch(/^run_command: "node"/);
-			expect(card.content?.[0]).toMatchObject({
-				type: "content",
-				content: {
-					type: "text",
-					text: expect.stringContaining(
-						`Effective cwd: ${JSON.stringify(resolve(CWD, input.cwd))}`,
-					),
-				},
+			const line = String.raw`node -e $'console.log(\'two words\')\nconsole.log(\'done\')' '[redacted]'`;
+			const quotedCwd = `'${input.cwd.replaceAll("'", String.raw`'\''`)}'`;
+			expect(card.title).toBe(line);
+			expect(visibleToolText(card).split("\n").slice(1, -1)).toEqual([
+				line,
+				`# cwd: ${quotedCwd}`,
+			]);
+			expect(card.rawInput).toEqual({
+				...input,
+				args: [...input.args.slice(0, -1), "[redacted]"],
 			});
-			expect(JSON.stringify(card.content)).toContain("Timeout: 3000 ms");
 			expect(JSON.stringify([permissions, updates])).not.toContain(secret);
 			expect(updates.map((update) => update.status)).toEqual(
 				optionId === "allow"
@@ -891,10 +902,10 @@ describe("native ACP full surface", () => {
 			for (const update of updates) {
 				expect(update.title).toBe(card.title);
 				if (update.status === "pending") {
-					expect(JSON.stringify(update.content)).toContain("Requested cwd:");
-					expect(JSON.stringify(update.content)).not.toContain(
-						"Effective cwd:",
-					);
+					expect(visibleToolText(update).split("\n").slice(1, -1)).toEqual([
+						line,
+						`# requested cwd: ${quotedCwd}`,
+					]);
 				} else {
 					expect(update.content?.[0]).toEqual(card.content?.[0]);
 				}
@@ -911,6 +922,9 @@ describe("native ACP full surface", () => {
 				rawOutput: { result: "retained" },
 			});
 			expect(execute).toHaveBeenCalledTimes(optionId === "allow" ? 1 : 0);
+			if (optionId === "allow") {
+				expect(execute).toHaveBeenCalledWith(input);
+			}
 			expect(input.args.at(-1)).toBe(secret);
 		},
 	);
@@ -918,7 +932,7 @@ describe("native ACP full surface", () => {
 	// oxlint-disable-next-line max-statements -- One real native journey binds schema input, held approval and subprocess cwd.
 	it("approves and executes the same cwd when the ACP workspace is a symlink", async () => {
 		const root = await mkdtemp(
-			resolve(await realpath(tmpdir()), "d3r-acp-command-cwd-"),
+			resolve(await realpath(tmpdir()), "d3r-acp-command cwd-"),
 		);
 		directories.push(root);
 		const home = resolve(root, "home");
@@ -1028,7 +1042,10 @@ describe("native ACP full surface", () => {
 			deps.createSession,
 			deps,
 			client().onRequest("session/request_permission", async ({ params }) => {
-				if (params.toolCall.title?.startsWith("run_command:")) {
+				if (
+					(params.toolCall.rawInput as { command?: unknown } | undefined)
+						?.command === input.command
+				) {
 					seen.resolve(params);
 					return {
 						outcome: {
@@ -1059,37 +1076,38 @@ describe("native ACP full surface", () => {
 				timeoutMs: 30_000,
 			});
 			const preview = toolCall.content?.[0];
-			expect(preview).toMatchObject({
-				type: "content",
-				content: {
-					type: "text",
-					text: expect.stringContaining(
-						`Effective cwd: ${JSON.stringify(project)}`,
-					),
-				},
-			});
-			expect(JSON.stringify(preview)).not.toContain(
-				JSON.stringify(resolve(link, input.cwd)).slice(1, -1),
+			const [line, cwdLine, ...extraLines] = visibleToolText(toolCall)
+				.split("\n")
+				.slice(1, -1);
+			expect(cwdLine).toBe(
+				`# cwd: '${project.replaceAll("'", String.raw`'\''`)}'`,
 			);
+			expect(extraLines).toEqual([]);
+			expect(line).not.toMatch(/run_command:|Executable:|Literal argv:/);
+			expect(toolCall.title).toBeTruthy();
+			const titleLimit = 100;
+			expect(toolCall.title!.length).toBeLessThanOrEqual(titleLimit);
+			expect(line.startsWith(toolCall.title!.replace(/\.\.\.$/, ""))).toBe(
+				true,
+			);
+			expect(visibleToolText(toolCall)).not.toContain(resolve(link, input.cwd));
 			const initial = f.updates
 				.map(({ update }) => update)
-				.find(
-					(update) =>
-						update.sessionUpdate === "tool_call" &&
-						update.toolCallId === toolCall.toolCallId,
-				);
+				.filter((update) => update.sessionUpdate === "tool_call")
+				.find((update) => update.toolCallId === toolCall.toolCallId);
 			expect(initial).toMatchObject({
 				content: [
 					{
 						type: "content",
 						content: {
 							type: "text",
-							text: expect.stringContaining('Requested cwd: "../project"'),
+							text: expect.stringContaining("\n# requested cwd: ../project\n"),
 						},
 					},
 				],
 			});
-			expect(JSON.stringify(initial)).not.toContain("Effective cwd:");
+			expect(initial?.title).toBe(toolCall.title);
+			expect(visibleToolText(initial!)).not.toContain("# cwd:");
 			await expect(
 				readFile(resolve(project, "executed-cwd.txt"), "utf8"),
 			).rejects.toMatchObject({ code: "ENOENT" });
@@ -1158,7 +1176,19 @@ describe("native ACP full surface", () => {
 		const { sessionId } = await f.newSession();
 		await f.prompt(sessionId);
 		const card = permissions[0].toolCall;
-		expect(JSON.stringify(card.content)).toContain("Timeout: 30000 ms");
+		expect(card.title).toBe("pwd");
+		expect(visibleToolText(card)).toContain("\n# cwd: ");
+		expect(visibleToolText(card)).not.toMatch(/timeout|default|30000/i);
+		expect(card.rawInput).toEqual({
+			command: "pwd",
+			args: [],
+			cwd: CWD,
+			timeoutMs: 30_000,
+		});
+		const initial = f.updates
+			.map(({ update }) => update)
+			.find((update) => update.sessionUpdate === "tool_call");
+		expect(visibleToolText(initial!).split("\n").slice(1, -1)).toEqual(["pwd"]);
 		const updates = f.updates
 			.map(({ update }) => update)
 			.filter((update) => update.sessionUpdate === "tool_call_update");
