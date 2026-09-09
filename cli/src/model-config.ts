@@ -1,5 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import {
 	ModelConfig,
 	resolveModelConfig,
@@ -8,6 +7,15 @@ import {
 } from "@d3r/core/model-config";
 import { fail, ok, type Result } from "@d3r/core/result";
 import { isEnoent } from "./utils/helpers.ts";
+import { readDiskText, workspacePath } from "./resource-paths.ts";
+
+/** File reads are bounded even when setup has no explicit caller deadline. */
+const READ_TIMEOUT_MS = 10_000;
+
+/** Session creation can cancel discovery before a provider request is made. */
+export interface ModelConfigLoadOptions {
+	readonly signal?: AbortSignal;
+}
 
 /** The caller establishes the workspace and home roots, not the process cwd. */
 export interface ModelConfigRoots {
@@ -33,11 +41,19 @@ export type ModelConfigLoadError =
 /** Missing files are optional; unreadable or malformed files must never trigger fallback. */
 const readLayer = async (
 	path: string,
+	signal: AbortSignal,
 ): Promise<Result<ModelConfig | null, ModelConfigLoadError>> => {
 	let raw = "";
 	try {
-		raw = await readFile(path, "utf8");
+		const root = dirname(dirname(path));
+		const canonical = await workspacePath(path, {
+			cwd: root,
+			roots: [root],
+			signal,
+		});
+		raw = await readDiskText(canonical, signal);
 	} catch (error) {
+		signal.throwIfAborted();
 		return isEnoent(error) ? ok(null) : fail({ code: "read-failed", path });
 	}
 	let value: unknown = null;
@@ -55,7 +71,13 @@ const readLayer = async (
 /** Read global then workspace .agents model configuration without writes or provider calls. */
 export const loadModelConfig = async (
 	roots: ModelConfigRoots,
+	options: ModelConfigLoadOptions = {},
 ): Promise<Result<LoadedModelConfig, ModelConfigLoadError>> => {
+	const signal = AbortSignal.any([
+		AbortSignal.timeout(READ_TIMEOUT_MS),
+		...(options.signal ? [options.signal] : []),
+	]);
+	signal.throwIfAborted();
 	for (const root of ["home", "cwd"] as const) {
 		if (!isAbsolute(roots[root])) {
 			return fail({ code: "invalid-root", root });
@@ -67,9 +89,19 @@ export const loadModelConfig = async (
 			join(roots.cwd, ".agents", "models.json"),
 		]),
 	];
-	const reads = await Promise.all(
-		paths.map(async (path) => ({ path, result: await readLayer(path) })),
+	const completed = await Promise.allSettled(
+		paths.map(async (path) => ({
+			path,
+			result: await readLayer(path, signal),
+		})),
 	);
+	signal.throwIfAborted();
+	const reads = completed.map((result) => {
+		if (result.status === "rejected") {
+			throw result.reason;
+		}
+		return result.value;
+	});
 	const layers: ModelConfig[] = [];
 	const sources: string[] = [];
 	for (const { path, result } of reads) {

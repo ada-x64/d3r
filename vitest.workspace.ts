@@ -28,6 +28,8 @@ export default defineWorkspace([
 					find: "@d3r/core/model-config",
 					replacement: r("core/dist/model-config.js"),
 				},
+				{ find: "@d3r/core/engine", replacement: r("core/dist/engine.js") },
+				{ find: "@d3r/core/package.json", replacement: r("core/package.json") },
 				{ find: "@d3r/core/result", replacement: r("core/dist/result.js") },
 				{ find: "@d3r/core/runtime", replacement: r("core/dist/runtime.js") },
 				{ find: "@d3r/core/spawn", replacement: r("core/dist/spawn.js") },
@@ -45,6 +47,10 @@ export default defineWorkspace([
 				{
 					find: "@d3r/adapter-acp",
 					replacement: r("adapters/acp/dist/runtime.js"),
+				},
+				{
+					find: "@d3r/adapter-pi/auth",
+					replacement: r("adapters/pi/dist/auth.js"),
 				},
 				{
 					find: "@d3r/adapter-pi/embedded",

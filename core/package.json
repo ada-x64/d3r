@@ -7,6 +7,8 @@
   "exports": {
     ".": "./schema.ts",
     "./model-config": "./model-config.ts",
+    "./engine": "./engine.ts",
+    "./package.json": "./package.json",
     "./result": "./result.ts",
     "./runtime": "./runtime.ts",
     "./spawn": "./spawn.ts",
@@ -16,6 +18,7 @@
     "agents/**",
     "schema.ts",
     "model-config.ts",
+    "engine.ts",
     "result.ts",
     "runtime.ts",
     "spawn.ts",
@@ -26,7 +29,40 @@
     "dist/**"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "main": "./dist/schema.js",
+    "types": "./dist/schema.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/schema.d.ts",
+        "default": "./dist/schema.js"
+      },
+      "./model-config": {
+        "types": "./dist/model-config.d.ts",
+        "default": "./dist/model-config.js"
+      },
+      "./engine": {
+        "types": "./dist/engine.d.ts",
+        "default": "./dist/engine.js"
+      },
+      "./package.json": "./package.json",
+      "./result": {
+        "types": "./dist/result.d.ts",
+        "default": "./dist/result.js"
+      },
+      "./runtime": {
+        "types": "./dist/runtime.d.ts",
+        "default": "./dist/runtime.js"
+      },
+      "./spawn": {
+        "types": "./dist/spawn.d.ts",
+        "default": "./dist/spawn.js"
+      },
+      "./vault/*": {
+        "types": "./dist/vault/*.d.ts",
+        "default": "./dist/vault/*.js"
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && rm -rf dist/seed && cp -r seed dist/seed",

@@ -1,41 +1,111 @@
 import { randomUUID } from "node:crypto";
-
 import {
 	agent,
 	PROTOCOL_VERSION,
 	RequestError,
 	type AgentConnection,
+	type AgentContext,
+	type AuthMethod,
+	type ClientCapabilities,
+	type Implementation,
 	type Stream,
 } from "@agentclientprotocol/sdk";
-import { type CreateRuntimeSession } from "@d3r/core/runtime";
-import { disposeSessions, promptSession, type Session } from "./session.ts";
-import { parseNewSession, parsePrompt } from "./params.ts";
+import { type OpenRuntimeSession } from "@d3r/core/runtime";
+import { runtimeError } from "./errors.ts";
+import { createNativeSession } from "./lifecycle.ts";
+import {
+	parseAuthenticate,
+	parseConfig,
+	parseEmpty,
+	parseInitialize,
+	parseListSessions,
+	parseLoadSession,
+	parseNewSession,
+	parsePrompt,
+	parseResumeSession,
+	parseSessionId,
+	type SessionParams,
+} from "./params.ts";
+import {
+	configureSession,
+	disposeSession,
+	disposeSessions,
+	promptSession,
+	sessionMetadata,
+	type Session,
+} from "./session.ts";
+import { type SessionStore } from "./store.ts";
 
-/** The composition root supplies runtime behavior and the shipped version. */
+export { nativeAuthRequired, type NativeAuthRequiredError } from "./errors.ts";
+export {
+	createSessionStore,
+	type SessionStore,
+	type StoredSession,
+	type SessionRecord,
+} from "./store.ts";
+export { runNativeStdio, type NativeStdioDeps } from "./stdio.ts";
+
+/** The composition root owns auth, MCP connections, backend behavior, and shipped metadata. */
 export interface NativeServerDeps {
 	readonly version: string;
-	readonly createSession: CreateRuntimeSession;
+	readonly agentInfo?: Omit<Implementation, "version">;
+	readonly createSession: OpenRuntimeSession;
+	/** Supplying a store requires every created runtime to support snapshot and restore. */
+	readonly store?: SessionStore;
+	/** A noninteractive credential check before session requests, not startup or terminal login. */
+	readonly authenticate?: () => Promise<void>;
+	/** Only terminal entries are advertised, and only to clients that negotiated terminal auth. */
+	readonly authMethods?: AuthMethod[];
+	readonly logout?: () => Promise<void>;
 }
-
-/** Closing the transport aborts work; closed also waits for runtime disposal. */
+/** Closing the transport aborts work; closed also waits for asynchronous creation and disposal. */
 export interface NativeServer {
 	readonly connection: AgentConnection;
 	readonly closed: Promise<void>;
 }
 
-/** Connect the experimental native server without changing the legacy launcher. */
+/** Connect the native v1 server without changing the legacy launcher. */
 export const connectNativeServer = (
 	stream: Stream,
 	deps: NativeServerDeps,
 ): NativeServer => {
-	const state = { initialized: false, closed: false };
+	const state = {
+		initialized: false,
+		closed: false,
+		loggingOut: false,
+		authEpoch: 0,
+		capabilities: {} as ClientCapabilities,
+	};
 	const sessions = new Map<string, Session>();
-	const requireReady = (): void => {
-		if (!state.initialized || state.closed) {
+	const opening = new Map<
+		string,
+		{ controller: AbortController; task: Promise<Session> }
+	>();
+	const operations = new Set<Promise<unknown>>();
+	const track = <T>(task: Promise<T>): Promise<T> => {
+		operations.add(task);
+		void task.finally(() => operations.delete(task)).catch(() => {});
+		return task;
+	};
+	const requireReady = () => {
+		if (!state.initialized || state.closed || state.loggingOut) {
 			throw RequestError.invalidRequest(
 				undefined,
 				"Connection is not initialized or is closed",
 			);
+		}
+	};
+	const authorize = async () => {
+		requireReady();
+		const epoch = state.authEpoch;
+		try {
+			await deps.authenticate?.();
+		} catch (error) {
+			throw runtimeError(error, "Could not check authentication");
+		}
+		requireReady();
+		if (epoch !== state.authEpoch) {
+			throw RequestError.authRequired();
 		}
 	};
 	const getSession = (id: string): Session => {
@@ -46,8 +116,77 @@ export const connectNativeServer = (
 		}
 		return session;
 	};
-	const connection = agent({ name: "d3r" })
-		.onRequest("initialize", () => {
+	const requireStore = (): SessionStore => {
+		if (!deps.store) {
+			throw RequestError.methodNotFound("session persistence");
+		}
+		return deps.store;
+	};
+	const openSession = (
+		id: string,
+		params: SessionParams,
+		{
+			client,
+			signal: requestSignal,
+			mode,
+		}: {
+			client: AgentContext;
+			signal: AbortSignal;
+			mode: "new" | "load" | "resume";
+		},
+	): Promise<Session> => {
+		if (sessions.has(id) || opening.has(id)) {
+			throw RequestError.invalidRequest(undefined, "Session is already open");
+		}
+		const controller = new AbortController();
+		const signal = AbortSignal.any([
+			controller.signal,
+			requestSignal,
+			connection.signal,
+		]);
+		const task = Promise.resolve()
+			.then(async () => {
+				const session = await createNativeSession(
+					{
+						id,
+						params,
+						mode,
+						client,
+						signal,
+						connectionSignal: connection.signal,
+						capabilities: state.capabilities,
+					},
+					deps,
+				);
+				if (signal.aborted) {
+					await disposeSession(session);
+					throw RequestError.requestCancelled();
+				}
+				sessions.set(id, session);
+				return session;
+			})
+			.finally(() => opening.delete(id));
+		opening.set(id, { controller, task });
+		return task;
+	};
+	const closeSession = async (id: string): Promise<void> => {
+		const creating = opening.get(id);
+		if (creating) {
+			creating.controller.abort();
+			await creating.task.catch(() => {});
+			return;
+		}
+		const session = getSession(id);
+		try {
+			await disposeSession(session);
+		} catch {
+			throw RequestError.internalError(undefined, "Could not close session");
+		} finally {
+			sessions.delete(id);
+		}
+	};
+	const connection = agent({ name: deps.agentInfo?.name ?? "d3r" })
+		.onRequest("initialize", parseInitialize, ({ params }) => {
 			if (state.initialized || state.closed) {
 				throw RequestError.invalidRequest(
 					undefined,
@@ -55,48 +194,183 @@ export const connectNativeServer = (
 				);
 			}
 			state.initialized = true;
+			state.capabilities = params.clientCapabilities ?? {};
 			return {
 				protocolVersion: PROTOCOL_VERSION,
-				agentInfo: { name: "d3r", title: "D3R", version: deps.version },
-				agentCapabilities: {},
-				authMethods: [],
+				agentInfo: {
+					...(deps.agentInfo ?? { name: "d3r", title: "D3R" }),
+					version: deps.version,
+				},
+				agentCapabilities: {
+					promptCapabilities: { image: true, embeddedContext: true },
+					mcpCapabilities: { http: true, sse: false },
+					sessionCapabilities: {
+						close: {},
+						additionalDirectories: {},
+						...(deps.store ? { list: {}, resume: {}, delete: {} } : {}),
+					},
+					...(deps.store ? { loadSession: true } : {}),
+					...(deps.logout ? { auth: { logout: {} } } : {}),
+				},
+				authMethods: state.capabilities.auth?.terminal
+					? (deps.authMethods ?? []).filter(
+							(method) => "type" in method && method.type === "terminal",
+						)
+					: [],
 			};
 		})
-		.onRequest("session/new", parseNewSession, ({ params }) => {
+		.onRequest("authenticate", parseAuthenticate, () => {
 			requireReady();
-			const sessionId = randomUUID();
-			try {
-				const runtime = deps.createSession({ sessionId, cwd: params.cwd });
-				sessions.set(sessionId, {
-					id: sessionId,
-					runtime,
-					pending: null,
-					active: null,
-				});
-			} catch {
-				throw RequestError.internalError(
-					undefined,
-					"Could not create agent runtime",
-				);
-			}
-			return { sessionId };
+			throw RequestError.invalidParams(
+				undefined,
+				"Terminal authentication must be launched separately by the client",
+			);
 		})
-		.onRequest("session/prompt", parsePrompt, (context) =>
-			promptSession(getSession(context.params.sessionId), context),
+		.onRequest("logout", parseEmpty, () =>
+			track(
+				(async () => {
+					requireReady();
+					if (!deps.logout) {
+						throw RequestError.methodNotFound("logout");
+					}
+					state.loggingOut = true;
+					state.authEpoch += 1;
+					try {
+						opening.forEach((row) => row.controller.abort());
+						await Promise.allSettled(
+							[...opening.values()].map((row) => row.task),
+						);
+						await disposeSessions(sessions.values());
+						sessions.clear();
+						await deps.logout();
+						return {};
+					} catch (error) {
+						throw runtimeError(error, "Could not log out");
+					} finally {
+						state.loggingOut = false;
+					}
+				})(),
+			),
 		)
-		.onNotification("session/cancel", ({ params }) => {
+		.onRequest("session/new", parseNewSession, ({ params, client, signal }) =>
+			track(
+				(async () => {
+					await authorize();
+					const session = await openSession(randomUUID(), params, {
+						client,
+						signal,
+						mode: "new",
+					});
+					return { sessionId: session.id, ...sessionMetadata(session) };
+				})(),
+			),
+		)
+		.onRequest("session/load", parseLoadSession, ({ params, client, signal }) =>
+			track(
+				(async () => {
+					await authorize();
+					requireStore();
+					return sessionMetadata(
+						await openSession(params.sessionId, params, {
+							client,
+							signal,
+							mode: "load",
+						}),
+					);
+				})(),
+			),
+		)
+		.onRequest(
+			"session/resume",
+			parseResumeSession,
+			({ params, client, signal }) =>
+				track(
+					(async () => {
+						await authorize();
+						requireStore();
+						return sessionMetadata(
+							await openSession(params.sessionId, params, {
+								client,
+								signal,
+								mode: "resume",
+							}),
+						);
+					})(),
+				),
+		)
+		.onRequest("session/list", parseListSessions, ({ params }) =>
+			track(
+				(async () => {
+					await authorize();
+					return requireStore().list(params);
+				})(),
+			),
+		)
+		.onRequest("session/close", parseSessionId, ({ params }) =>
+			track(
+				(async () => {
+					requireReady();
+					await closeSession(params.sessionId);
+					return {};
+				})(),
+			),
+		)
+		.onRequest("session/delete", parseSessionId, ({ params }) =>
+			track(
+				(async () => {
+					await authorize();
+					const store = requireStore();
+					if (sessions.has(params.sessionId) || opening.has(params.sessionId)) {
+						await closeSession(params.sessionId);
+					}
+					const release = await store.acquire(params.sessionId);
+					try {
+						if (!(await store.delete(params.sessionId))) {
+							throw RequestError.invalidParams(undefined, "Unknown session");
+						}
+						return {};
+					} finally {
+						await release();
+					}
+				})(),
+			),
+		)
+		.onRequest(
+			"session/set_config_option",
+			parseConfig,
+			({ params, client, signal }) =>
+				track(
+					(async () => {
+						await authorize();
+						return configureSession(
+							getSession(params.sessionId),
+							{ id: params.configId, value: params.value },
+							{ client, signal },
+						);
+					})(),
+				),
+		)
+		.onRequest("session/prompt", parsePrompt, (context) =>
+			track(
+				promptSession(getSession(context.params.sessionId), context, authorize),
+			),
+		)
+		.onNotification("session/cancel", parseSessionId, ({ params }) => {
 			sessions.get(params.sessionId)?.pending?.abort();
+			opening.get(params.sessionId)?.controller.abort();
 		})
 		.connect(stream);
-	connection.signal.addEventListener(
-		"abort",
-		() => {
-			state.closed = true;
-			sessions.forEach((session) => session.pending?.abort());
-		},
-		{ once: true },
-	);
+	const abort = () => {
+		state.closed = true;
+		opening.forEach((row) => row.controller.abort());
+		sessions.forEach((session) => session.pending?.abort());
+	};
+	connection.signal.addEventListener("abort", abort, { once: true });
+	if (connection.signal.aborted) {
+		abort();
+	}
 	const closed = connection.closed.then(async () => {
+		await Promise.allSettled(operations);
 		try {
 			await disposeSessions(sessions.values());
 		} finally {

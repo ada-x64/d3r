@@ -1,216 +1,139 @@
 import { randomUUID } from "node:crypto";
-import {
-	Agent,
-	type AgentEvent,
-	type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { Agent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
 	cleanupSessionResources,
 	type Api,
-	type AssistantMessage,
 	type Model,
 	type Models,
-	type TextContent,
 } from "@earendil-works/pi-ai";
+import { type CreateRuntimeSession, type RuntimeTool } from "@d3r/core/runtime";
+import { parseCheckpoint } from "./embedded-checkpoint.ts";
 import {
-	type CreateRuntimeSession,
-	type RuntimeContent,
-	type RuntimePrompt,
-	type RuntimeStopReason,
-} from "@d3r/core/runtime";
+	collectModels,
+	configOptions,
+	modelKey,
+	selectModel,
+} from "./embedded-config.ts";
+import { type ResolveResource } from "./embedded-content.ts";
+import { compileTools } from "./embedded-tools.ts";
+import { runEmbeddedTurn } from "./embedded-turn.ts";
 
-/** Resource access stays with the caller's workspace and permission policy. */
-export type ResolveResource = (
-	resource: Extract<RuntimeContent, { type: "resource_link" }>,
-	context: { readonly cwd: string; readonly signal: AbortSignal },
-) => Promise<string>;
+export { type ResolveResource } from "./embedded-content.ts";
 
-/** Explicit model configuration; this adapter never discovers user configuration. */
+/** Explicit capabilities only; the adapter never discovers providers, auth, or tools. */
 export interface EmbeddedRuntimeOptions {
 	readonly models: Pick<Models, "streamSimple">;
 	readonly model: Model<Api>;
 	readonly systemPrompt: string;
 	readonly thinkingLevel?: ThinkingLevel;
 	readonly resolveResource?: ResolveResource;
+	readonly tools?: readonly RuntimeTool[];
+	readonly modelChoices?: readonly Model<Api>[];
+	readonly maxTurns?: number;
 }
 
-/** Mutable observation data belongs to one invocation, never the provider registry. */
-interface TurnState {
-	messageId: string;
-	finalMessage: AssistantMessage | null;
-	outputFailed: boolean;
-}
+/** Bound provider requests, including repeated hallucinated tool names. */
+const DEFAULT_MAX_TURNS = 20;
 
-/** Expand links only through the injected resolver, preserving input block order. */
-const prepareContent = async (
-	request: RuntimePrompt,
-	cwd: string,
-	resolveResource: ResolveResource | undefined,
-): Promise<TextContent[]> => {
-	const controller = new AbortController();
-	const signal = AbortSignal.any([request.signal, controller.signal]);
-	const results = await Promise.allSettled(
-		request.content.map(async (block): Promise<TextContent> => {
-			try {
-				signal.throwIfAborted();
-				if (block.type === "text") {
-					return { type: "text", text: block.text };
-				}
-				if (!resolveResource) {
-					throw new Error("Resource links require a configured resolver");
-				}
-				const text = await resolveResource(block, { cwd, signal });
-				return {
-					type: "text",
-					text: `Resource: ${block.name}\nURI: ${block.uri}\n\n${text}`,
-				};
-			} catch (error) {
-				controller.abort(error);
-				throw error;
-			}
-		}),
+/** Build isolated in-memory conversations with injected IO and idle-only checkpoints. */
+export const createEmbeddedRuntime = (
+	options: EmbeddedRuntimeOptions,
+): CreateRuntimeSession => {
+	const definitions = compileTools(options.tools);
+	const choices = collectModels(options.model, options.modelChoices);
+	const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+	if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
+		throw new Error("maxTurns must be a positive safe integer");
+	}
+	if (typeof options.systemPrompt !== "string") {
+		throw new Error("systemPrompt must be a string");
+	}
+	const initial = selectModel(
+		choices,
+		{ key: modelKey(options.model), thinking: options.thinkingLevel ?? "off" },
+		[],
 	);
-	// Sibling resource cleanup must finish before the session can be reused/disposed.
-	return results.map((result) => {
-		if (result.status === "rejected") {
-			throw result.reason;
-		}
-		return result.value;
-	});
-};
-
-/** Await output delivery; Pi otherwise converts subscriber failures into messages. */
-const observeTurn =
-	(agent: Agent, request: RuntimePrompt, state: TurnState) =>
-	async (event: AgentEvent): Promise<void> => {
-		if (event.type === "message_start" && event.message.role === "assistant") {
-			state.messageId = randomUUID();
-		}
-		if (event.type === "message_end" && event.message.role === "assistant") {
-			state.finalMessage = event.message;
-		}
-		if (
-			event.type !== "message_update" ||
-			state.outputFailed ||
-			request.signal.aborted
-		) {
-			return;
-		}
-		const chunk = event.assistantMessageEvent;
-		if (chunk.type !== "text_delta" && chunk.type !== "thinking_delta") {
-			return;
-		}
-		try {
-			await request.emit({
-				kind: chunk.type === "text_delta" ? "text" : "thought",
-				messageId: `${state.messageId}:${chunk.contentIndex}`,
-				text: chunk.delta,
-			});
-		} catch {
-			state.outputFailed = true;
-			agent.abort();
-		}
-	};
-
-/** Promise settlement alone is not success: Pi encodes failures in the final message. */
-const turnOutcome = (state: TurnState): RuntimeStopReason => {
-	if (state.outputFailed) {
-		throw new Error("Runtime output delivery failed");
-	}
-	const message = state.finalMessage;
-	if (!message) {
-		throw new Error("Model response did not complete");
-	}
-	if (message.stopReason === "error") {
-		throw new Error("Model request failed");
-	}
-	if (message.stopReason === "aborted") {
-		return "cancelled";
-	}
-	if (message.content.some((block) => block.type === "toolCall")) {
-		throw new Error("Embedded tool execution is not supported yet");
-	}
-	switch (message.stopReason) {
-		case "stop": {
-			return "completed";
-		}
-		case "length": {
-			return "token_limit";
-		}
-		default: {
-			throw new Error("Unsupported model completion reason");
-		}
-	}
-};
-
-/** Build isolated in-memory conversations with no Pi process, extensions, or tools. */
-export const createEmbeddedRuntime =
-	(options: EmbeddedRuntimeOptions): CreateRuntimeSession =>
-	({ sessionId, cwd }) => {
-		// Keep provider resource cleanup isolated even if callers reuse a session ID.
-		const providerSessionId = `d3r:${sessionId}:${randomUUID()}`;
+	return (input) => {
+		// External IDs may be reused; provider cleanup and tool presentation must not collide.
+		const providerSessionId = `d3r:${input.sessionId}:${randomUUID()}`;
 		const agent = new Agent({
 			initialState: {
 				systemPrompt: options.systemPrompt,
-				model: options.model,
-				thinkingLevel: options.thinkingLevel ?? "off",
+				...initial,
 				tools: [],
 			},
 			streamFn: (model, context, settings) =>
 				options.models.streamSimple(model, context, settings),
 			sessionId: providerSessionId,
-			// Unknown tool calls still trigger retries in Pi, even when tools is empty.
-			shouldStopAfterTurn: () => true,
 		});
 		const lifecycle = { busy: false, disposed: false };
+		const assertIdle = (): void => {
+			if (lifecycle.disposed || lifecycle.busy) {
+				throw new Error("Runtime session is disposed or already running");
+			}
+		};
+		const getConfig = () =>
+			configOptions(choices, agent.state.model, agent.state.thinkingLevel);
 		return {
 			prompt: async (request) => {
-				if (lifecycle.disposed || lifecycle.busy) {
-					throw new Error("Runtime session is disposed or already running");
-				}
+				assertIdle();
 				if (request.signal.aborted) {
 					return "cancelled";
 				}
 				lifecycle.busy = true;
-				const previousMessages = [...agent.state.messages];
-				const state: TurnState = {
-					messageId: "",
-					finalMessage: null,
-					outputFailed: false,
-				};
-				const unsubscribe = agent.subscribe(observeTurn(agent, request, state));
-				const abort = (): void => agent.abort();
-				request.signal.addEventListener("abort", abort, { once: true });
-				let keepHistory = false;
 				try {
-					const content = await prepareContent(
-						request,
-						cwd,
-						options.resolveResource,
-					);
-					if (request.signal.aborted) {
-						return "cancelled";
-					}
-					await agent.prompt({ role: "user", content, timestamp: Date.now() });
-					if (request.signal.aborted) {
-						return "cancelled";
-					}
-					const result = turnOutcome(state);
-					keepHistory = result === "completed" || result === "token_limit";
-					return result;
-				} catch (error) {
-					if (request.signal.aborted) {
-						return "cancelled";
-					}
-					throw error;
+					return await runEmbeddedTurn(agent, request, {
+						input,
+						definitions,
+						maxTurns,
+						namespace: providerSessionId,
+						resolveResource: options.resolveResource,
+					});
 				} finally {
-					request.signal.removeEventListener("abort", abort);
-					unsubscribe();
-					if (!keepHistory) {
-						agent.state.messages = previousMessages;
-					}
 					lifecycle.busy = false;
 				}
+			},
+			getConfig,
+			setConfig: async (id, value) => {
+				assertIdle();
+				if (id !== "model" && id !== "thought_level") {
+					throw new Error("Unknown runtime configuration option");
+				}
+				const selection = selectModel(
+					choices,
+					{
+						key: id === "model" ? value : modelKey(agent.state.model),
+						thinking:
+							id === "thought_level" ? value : agent.state.thinkingLevel,
+					},
+					agent.state.messages,
+				);
+				Object.assign(agent.state, selection);
+				return getConfig();
+			},
+			snapshot: () => {
+				assertIdle();
+				return parseCheckpoint({
+					version: 1,
+					format: "d3r.pi.embedded",
+					model: {
+						provider: agent.state.model.provider,
+						id: agent.state.model.id,
+					},
+					thinkingLevel: agent.state.thinkingLevel,
+					messages: agent.state.messages,
+				});
+			},
+			restore: (checkpoint) => {
+				assertIdle();
+				const parsed = parseCheckpoint(checkpoint);
+				const selection = selectModel(
+					choices,
+					{ key: modelKey(parsed.model), thinking: parsed.thinkingLevel },
+					parsed.messages,
+				);
+				Object.assign(agent.state, selection);
+				agent.state.messages = parsed.messages;
 			},
 			dispose: async () => {
 				if (lifecycle.disposed) {
@@ -225,3 +148,4 @@ export const createEmbeddedRuntime =
 			},
 		};
 	};
+};

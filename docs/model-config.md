@@ -5,8 +5,10 @@ portable model selection kept separate from provider credentials. This document
 describes the **D3R version 1 profile** of `models.json`, not a claim that all
 editors or the draft .agents Protocol use the same file schema.
 
-The current change supplies parsing and loading APIs only. The working `d3r acp`
-launcher still uses the Pi proxy; it does not read these files yet.
+The native `d3r acp` launcher reads these files when creating a session. Use
+`--preset <id>` to select a named preset explicitly, or choose a model in Zed
+when no default is configured. `d3r acp --legacy` retains Pi's configuration and
+does not use this file.
 
 ## File format
 
@@ -78,7 +80,9 @@ Missing files are optional. A malformed or unreadable file is an error, even if
 the other layer is valid. Successful results include the parsed source paths in
 global/workspace order. Errors identify the affected path or missing preset;
 they do not include raw file contents or parser exception messages. Discovery
-never creates directories, repairs files, or writes settings.
+never creates directories, repairs files, or writes settings. Reads reject
+symlinks, non-regular files, and content larger than 1 MiB, and honor session
+setup cancellation.
 
 `@d3r/core/model-config` owns the strict Zod schemas and pure
 `resolveModelConfig(layers)` overlay function. No filesystem or provider
@@ -92,6 +96,7 @@ version-controlled `.agents/` files. Credential storage and login will be
 handled separately; there is no automatic import of Pi credentials here.
 
 Loading model metadata is **not** a workspace trust decision or authorization to
-use a provider. Before native startup uses these selections, the composition
-layer must enforce its provider, authentication, and workspace policies. Shared
-`.agents/` conventions do not make their contents trusted automatically.
+use a provider. Native startup checks model availability and asks for workspace
+approval before the first model request. Shared `.agents/` conventions do not
+make their contents trusted automatically. See [D3R in Zed](./zed.md) for native
+login, permissions, and session behavior.

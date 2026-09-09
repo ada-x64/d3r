@@ -8,10 +8,36 @@
     ".": "./compile.ts",
     "./runtime": "./runtime.ts",
     "./embedded": "./embedded.ts",
+    "./auth": "./auth.ts",
     "./package.json": "./package.json"
   },
+  "files": [
+    "dist/**",
+    "extensions/**"
+  ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "main": "./dist/compile.js",
+    "types": "./dist/compile.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/compile.d.ts",
+        "default": "./dist/compile.js"
+      },
+      "./runtime": {
+        "types": "./dist/runtime.d.ts",
+        "default": "./dist/runtime.js"
+      },
+      "./embedded": {
+        "types": "./dist/embedded.d.ts",
+        "default": "./dist/embedded.js"
+      },
+      "./auth": {
+        "types": "./dist/auth.d.ts",
+        "default": "./dist/auth.js"
+      },
+      "./package.json": "./package.json"
+    }
   },
   "keywords": [
     "pi-package"
@@ -34,14 +60,19 @@
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
     "gray-matter": "^4",
+    "proper-lockfile": "4.1.2",
     "yaml": "^2",
-    "zod": "^3"
+    "zod": "^3",
+    "zod-to-json-schema": "3.25.1"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@types/proper-lockfile": "4.1.4"
   }
 }

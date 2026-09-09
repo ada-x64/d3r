@@ -12,19 +12,38 @@
     "d3r": "./dist/cli.js",
     "d3r-pi": "./dist/pi.js"
   },
+  "files": [
+    "dist/**"
+  ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "main": "./dist/cli.js",
+    "types": "./dist/cli.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/cli.d.ts",
+        "default": "./dist/cli.js"
+      },
+      "./model-config": {
+        "types": "./dist/model-config.d.ts",
+        "default": "./dist/model-config.js"
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@clack/prompts": "0.11.0",
     "@d3r/adapter-acp": "workspace:*",
     "@d3r/adapter-pi": "workspace:*",
     "@d3r/core": "workspace:*",
     "@d3r/tools": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.28.0",
+    "ajv": "8.17.1",
     "citty": "^0.2.2",
+    "gray-matter": "4.0.3",
     "yaml": "^2",
     "zod": "^3"
   }
