@@ -36,7 +36,7 @@ const stdioPeer = (deps: NativeServerDeps) => {
 	const frames: Frame[] = [];
 	let buffer = "";
 	let sequence = 0;
-	let allow = true;
+	let allow: boolean | ((frame: Frame) => boolean) = true;
 	const knownSessions = new Set<string>();
 	stdout.on("data", (chunk: Buffer) => {
 		buffer += chunk.toString("utf8");
@@ -47,7 +47,8 @@ const stdioPeer = (deps: NativeServerDeps) => {
 			frames.push(frame);
 			if (frame.method === "session/request_permission") {
 				const kind =
-					allow && knownSessions.has(frame.params?.sessionId ?? "")
+					(typeof allow === "boolean" ? allow : allow(frame)) &&
+					knownSessions.has(frame.params?.sessionId ?? "")
 						? "allow_once"
 						: "reject_once";
 				const option = frame.params?.options?.find(
@@ -84,7 +85,7 @@ const stdioPeer = (deps: NativeServerDeps) => {
 		running,
 		send,
 		request,
-		setAllowed: (value: boolean) => {
+		setAllowed: (value: boolean | ((frame: Frame) => boolean)) => {
 			allow = value;
 		},
 		close: async () => {
@@ -96,6 +97,31 @@ const stdioPeer = (deps: NativeServerDeps) => {
 			await running;
 		},
 	};
+};
+
+/** Setup guidance must reach visible assistant text, not just an error or a tool update. */
+const expectAgentGuidance = (
+	frames: readonly Frame[],
+	sessionId: string,
+	text: RegExp,
+) => {
+	expect(frames).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				method: "session/update",
+				params: expect.objectContaining({
+					sessionId,
+					update: expect.objectContaining({
+						sessionUpdate: "agent_message_chunk",
+						content: expect.objectContaining({
+							type: "text",
+							text: expect.stringMatching(text),
+						}),
+					}),
+				}),
+			}),
+		]),
+	);
 };
 
 /** Native composition is exercised through actual ACP request dispatch and persistence. */
@@ -140,11 +166,27 @@ describe("native deps through ACP stdio", () => {
 				),
 			).toHaveLength(0);
 			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
-			const refused = await peer.request("session/prompt", {
+			const unselected = await peer.request("session/prompt", {
 				sessionId,
-				prompt: [{ type: "text", text: "hello" }],
+				prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
 			});
-			expect(refused.result).toEqual({ stopReason: "refusal" });
+			expect(unselected.result).toEqual({ stopReason: "end_turn" });
+			expectAgentGuidance(
+				peer.frames,
+				sessionId,
+				/Select a model in Zed's Model picker/,
+			);
+			expectAgentGuidance(peer.frames, sessionId, /No model request/);
+			expectAgentGuidance(peer.frames, sessionId, /MCP connection/);
+			expect(
+				peer.frames.filter(
+					(frame) => frame.method === "session/request_permission",
+				),
+			).toHaveLength(0);
+			expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+			expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+			expect(f.models.streamSimple).not.toHaveBeenCalled();
 			expect(f.turns).toHaveLength(0);
 			const configured = await peer.request("session/set_config_option", {
 				sessionId,
@@ -154,9 +196,10 @@ describe("native deps through ACP stdio", () => {
 			expect(configured.error).toBeUndefined();
 			const prompt = await peer.request("session/prompt", {
 				sessionId,
-				prompt: [{ type: "text", text: "hello selected model" }],
+				prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
 			});
 			expect(prompt.result).toEqual({ stopReason: "end_turn" });
+			expect(f.turns).toHaveLength(1);
 			expect(f.turns[0].options.model.id).toBe("second");
 			expect(f.models.getAvailable.mock.calls[0][1]?.signal).toBeInstanceOf(
 				AbortSignal,
@@ -477,32 +520,76 @@ describe("native deps through ACP stdio", () => {
 		}
 	});
 
-	it("returns refusal on workspace denial and never opens an explicitly supplied executable", async () => {
-		const f = nativeFixture();
-		const peer = stdioPeer(await f.server());
-		peer.setAllowed(false);
-		try {
-			await peer.request("initialize", { protocolVersion: 1 });
-			const opened = await peer.request("session/new", {
-				cwd: CWD,
-				mcpServers: [
-					{ name: "danger", command: `${CWD}/executable`, args: [], env: [] },
-				],
-			});
-			const sessionId = String(opened.result?.sessionId);
-			peer.knownSessions.add(sessionId);
-			await expect(
-				peer.request("session/prompt", {
-					sessionId,
-					prompt: [{ type: "text", text: "hello" }],
-				}),
-			).resolves.toMatchObject({ result: { stopReason: "refusal" } });
-			expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
-			expect(f.turns).toHaveLength(0);
-		} finally {
-			await peer.stop();
-		}
-	});
+	it.each([
+		{ permission: "workspace", guidance: /workspace permission.*not granted/i },
+		{ permission: "MCP connection", guidance: /MCP connection permission/i },
+	])(
+		"completes $permission denial with visible guidance and connects only after approval on a same-session retry",
+		async ({ permission, guidance }) => {
+			const f = nativeFixture();
+			const peer = stdioPeer(await f.server());
+			peer.setAllowed(
+				permission === "workspace"
+					? false
+					: (frame) =>
+							!frame.params?.toolCall?.title?.startsWith("Connect MCP "),
+			);
+			try {
+				await peer.request("initialize", { protocolVersion: 1 });
+				const opened = await peer.request("session/new", {
+					cwd: CWD,
+					mcpServers: [
+						{ name: "danger", command: `${CWD}/executable`, args: [], env: [] },
+					],
+				});
+				expect(opened.error).toBeUndefined();
+				const sessionId = String(opened.result?.sessionId);
+				peer.knownSessions.add(sessionId);
+				await expect(
+					peer.request("session/prompt", {
+						sessionId,
+						prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
+					}),
+				).resolves.toMatchObject({ result: { stopReason: "end_turn" } });
+				expectAgentGuidance(peer.frames, sessionId, guidance);
+				expectAgentGuidance(peer.frames, sessionId, /retry/i);
+				expectAgentGuidance(peer.frames, sessionId, /No model request/i);
+				expect(
+					peer.frames.filter(
+						(frame) => frame.method === "session/request_permission",
+					),
+				).toHaveLength(permission === "workspace" ? 1 : 2);
+				if (permission === "workspace") {
+					expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+				}
+				expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+				expect(f.deps.createWorkspaceTools).not.toHaveBeenCalled();
+				expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+				expect(f.models.streamSimple).not.toHaveBeenCalled();
+				expect(f.turns).toHaveLength(0);
+				peer.setAllowed(true);
+				await expect(
+					peer.request("session/prompt", {
+						sessionId,
+						prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
+					}),
+				).resolves.toMatchObject({ result: { stopReason: "end_turn" } });
+				expect(
+					peer.frames.filter(
+						(frame) => frame.method === "session/request_permission",
+					),
+				).toHaveLength(permission === "workspace" ? 3 : 4);
+				expect(f.deps.connectMcpTools).toHaveBeenCalledTimes(1);
+				expect(f.deps.connectMcpTools).toHaveBeenCalledWith(
+					[{ name: "danger", command: `${CWD}/executable`, args: [], env: [] }],
+					expect.objectContaining({ cwd: CWD }),
+				);
+				expect(f.turns).toHaveLength(1);
+			} finally {
+				await peer.stop();
+			}
+		},
+	);
 
 	it("cancels a native prompt through ACP and disposes its runtime on transport shutdown", async () => {
 		const f = nativeFixture();

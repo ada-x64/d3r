@@ -71,17 +71,22 @@ const response = (
 
 /** Real runtime and MCP SDK-facing discovery/validation; only the provider/transport IO is fake. */
 describe("native real runtime and MCP composition", () => {
-	it("makes its first provider request only after explicit selection and workspace approval", async () => {
+	it("makes its first provider request only after explicit selection and a same-session retry grants workspace approval", async () => {
 		const f = nativeFixture();
 		f.deps.loadModelConfig.mockResolvedValue({
 			ok: true,
 			value: { config: { presets: [], defaultPreset: null }, sources: [] },
 		});
 		const order: string[] = [];
-		f.requestPermission.mockImplementation(async () => {
-			order.push("permission");
-			return true;
-		});
+		f.requestPermission
+			.mockImplementationOnce(async () => {
+				order.push("permission");
+				return false;
+			})
+			.mockImplementation(async () => {
+				order.push("permission");
+				return true;
+			});
 		f.models.streamSimple.mockImplementation(() => {
 			order.push("provider");
 			return eventStream(
@@ -90,12 +95,35 @@ describe("native real runtime and MCP composition", () => {
 		});
 		const session = await f.open({}, { createEmbeddedRuntime });
 		try {
-			await expect(session.prompt(testPrompt())).resolves.toBe("refused");
+			const unselected = testPrompt("Hi! tell me about yourself.");
+			await expect(session.prompt(unselected)).resolves.toBe("completed");
+			expect(unselected.emit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "text",
+					text: expect.stringContaining("Select a model in Zed"),
+				}),
+			);
 			expect(order).toEqual([]);
+			expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+			expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+			expect(f.models.streamSimple).not.toHaveBeenCalled();
 			await session.setConfig!("model", chosenModel);
+			const denied = testPrompt();
+			await expect(session.prompt(denied)).resolves.toBe("completed");
+			expect(denied.emit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "text",
+					text: expect.stringMatching(/workspace permission.*not granted/i),
+				}),
+			);
+			expect(order).toEqual(["permission"]);
+			expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+			expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+			expect(f.models.streamSimple).not.toHaveBeenCalled();
 			const prompt = testPrompt();
 			await expect(session.prompt(prompt)).resolves.toBe("completed");
-			expect(order).toEqual(["permission", "provider"]);
+			expect(order).toEqual(["permission", "permission", "provider"]);
+			expect(f.models.streamSimple).toHaveBeenCalledTimes(1);
 			expect(f.models.streamSimple.mock.calls[0][0].id).toBe("second");
 			expect(prompt.emit).toHaveBeenCalledWith(
 				expect.objectContaining({ text: "Actual embedded offline reply" }),

@@ -134,6 +134,14 @@ Trust is not carried across restoration. File mutations, commands, MCP
 connections, and MCP calls require separate approval. Missing, denied, unknown,
 or cancelled permission results do not authorize execution.
 
+If no model is selected or setup permission is not granted, D3R replies with
+setup guidance and ends the turn normally, without contacting a model or
+connecting to MCP. Select a model or retry with the required approvals in the
+same thread. These setup checks are not model safety refusals. Older binaries
+reported them as ACP `refusal`, which made Zed show a misleading content-policy
+warning; rebuild and restart the agent connection if you still see that warning
+instead of setup guidance.
+
 Native tools include file read/write/edit, directory listing, literal search,
 explicit executable-plus-argv commands, skill reads, and configured MCP tools.
 Use the snapshot token returned by `read_file` when editing or overwriting an

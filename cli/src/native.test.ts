@@ -81,7 +81,7 @@ describe("native dependency composition", () => {
 		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
 	});
 
-	it("shows select-model with no configured default, and makes no permission, MCP, or provider request", async () => {
+	it("completes with model-selection guidance and stays inert until a same-session retry", async () => {
 		const f = fixture();
 		f.deps.loadModelConfig.mockResolvedValue({
 			ok: true,
@@ -101,20 +101,29 @@ describe("native dependency composition", () => {
 		expect(
 			parseNativeCheckpoint(session.snapshot!()).selection.model,
 		).toBeNull();
-		const prompt = testPrompt();
-		await expect(session.prompt(prompt)).resolves.toBe("refused");
+		const prompt = testPrompt("Hi! tell me about yourself.");
+		await expect(session.prompt(prompt)).resolves.toBe("completed");
 		expect(prompt.emit).toHaveBeenCalledWith(
 			expect.objectContaining({
-				text: expect.stringContaining("Zed's Model picker"),
+				kind: "text",
+				text: expect.stringContaining("Select a model in Zed's Model picker"),
 			}),
 		);
 		expect(f.models.getAvailable).toHaveBeenCalledTimes(1);
 		expect(f.models.streamSimple).not.toHaveBeenCalled();
 		expect(f.requestPermission).not.toHaveBeenCalled();
 		expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+		expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+		expect(f.deps.createWorkspaceTools).not.toHaveBeenCalled();
 		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+		expect(f.turns).toHaveLength(0);
+		expect(parseNativeCheckpoint(session.snapshot!()).inner).toBeNull();
 		await session.setConfig!("model", chosenModel);
-		await session.prompt(testPrompt());
+		expect(f.requestPermission).not.toHaveBeenCalled();
+		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+		await expect(session.prompt(testPrompt())).resolves.toBe("completed");
+		expect(f.requestPermission).toHaveBeenCalledTimes(1);
+		expect(f.turns).toHaveLength(1);
 		expect(f.turns[0].options.model.id).toBe("second");
 	});
 
@@ -151,7 +160,7 @@ describe("native dependency composition", () => {
 		).rejects.toThrow("Unavailable model");
 	});
 
-	it("keeps metadata inert and refuses workspace denial without even loading MCP secrets", async () => {
+	it("keeps metadata inert and completes workspace denial with guidance before a same-session retry", async () => {
 		const f = fixture();
 		f.requestPermission.mockResolvedValue(false);
 		const session = await f.open();
@@ -159,7 +168,17 @@ describe("native dependency composition", () => {
 		session.getConfig!();
 		await session.setConfig!("thought_level", "low");
 		expect(f.requestPermission).not.toHaveBeenCalled();
-		await expect(session.prompt(testPrompt())).resolves.toBe("refused");
+		const prompt = testPrompt();
+		await expect(session.prompt(prompt)).resolves.toBe("completed");
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "text",
+				text: expect.stringMatching(/workspace permission.*not granted/i),
+			}),
+		);
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({ text: expect.stringMatching(/retry/i) }),
+		);
 		expect(f.requestPermission).toHaveBeenCalledWith(
 			expect.objectContaining({
 				toolCallId: expect.stringMatching(/^d3r:permission:/),
@@ -169,10 +188,41 @@ describe("native dependency composition", () => {
 			expect.any(AbortSignal),
 		);
 		expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+		expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
 		expect(f.deps.createWorkspaceTools).not.toHaveBeenCalled();
 		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
-		const headless = await f.open({ client: undefined });
-		await expect(headless.prompt(testPrompt())).resolves.toBe("refused");
+		expect(f.models.streamSimple).not.toHaveBeenCalled();
+		expect(f.turns).toHaveLength(0);
+		expect(parseNativeCheckpoint(session.snapshot!()).inner).toBeNull();
+		f.requestPermission.mockResolvedValue(true);
+		await expect(session.prompt(testPrompt())).resolves.toBe("completed");
+		expect(f.requestPermission).toHaveBeenCalledTimes(2);
+		expect(f.deps.connectMcpTools).toHaveBeenCalledTimes(1);
+		expect(f.turns).toHaveLength(1);
+	});
+
+	it("completes with workspace permission guidance and stays inert when no client can approve", async () => {
+		const f = fixture();
+		const session = await f.open({ client: undefined });
+		const prompt = testPrompt();
+		await expect(session.prompt(prompt)).resolves.toBe("completed");
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "text",
+				text: expect.stringMatching(/workspace permission.*not granted/i),
+			}),
+		);
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({ text: expect.stringMatching(/retry/i) }),
+		);
+		expect(f.requestPermission).not.toHaveBeenCalled();
+		expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
+		expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+		expect(f.deps.createWorkspaceTools).not.toHaveBeenCalled();
+		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+		expect(f.models.streamSimple).not.toHaveBeenCalled();
+		expect(f.turns).toHaveLength(0);
+		expect(parseNativeCheckpoint(session.snapshot!()).inner).toBeNull();
 	});
 
 	it("asks for every MCP connection, merges Zed by name, and redacts credentials without hiding ordinary argv", async () => {
@@ -218,7 +268,7 @@ describe("native dependency composition", () => {
 		expect(f.requestPermission).toHaveBeenCalledTimes(3);
 	});
 
-	it("launches nothing if any connection is denied, even after approving an earlier server", async () => {
+	it("completes MCP denial with guidance, launching nothing until every connection is approved on retry", async () => {
 		const f = fixture();
 		f.deps.loadMcpConfig.mockResolvedValue(
 			["one", "two"].map((name) => ({
@@ -233,9 +283,31 @@ describe("native dependency composition", () => {
 			.mockResolvedValueOnce(true)
 			.mockResolvedValueOnce(false);
 		const session = await f.open();
-		await expect(session.prompt(testPrompt())).resolves.toBe("refused");
+		const prompt = testPrompt();
+		await expect(session.prompt(prompt)).resolves.toBe("completed");
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "text",
+				text: expect.stringMatching(/MCP connection permission/i),
+			}),
+		);
+		expect(prompt.emit).toHaveBeenCalledWith(
+			expect.objectContaining({ text: expect.stringMatching(/retry/i) }),
+		);
+		expect(f.requestPermission).toHaveBeenCalledTimes(3);
 		expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
+		expect(f.deps.createWorkspaceTools).not.toHaveBeenCalled();
+		expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+		expect(f.models.streamSimple).not.toHaveBeenCalled();
 		expect(f.turns).toHaveLength(0);
+		expect(parseNativeCheckpoint(session.snapshot!()).inner).toBeNull();
+		await expect(session.prompt(testPrompt())).resolves.toBe("completed");
+		expect(f.requestPermission).toHaveBeenCalledTimes(6);
+		expect(f.deps.connectMcpTools).toHaveBeenCalledTimes(1);
+		expect(
+			f.deps.connectMcpTools.mock.calls[0][0].map(({ name }) => name),
+		).toEqual(["one", "two"]);
+		expect(f.turns).toHaveLength(1);
 	});
 
 	it("uses canonical roots and unwraps resource text instead of returning an object to the adapter", async () => {

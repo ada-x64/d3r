@@ -183,7 +183,8 @@ export const createLazyNativeSession = ({
 			await runtime.setConfig!("thought_level", wanted.thinking);
 		}
 	};
-	const refuse = async (
+	/** Setup guidance ends a turn normally; ACP refusal is reserved for content rejection. */
+	const explainSetup = async (
 		request: RuntimePrompt,
 		text: string,
 	): Promise<RuntimeStopReason> => {
@@ -192,7 +193,7 @@ export const createLazyNativeSession = ({
 			messageId: `d3r:native:${randomUUID()}`,
 			text,
 		});
-		return "refused";
+		return "completed";
 	};
 	const permit = async (
 		title: string,
@@ -213,7 +214,9 @@ export const createLazyNativeSession = ({
 		return allowed === true;
 	};
 	// oxlint-disable-next-line max-statements -- Keep ownership of partially initialized resources visible until publication.
-	const setup = async (signal: AbortSignal): Promise<boolean> => {
+	const setup = async (
+		signal: AbortSignal,
+	): Promise<"ready" | "workspace_denied" | "mcp_denied"> => {
 		if (
 			!(await permit(
 				`Trust workspace ${input.cwd} for this session`,
@@ -226,7 +229,7 @@ export const createLazyNativeSession = ({
 				signal,
 			))
 		) {
-			return false;
+			return "workspace_denied";
 		}
 		const configured = await deps.loadMcpConfig(
 			{ home: saved.sources.home, cwd: input.cwd },
@@ -247,7 +250,7 @@ export const createLazyNativeSession = ({
 			return permit(entry.title, entry.summary, signal);
 		}, Promise.resolve(true));
 		if (!approved) {
-			return false;
+			return "mcp_denied";
 		}
 		let opened: typeof mcp = null;
 		let runtime: RuntimeSession | null = null;
@@ -360,7 +363,7 @@ export const createLazyNativeSession = ({
 			signal.throwIfAborted();
 			inner = runtime;
 			mcp = opened;
-			return true;
+			return "ready";
 		} catch {
 			setupLifetime.abort();
 			await cleanup([
@@ -442,16 +445,21 @@ export const createLazyNativeSession = ({
 						return "cancelled" as const;
 					}
 					if (!inner && saved.selection.model === null) {
-						return refuse(
+						return explainSetup(
 							request,
 							"Select a model in Zed's Model picker before sending a prompt, or choose an explicit CLI preset configured in .agents/models.json. No model request or MCP connection was made.",
 						);
 					}
-					if (!inner && !(await setup(signal))) {
-						return refuse(
-							request,
-							"Workspace or MCP connection permission denied. No model request or MCP connection was made.",
-						);
+					if (!inner) {
+						const outcome = await setup(signal);
+						if (outcome !== "ready") {
+							return explainSetup(
+								request,
+								outcome === "workspace_denied"
+									? "Workspace permission was not granted. Send your prompt again to retry, and approve workspace use in Zed if you want to proceed. No model request or MCP connection was made."
+									: "MCP connection permission was not granted. Send your prompt again to retry, and approve the configured connections if you want to proceed. No model request or MCP connection was made.",
+							);
+						}
 					}
 					return inner!.prompt({ ...request, signal });
 				})
