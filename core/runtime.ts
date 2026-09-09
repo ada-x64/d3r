@@ -17,6 +17,8 @@ export interface RuntimeChunk {
 	readonly kind: "text" | "thought";
 	readonly messageId: string;
 	readonly text: string;
+	/** Presentation owner: a tool call already announced in the current turn. */
+	readonly parentToolCallId?: string;
 }
 
 /** Categories for tool presentation, independent of execution policy. */

@@ -188,7 +188,19 @@ The Phase selector can choose a command without running it; the next prompt
 starts it. Ordinary routing conversation helps clarify work and select a phase.
 Routing context is handed to children, and workflow outcomes are returned to the
 routing conversation. Plans and named role calls appear as structured ACP
-events.
+events. Each role's streamed response and separately labeled thoughts appear
+inside its role tool card, not in the coordinator's chat stream. Parallel roles
+keep separate message blocks. Tool, permission, terminal, and file operations
+continue to use the root session independently.
+
+Role cards retain their final status and structured outcome alongside the
+transcript, including after reload. Live transcript snapshots are coalesced
+while output is pending; replay retains only the latest grouped snapshot per
+role per turn. Display transcripts are limited to 65,536 characters and 128
+text/thought blocks per role, with an explicit truncation marker. These limits
+do not truncate structured outcomes or model context. Cancellation/disconnect
+stops further snapshot sends and retains accepted buffered text in the settled
+checkpoint when checkpointing succeeds.
 
 The engine executes the declared sequence and parallel batches, requires a
 validated `d3r_report` from every role, and never treats ordinary success prose
@@ -319,8 +331,10 @@ context.
 
 - Native state is independent of Pi session files. The legacy proxy still uses
   Pi's original credentials and session format.
-- Portable child work is represented as tool calls and plans, not standardized
-  nested ACP sessions. Zed-private child metadata is not required.
+- Portable child work is represented as ordinary tool content and plans, not
+  nested ACP sessions. Zed main `52b2927a` has no live external subagent-spawn
+  contract. D3R emits no private spawn metadata, unknown session notifications,
+  or child-session API calls, and does not infer support from capabilities.
 - Images and embedded text context are supported; audio is not advertised.
 - Configuration changes are accepted while idle, not in the middle of a turn.
 - Form elicitation is available when the client supports it; secrets always use

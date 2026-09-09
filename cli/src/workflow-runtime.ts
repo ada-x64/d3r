@@ -377,6 +377,7 @@ export const createWorkflowRuntime = (
 					request.emit({
 						...chunk,
 						messageId: `${toolCallId}:${chunk.messageId}`,
+						parentToolCallId: chunk.parentToolCallId ?? toolCallId,
 					}),
 			});
 			if (reason === "cancelled") {
