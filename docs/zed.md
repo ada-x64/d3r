@@ -127,6 +127,12 @@ Answer declared human checkpoints normally. Blocked or interrupted workflows
 require `abandon` or an explicit `restart`. **Restart reruns the pinned workflow
 from its beginning and can repeat effects.** It is not automatic crash recovery.
 
+A new slash command does not replace an active workflow or interrupted routing
+turn. D3R explains the current block in the conversation instead of reporting an
+internal error. To start with a revised prompt, send `abandon`, then resend the
+slash command with your new instructions. Abandoning does not undo prior
+effects.
+
 ## Permissions and tools
 
 Before the first model request, approve workspace use for the current session.

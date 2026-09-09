@@ -541,9 +541,25 @@ export const createWorkflowRuntime = (
 			.trim();
 		const directive = /^\/([^\s]+)/.exec(text)?.[1];
 		if ((active() || routingInterrupted) && directive) {
-			throw new Error(
-				"A workflow or interrupted turn is active; abandon it before a new directive",
-			);
+			try {
+				await say(
+					request,
+					[
+						routingInterrupted
+							? "A previous routing turn was interrupted."
+							: `Workflow /${engine!.command} is ${engine!.status}.`,
+						...(engine?.pause ? [engine.pause.message] : []),
+						"Reply abandon to end it without replaying effects, then resend your slash command.",
+					].join("\n"),
+				);
+			} catch (error) {
+				// Cancelling a notice must not interrupt the retained workflow's checkpoint.
+				if (request.signal.aborted) {
+					return "cancelled";
+				}
+				throw error;
+			}
+			return "completed";
 		}
 		if (routingInterrupted) {
 			if (

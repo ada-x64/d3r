@@ -139,6 +139,59 @@ const harness = (
 	};
 };
 
+/** Every recoverable pause must keep slash commands from replacing its retained work. */
+const guardedStates = [
+	{ name: "missing report", status: "blocked", kind: "failure" },
+	{ name: "blocked report", status: "blocked", kind: "failure" },
+	{ name: "needs_human report", status: "waiting", kind: "report" },
+	{ name: "human checkpoint", status: "waiting", kind: "human" },
+	{ name: "interrupted workflow", status: "interrupted", kind: "interrupted" },
+	{ name: "interrupted routing", status: null, kind: null },
+] as const;
+/** Reach pauses through real turns, retaining nonempty context and a nondefault model. */
+const guardedHarness = async (
+	state: (typeof guardedStates)[number]["name"],
+) => {
+	const controller = new AbortController();
+	const h = harness(async (name, report) => {
+		if (["aggregator", "researcher"].includes(name)) {
+			if (state === "interrupted workflow" && !controller.signal.aborted) {
+				controller.abort();
+				return;
+			}
+			if (state === "missing report") {
+				return;
+			}
+			if (state === "blocked report" || state === "needs_human report") {
+				report({
+					status: state === "blocked report" ? "blocked" : "needs_human",
+					summary:
+						"Cannot perform design recon because required operator brief/topic is absent",
+				});
+				return;
+			}
+		}
+		report(done(name));
+	});
+	await h.runtime.setConfig!("model", "second");
+	await h.prompt("Earlier routing context");
+	if (state === "interrupted routing") {
+		h.routing.prompt.mockRejectedValueOnce(
+			new Error("Interrupted fixture turn"),
+		);
+		await expect(
+			h.prompt("Original interrupted routing brief"),
+		).rejects.toThrow("Interrupted fixture turn");
+	} else {
+		await expect(
+			h.runtime.prompt({ ...h.request("/design"), signal: controller.signal }),
+		).resolves.toBe(
+			state === "interrupted workflow" ? "cancelled" : "completed",
+		);
+	}
+	return h;
+};
+
 // oxlint-disable-next-line max-statements -- Cases cover the public runtime contract independently.
 describe("workflow runtime", () => {
 	it("advertises resource commands and merges routing config with a deferred phase selector", async () => {
@@ -326,15 +379,232 @@ describe("workflow runtime", () => {
 		await h.prompt("/delegate topic");
 		expect(() => callback!(done("late"))).toThrow(/outside/);
 	});
-	it("rejects new directives and phase changes while a checkpoint is active", async () => {
+	it.each(
+		guardedStates.flatMap((state) =>
+			[
+				"/design ignored brief",
+				"/delegate ignored brief",
+				"/unknown ignored brief",
+			].map((directive) => ({ ...state, directive })),
+		),
+	)(
+		"explains $directive during $name without changing state or replaying effects",
+		async ({ name, status, kind, directive }) => {
+			const h = await guardedHarness(name);
+			try {
+				const before = {
+					checkpoint: h.runtime.snapshot!(),
+					config: h.runtime.getConfig!(),
+					commands: h.runtime.getCommands!(),
+					children: h.createAgent.mock.calls.length,
+					routingCalls: h.routing.prompt.mock.calls.length,
+					effects: structuredClone({
+						calls: h.calls,
+						disposals: h.disposals,
+						activities: h.activities,
+					}),
+					chunks: h.chunks.length,
+				};
+				expect(before.checkpoint).toMatchObject(
+					kind === null
+						? { engine: null, routingInterrupted: true }
+						: {
+								phase: "design",
+								engine: { command: "design", status, pause: { kind } },
+							},
+				);
+				const request = h.request(directive);
+				const emit = vi.fn(request.emit);
+				await expect(h.runtime.prompt({ ...request, emit })).resolves.toBe(
+					"completed",
+				);
+				const notices = h.chunks.slice(before.chunks);
+				expect(notices).toHaveLength(1);
+				expect(emit).toHaveBeenCalledExactlyOnceWith(
+					expect.objectContaining({ kind: "text", text: notices[0] }),
+				);
+				expect(notices[0]).toContain(
+					kind === null
+						? "previous routing turn was interrupted"
+						: `Workflow /design is ${status}`,
+				);
+				if (kind !== null) {
+					expect(notices[0]).toContain(h.state().pause!.message);
+				}
+				expect(notices[0]).toContain("Reply abandon");
+				expect(notices[0]).toContain("without replaying effects");
+				expect(notices[0]).toContain("resend your slash command");
+				await expect(h.runtime.setConfig!("phase", "delegate")).rejects.toThrow(
+					/Abandon/,
+				);
+				expect(h.runtime.snapshot!()).toEqual(before.checkpoint);
+				expect(h.runtime.getConfig!()).toEqual(before.config);
+				expect(h.runtime.getCommands!()).toEqual(before.commands);
+				expect(h.createAgent).toHaveBeenCalledTimes(before.children);
+				expect(h.routing.prompt).toHaveBeenCalledTimes(before.routingCalls);
+				expect(h.routing.setConfig).toHaveBeenCalledTimes(1);
+				expect(h.routing.restore).not.toHaveBeenCalled();
+				expect({
+					calls: h.calls,
+					disposals: h.disposals,
+					activities: h.activities,
+				}).toEqual(before.effects);
+			} finally {
+				await h.runtime.dispose();
+			}
+		},
+	);
+	it("explains a ready workflow without a pause after initial plan delivery fails", async () => {
 		const h = harness();
-		await h.prompt("/design topic");
-		await expect(h.prompt("/delegate other")).rejects.toThrow(/active/);
-		await expect(h.runtime.setConfig!("phase", "delegate")).rejects.toThrow(
-			/Abandon/,
-		);
-		expect(h.calls).toHaveLength(2);
+		try {
+			await expect(
+				h.runtime.prompt({
+					...h.request("/design original"),
+					activity: async () => {
+						throw new Error("Plan delivery failed");
+					},
+				}),
+			).rejects.toThrow("Plan delivery failed");
+			expect(h.state()).toMatchObject({ status: "ready", pause: null });
+			const before = h.runtime.snapshot!();
+			await expect(h.prompt("/design revised")).resolves.toBe("completed");
+			expect(h.chunks.at(-1)).toContain("Workflow /design is ready");
+			expect(h.chunks.at(-1)).toContain("Reply abandon");
+			expect(h.runtime.snapshot!()).toEqual(before);
+			expect(h.createAgent).not.toHaveBeenCalled();
+		} finally {
+			await h.runtime.dispose();
+		}
 	});
+	it("explains a restored blocked design without replacing its pinned graph or brief", async () => {
+		const original = await guardedHarness("blocked report");
+		const changed = structuredClone(workflow);
+		changed.commands.design.chain = [{ kind: "agent", name: "archivist" }];
+		const h = harness(undefined, changed);
+		try {
+			await h.runtime.setConfig!("model", "second");
+			h.runtime.restore!(JSON.stringify(original.runtime.snapshot!()));
+			const before = h.runtime.snapshot!();
+			const prompt =
+				"/design we're working on the acp integration. i want to run a test. choose a random topic and research it.";
+			await expect(h.prompt(prompt)).resolves.toBe("completed");
+			expect(h.chunks.at(-1)).toContain("Workflow /design is blocked");
+			expect(h.chunks.at(-1)).toContain(
+				"required operator brief/topic is absent",
+			);
+			expect(h.chunks.at(-1)).toContain("Reply abandon");
+			expect(h.runtime.snapshot!()).toEqual(before);
+			expect(h.state().workflow).toEqual(workflow);
+			expect(h.createAgent).not.toHaveBeenCalled();
+			expect(h.routing.prompt).not.toHaveBeenCalled();
+			expect(h.routing.restore).toHaveBeenCalledTimes(1);
+			expect(h.routing.setConfig).toHaveBeenCalledTimes(1);
+		} finally {
+			await Promise.all([original.runtime.dispose(), h.runtime.dispose()]);
+		}
+	});
+	it.each(guardedStates)(
+		"requires abandon and a resent directive to launch new work after $name",
+		async ({ name }) => {
+			const h = await guardedHarness(name);
+			try {
+				const children = h.createAgent.mock.calls.length;
+				const callCount = h.calls.length;
+				const routingCalls = h.routing.prompt.mock.calls.length;
+				await expect(h.prompt("/delegate ignored brief")).resolves.toBe(
+					"completed",
+				);
+				await expect(h.prompt("abandon")).resolves.toBe("completed");
+				expect(h.createAgent).toHaveBeenCalledTimes(children);
+				expect(h.routing.prompt).toHaveBeenCalledTimes(routingCalls);
+				expect(h.runtime.snapshot!()).toMatchObject({
+					phase: "routing",
+					engine: null,
+					routingInterrupted: false,
+				});
+				await expect(h.prompt("/delegate resent brief")).resolves.toBe(
+					"completed",
+				);
+				const launched = h.calls.slice(callCount);
+				expect(launched.map(({ name: role }) => role)).toEqual([
+					"planner",
+					"schemer",
+				]);
+				expect(
+					launched.every(({ text }) =>
+						text.includes("Earlier routing context"),
+					),
+				).toBe(true);
+				expect(
+					launched.every(({ text }) => text.includes("/delegate resent brief")),
+				).toBe(true);
+				expect(
+					launched.some(({ text }) => text.includes("ignored brief")),
+				).toBe(false);
+				expect(h.createAgent).toHaveBeenCalledTimes(children + 2);
+				expect(h.routing.prompt).toHaveBeenCalledTimes(routingCalls);
+				expect(h.state()).toMatchObject({
+					command: "delegate",
+					status: "completed",
+				});
+				expect(
+					h.runtime.getConfig!().find(({ id }) => id === "model")?.value,
+				).toBe("second");
+			} finally {
+				await h.runtime.dispose();
+			}
+		},
+	);
+	it.each(guardedStates.filter(({ name }) => name !== "human checkpoint"))(
+		"restarts only the retained work after a guarded directive during $name",
+		async ({ name }) => {
+			const h = await guardedHarness(name);
+			try {
+				const children = h.createAgent.mock.calls.length;
+				const callCount = h.calls.length;
+				const routingCalls = h.routing.prompt.mock.calls.length;
+				await expect(h.prompt("/delegate ignored brief")).resolves.toBe(
+					"completed",
+				);
+				await expect(h.prompt("continue")).resolves.toBe("completed");
+				expect(h.createAgent).toHaveBeenCalledTimes(children);
+				expect(h.routing.prompt).toHaveBeenCalledTimes(routingCalls);
+				await expect(h.prompt("restart")).resolves.toBe("completed");
+				if (name === "interrupted routing") {
+					expect(h.createAgent).not.toHaveBeenCalled();
+					expect(h.routing.prompt).toHaveBeenCalledTimes(routingCalls + 1);
+					expect(h.routing.prompt).toHaveBeenLastCalledWith(
+						expect.objectContaining({
+							content: [
+								{ type: "text", text: "Original interrupted routing brief" },
+							],
+						}),
+					);
+				} else {
+					const repeated = h.calls.slice(callCount);
+					expect(repeated.map(({ name: role }) => role)).toEqual([
+						"aggregator",
+						"researcher",
+					]);
+					expect(repeated.every(({ text }) => text.includes("/design"))).toBe(
+						true,
+					);
+					expect(
+						repeated.some(({ text }) => text.includes("ignored brief")),
+					).toBe(false);
+					expect(h.state().command).toBe("design");
+					expect(h.state().workflow).toEqual(workflow);
+					expect(h.createAgent).toHaveBeenCalledTimes(children + 2);
+					expect(h.routing.prompt).toHaveBeenCalledTimes(routingCalls);
+				}
+				expect(
+					h.runtime.getConfig!().find(({ id }) => id === "model")?.value,
+				).toBe("second");
+			} finally {
+				await h.runtime.dispose();
+			}
+		},
+	);
 	it("restores the pinned graph, not changed live resource definitions", async () => {
 		const h = harness();
 		await h.prompt("/design original");

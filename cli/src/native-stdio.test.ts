@@ -99,7 +99,7 @@ const stdioPeer = (deps: NativeServerDeps) => {
 	};
 };
 
-/** Setup guidance must reach visible assistant text, not just an error or a tool update. */
+/** Guidance must reach visible assistant text, not just an error or a tool update. */
 const expectAgentGuidance = (
 	frames: readonly Frame[],
 	sessionId: string,
@@ -397,6 +397,105 @@ describe("native deps through ACP stdio", () => {
 			await peer.stop();
 		}
 	});
+
+	it.each(["blocked", "needs_human"] as const)(
+		"explains a restored %s design over ACP and starts revised work only after abandon and resend",
+		// oxlint-disable-next-line max-statements -- Keep block/restore/guard/abandon/resend in one protocol regression.
+		async (status) => {
+			const f = nativeFixture();
+			f.onTurn.mockImplementationOnce(async ({ options, input, request }) => {
+				await options
+					.tools!.find(({ name }) => name === "d3r_report")!
+					.execute(
+						{ status, summary: "Required operator brief/topic is absent." },
+						{
+							toolCallId: "report",
+							cwd: input.cwd,
+							roots: [input.cwd],
+							signal: request.signal,
+						},
+					);
+			});
+			const peer = stdioPeer(await f.server());
+			try {
+				await peer.request("initialize", { protocolVersion: 1 });
+				const opened = await peer.request("session/new", {
+					cwd: CWD,
+					mcpServers: [],
+				});
+				expect(opened.error).toBeUndefined();
+				const sessionId = String(opened.result?.sessionId);
+				peer.knownSessions.add(sessionId);
+				const prompt = (text: string) =>
+					peer.request("session/prompt", {
+						sessionId,
+						prompt: [{ type: "text", text }],
+					});
+				const checkpoint = async () => {
+					const saved = await f.store.get(sessionId);
+					const last = saved?.records.at(-1);
+					if (last?.kind !== "checkpoint") {
+						throw new Error("Missing persisted checkpoint");
+					}
+					return parseNativeCheckpoint(
+						(last.state as { runtime: unknown }).runtime,
+					);
+				};
+				await expect(prompt("/design")).resolves.toMatchObject({
+					result: { stopReason: "end_turn" },
+				});
+				const before = await checkpoint();
+				expect(before.inner?.engine).toMatchObject({
+					status: status === "blocked" ? "blocked" : "waiting",
+					pause: { message: "Required operator brief/topic is absent." },
+				});
+				await peer.request("session/close", { sessionId });
+				await expect(
+					peer.request("session/load", { sessionId, cwd: CWD, mcpServers: [] }),
+				).resolves.not.toHaveProperty("error");
+				const start = peer.frames.length;
+				const revised =
+					"/design we're working on the acp integration. i want to run a test. choose a random topic and research it.";
+				await expect(prompt(revised)).resolves.toMatchObject({
+					result: { stopReason: "end_turn" },
+				});
+				expectAgentGuidance(
+					peer.frames.slice(start),
+					sessionId,
+					/Workflow \/design is (blocked|waiting)/,
+				);
+				expectAgentGuidance(
+					peer.frames.slice(start),
+					sessionId,
+					/brief\/topic/,
+				);
+				expectAgentGuidance(
+					peer.frames.slice(start),
+					sessionId,
+					/Reply abandon.*resend your slash command/,
+				);
+				await expect(checkpoint()).resolves.toEqual(before);
+				expect(f.turns).toHaveLength(1);
+				await expect(prompt("abandon")).resolves.toMatchObject({
+					result: { stopReason: "end_turn" },
+				});
+				expect(f.turns).toHaveLength(1);
+				await expect(prompt(revised)).resolves.toMatchObject({
+					result: { stopReason: "end_turn" },
+				});
+				expect(f.turns).toHaveLength(2);
+				expect(f.turns[1].request.content).toContainEqual({
+					type: "text",
+					text: revised,
+				});
+				await expect(checkpoint()).resolves.toMatchObject({
+					inner: { engine: { status: "completed" } },
+				});
+			} finally {
+				await peer.stop();
+			}
+		},
+	);
 
 	it("registers configured MCP secrets before echoed content reaches persisted checkpoints or replay", async () => {
 		const f = nativeFixture();

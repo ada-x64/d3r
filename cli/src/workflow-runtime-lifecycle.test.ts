@@ -172,6 +172,112 @@ describe("workflow runtime lifecycle", () => {
 		release.resolve();
 		await turn;
 	});
+	it.each(["cancelled", "failed"] as const)(
+		"preserves and resumes a human checkpoint after %s guard notice delivery",
+		// oxlint-disable-next-line max-statements -- Keep the pending-notice race and subsequent resume assertions together.
+		async (delivery) => {
+			const graph = structuredClone(workflow);
+			graph.commands.design.chain.splice(1, 0, {
+				kind: "human",
+				prompt: "Approve the design before continuing",
+			});
+			const routing = router();
+			const calls: { name: string; content: RuntimePrompt["content"] }[] = [];
+			const disposed = vi.fn(async () => undefined);
+			const createAgent = vi.fn(
+				async (
+					name: string,
+					report: WorkflowReport,
+				): Promise<RuntimeSession> => ({
+					prompt: async (input) => {
+						calls.push({ name, content: structuredClone(input.content) });
+						report({ status: "completed", summary: name });
+						return "completed";
+					},
+					dispose: disposed,
+				}),
+			);
+			const runtime = createWorkflowRuntime({
+				routing,
+				workflow: graph,
+				agents,
+				createAgent,
+			});
+			const controller = new AbortController();
+			const noticeStarted = gate();
+			const releaseNotice = gate();
+			try {
+				await runtime.prompt(request("/design original brief"));
+				expect(state(runtime)).toMatchObject({
+					status: "waiting",
+					pause: {
+						kind: "human",
+						message: "Approve the design before continuing",
+					},
+				});
+				const before = runtime.snapshot!();
+				const error = new Error("Notice delivery failed");
+				const notice = {
+					...request("/design ignored brief", controller.signal),
+					emit: vi.fn(async () => {
+						noticeStarted.resolve();
+						await releaseNotice.promise;
+						controller.signal.throwIfAborted();
+						throw error;
+					}),
+				};
+				const turn = runtime.prompt(notice);
+				await noticeStarted.promise;
+				if (delivery === "cancelled") {
+					controller.abort();
+				}
+				const outcome =
+					delivery === "cancelled"
+						? expect(turn).resolves.toBe("cancelled")
+						: expect(turn).rejects.toBe(error);
+				releaseNotice.resolve();
+				await outcome;
+				expect(notice.emit).toHaveBeenCalledExactlyOnceWith(
+					expect.objectContaining({
+						kind: "text",
+						text: expect.stringContaining("Reply abandon"),
+					}),
+				);
+				expect(notice.activity).not.toHaveBeenCalled();
+				expect(runtime.snapshot!()).toEqual(before);
+				expect(createAgent).toHaveBeenCalledTimes(2);
+				expect(disposed).toHaveBeenCalledTimes(2);
+				expect(routing.prompt).not.toHaveBeenCalled();
+				expect(routing.restore).not.toHaveBeenCalled();
+				await expect(runtime.prompt(request("approved"))).resolves.toBe(
+					"completed",
+				);
+				expect(state(runtime).status).toBe("completed");
+				expect(calls.map(({ name }) => name)).toEqual([
+					"first",
+					"second",
+					"last",
+				]);
+				expect(calls[2].content).toEqual(
+					expect.arrayContaining([
+						{ type: "text", text: "/design original brief" },
+						{ type: "text", text: "approved" },
+					]),
+				);
+				expect(calls[2].content).not.toContainEqual({
+					type: "text",
+					text: "/design ignored brief",
+				});
+				expect(createAgent).toHaveBeenCalledTimes(3);
+				expect(disposed).toHaveBeenCalledTimes(3);
+				expect(routing.prompt).not.toHaveBeenCalled();
+			} finally {
+				controller.abort();
+				releaseNotice.resolve();
+				await runtime.dispose();
+			}
+		},
+	);
 	it("cancellation waits for every child and disposal before settling", async () => {
 		const controller = new AbortController();
 		const allStarted = gate();
