@@ -16,6 +16,7 @@ import {
 	checkedText,
 	isMissing,
 	isSensitivePath,
+	readDiskText,
 	readWorkspaceText,
 	ResourceAccessError,
 	workspacePath,
@@ -394,6 +395,11 @@ export const createWorkspaceTools = ({
 		...additionalDirectories.map((path) => resolve(cwd, path)),
 	];
 
+	// The dispatcher approves parsed input; pin cwd before approval, not at execution time.
+	const scopedCommandSchema = commandSchema.transform((input) => ({
+		...input,
+		cwd: resolve(cwd, input.cwd ?? "."),
+	}));
 	const writing = new Set<string>();
 	const accessFor = (context: RuntimeToolContext): WorkspaceAccess => ({
 		cwd: context.cwd,
@@ -574,7 +580,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "search",
 			description:
-				"Bounded literal UTF-8 search within workspace roots, using editor buffers when available. Skips private paths, symlinks, binary/oversized files and generated directories; reports truncation.",
+				"Bounded literal UTF-8 search of saved files on disk within workspace roots; does not search unsaved editor buffers. Returns path:line matches as text without opening editor files or emitting follow locations. Skips private paths, symlinks, binary/oversized files and generated directories; reports truncation.",
 			kind: "search",
 			schema: searchSchema,
 			permission: "none",
@@ -585,7 +591,6 @@ export const createWorkspaceTools = ({
 				const access = accessFor(context);
 				const walk = await walkFiles(path, access);
 				const matches: string[] = [];
-				const locations: { path: string; line: number }[] = [];
 				const needle = input.caseSensitive
 					? input.query
 					: input.query.toLowerCase();
@@ -602,7 +607,8 @@ export const createWorkspaceTools = ({
 					await scopedPath(candidate, context);
 					let text = "";
 					try {
-						({ text } = await readWorkspaceText(candidate, access));
+						text = await readDiskText(candidate, context.signal);
+						await scopedPath(candidate, context);
 					} catch (error) {
 						if (
 							error instanceof ResourceAccessError ||
@@ -627,14 +633,12 @@ export const createWorkspaceTools = ({
 							break;
 						}
 						matches.push(`${candidate}:${index + 1}: ${line}`);
-						locations.push({ path: candidate, line: index + 1 });
 					}
 				}
 				return textResult(
 					capOutput(
 						`${matches.join("\n")}${truncated ? "\n[Search truncated]" : ""}`,
 					),
-					locations,
 				);
 			},
 		},
@@ -643,11 +647,11 @@ export const createWorkspaceTools = ({
 			description:
 				"APPROVAL REQUIRED. Execute a program with literal argv, or an explicitly requested shell. NOT A SANDBOX: commands can access files/network outside workspace roots. Execution has a bounded timeout and captured output cap; no automatic execution.",
 			kind: "execute",
-			schema: commandSchema,
+			schema: scopedCommandSchema,
 			permission: "ask",
 			execute: async (args, context) => {
-				const input = commandSchema.parse(args);
-				const path = await scopedPath(input.cwd ?? context.cwd, context);
+				const input = scopedCommandSchema.parse(args);
+				const path = await scopedPath(input.cwd, context);
 				const info = await lstat(path);
 				if (!info.isDirectory()) {
 					throw new Error("Command cwd must be a directory");

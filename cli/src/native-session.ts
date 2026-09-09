@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import {
 	type RuntimeConfigOption,
 	type RuntimePrompt,
@@ -26,6 +27,8 @@ import {
 } from "./native-resources.ts";
 import { createWorkflowReportTool } from "./workflow-runtime.ts";
 import { createNativeMcpSecurity } from "./native-mcp.ts";
+import { isWithinRoot, readDiskText } from "./resource-paths.ts";
+import { discoverVaultRoot } from "./resource-vault.ts";
 
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
@@ -51,24 +54,52 @@ const cleanup = async (
 		throw new Error("Native session cleanup failed");
 	}
 };
+/** Resource links keep external vaults disk-owned without fallback for workspace editor failures. */
+const vaultReadClient = (input: RuntimeSessionInput, vaultRoot: string) => {
+	const { client } = input;
+	if (isWithinRoot(input.cwd, vaultRoot) || !client?.readTextFile) {
+		return client;
+	}
+	return {
+		...client,
+		readTextFile: (path: string, signal: AbortSignal) =>
+			isWithinRoot(vaultRoot, resolve(input.cwd, path))
+				? readDiskText(path, signal)
+				: client.readTextFile!(path, signal),
+	};
+};
 /** Capabilities select tools; the runtime dispatcher still asks before every privileged call. */
 const scopeTools = (
 	tools: readonly RuntimeTool[],
 	input: RuntimeSessionInput,
-): RuntimeTool[] =>
-	tools.map((tool) => ({
+	vaultRoot: string,
+): RuntimeTool[] => {
+	const client = vaultReadClient(input, vaultRoot);
+	const diskClient = client && {
+		...client,
+		readTextFile: undefined,
+		writeTextFile: undefined,
+	};
+	return tools.map((tool) => ({
 		...tool,
 		permission: ["read_file", "list_directory", "search"].includes(tool.name)
 			? "none"
 			: "ask",
-		execute: (args, context) =>
-			tool.execute(args, {
+		execute: (args, context) => {
+			const parsed = tool.schema.parse(args);
+			const diskOwned =
+				!isWithinRoot(input.cwd, vaultRoot) &&
+				typeof parsed.path === "string" &&
+				isWithinRoot(vaultRoot, resolve(input.cwd, parsed.path));
+			return tool.execute(parsed, {
 				...context,
 				cwd: input.cwd,
 				roots: [input.cwd, ...(input.additionalDirectories ?? [])],
-				client: input.client,
-			}),
+				client: diskOwned ? diskClient : client,
+			});
+		},
 	}));
+};
 /** Lazy sessions expose metadata immediately, but only a prompt may request workspace trust. */
 // oxlint-disable-next-line max-statements -- One closure owns lazy setup, cancellation, and rollback.
 export const createLazyNativeSession = ({
@@ -113,6 +144,11 @@ export const createLazyNativeSession = ({
 		) {
 			throw new Error(
 				"Saved native resource roots differ from the session roots",
+			);
+		}
+		if (parsed.resources.vaultRoot !== checkpoint.resources.vaultRoot) {
+			throw new Error(
+				"Saved native vault differs from the discovered workspace vault; open a new session instead",
 			);
 		}
 		validateSelection(available, parsed.selection);
@@ -217,12 +253,34 @@ export const createLazyNativeSession = ({
 	const setup = async (
 		signal: AbortSignal,
 	): Promise<"ready" | "workspace_denied" | "mcp_denied"> => {
+		const { vaultRoot } = saved.resources;
+		const externalVault = !isWithinRoot(input.cwd, vaultRoot);
+		const checkVault = async () => {
+			if (
+				externalVault &&
+				(await discoverVaultRoot(input.cwd, { signal })) !== vaultRoot
+			) {
+				throw new Error(
+					"Native vault location changed; open a new session instead",
+				);
+			}
+		};
+		await checkVault();
 		if (
 			!(await permit(
-				`Trust workspace ${input.cwd} for this session`,
+				externalVault
+					? `Trust workspace ${input.cwd} and vault ${vaultRoot} for this session`
+					: `Trust workspace ${input.cwd} for this session`,
 				{
 					cwd: input.cwd,
 					additionalDirectories: input.additionalDirectories ?? [],
+					...(externalVault
+						? {
+								vaultRoot,
+								vaultAccess:
+									"Allow reads of this vault only, not its parent directory. External vault files use disk IO, not editor buffers. Writes still require separate approval.",
+							}
+						: {}),
 					summary:
 						"Allow workspace instructions and skills to guide model requests and workspace reads. Provider requests may incur charges. Mutations, commands, MCP connections and MCP calls still require separate approval. Trust is not saved.",
 				},
@@ -231,6 +289,13 @@ export const createLazyNativeSession = ({
 		) {
 			return "workspace_denied";
 		}
+		await checkVault();
+		const trustedInput = {
+			...input,
+			additionalDirectories: externalVault
+				? [...new Set([...(input.additionalDirectories ?? []), vaultRoot])]
+				: input.additionalDirectories,
+		};
 		const configured = await deps.loadMcpConfig(
 			{ home: saved.sources.home, cwd: input.cwd },
 			{ signal, onSecrets: mcpSecurity.registerSecrets },
@@ -268,9 +333,10 @@ export const createLazyNativeSession = ({
 				...scopeTools(
 					deps.createWorkspaceTools({
 						cwd: input.cwd,
-						additionalDirectories: input.additionalDirectories,
+						additionalDirectories: trustedInput.additionalDirectories,
 					}),
-					input,
+					trustedInput,
+					vaultRoot,
 				),
 				createNativeSkillTool(saved.resources),
 				...opened.tools.map((tool) => ({
@@ -304,9 +370,9 @@ export const createLazyNativeSession = ({
 					resolveResource: async (resource, context) => {
 						const resolved = await deps.resolveWorkspaceResource(resource, {
 							cwd: input.cwd,
-							roots: [input.cwd, ...(input.additionalDirectories ?? [])],
+							roots: [input.cwd, ...(trustedInput.additionalDirectories ?? [])],
 							signal: context.signal,
-							client: input.client,
+							client: vaultReadClient(input, vaultRoot),
 						});
 						return resolved.text;
 					},

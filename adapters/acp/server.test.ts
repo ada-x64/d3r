@@ -1,10 +1,22 @@
-import { client, RequestError, type McpServer } from "@agentclientprotocol/sdk";
+import {
+	client,
+	RequestError,
+	type McpServer,
+	type RequestPermissionRequest,
+} from "@agentclientprotocol/sdk";
 import {
 	createSessionStore,
 	nativeAuthRequired,
 	type NativeServerDeps,
 } from "@d3r/adapter-acp/server";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import {
@@ -17,7 +29,16 @@ import {
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CWD, fixture, runtime, waitForAbort } from "./test-support.ts";
+import {
+	CWD,
+	deferred,
+	fixture,
+	runtime,
+	waitForAbort,
+} from "./test-support.ts";
+import { createEmbeddedRuntime } from "../pi/embedded.ts";
+import { MODEL_B, nativeFixture } from "../../cli/src/native-test-support.ts";
+import { type ClientServices } from "./client.ts";
 
 /** Contract tests for native session ownership rather than SDK internals. */
 describe("native ACP session foundation", () => {
@@ -762,6 +783,470 @@ describe("native ACP full surface", () => {
 		await f.peer.agent.request("session/resume", { sessionId, cwd: CWD });
 	});
 
+	it.each(["allow", "reject", "allow_always"])(
+		"keeps the visible command preview through permission choice %s and final activity",
+		async (optionId) => {
+			const permissions: RequestPermissionRequest[] = [];
+			const secret = "registered-provider-credential";
+			const input = Object.freeze({
+				command: "node",
+				args: Object.freeze([
+					"-e",
+					"console.log('two words')\nconsole.log('done')",
+					secret,
+				]),
+				cwd: resolve(CWD, "command dir"),
+				timeoutMs: 3000,
+			});
+			const execute = vi.fn();
+			const app = client().onRequest(
+				"session/request_permission",
+				({ params }) => {
+					permissions.push(params);
+					expect(params.toolCall.status).toBe("pending");
+					expect(params.options).toEqual([
+						{ optionId: "allow", name: "Allow once", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+					]);
+					expect(execute).not.toHaveBeenCalled();
+					return { outcome: { outcome: "selected", optionId } };
+				},
+			);
+			const f = open(
+				(session) => {
+					const services = session.client as ClientServices["services"];
+					services.registerSecrets([secret]);
+					return {
+						...runtime(),
+						prompt: async (request) => {
+							const activity = (
+								status: "pending" | "in_progress" | "completed" | "failed",
+							) =>
+								request.activity!({
+									kind: "tool",
+									toolCallId: "preview",
+									title: "run_command",
+									toolKind: "execute",
+									status,
+									rawInput: input,
+									...(status === "completed" || status === "failed"
+										? {
+												content: [
+													{ type: "text" as const, text: "Tool result" },
+												],
+												rawOutput: { result: "retained" },
+											}
+										: {}),
+								});
+							await activity("pending");
+							const allowed = await services.requestPermission(
+								{
+									toolCallId: "preview",
+									title: "run_command",
+									kind: "execute",
+									input,
+								},
+								request.signal,
+							);
+							if (allowed) {
+								await activity("in_progress");
+								execute(input);
+							}
+							await activity(allowed ? "completed" : "failed");
+							return "completed";
+						},
+					};
+				},
+				{},
+				app,
+			);
+			await f.initialize();
+			const { sessionId } = await f.newSession();
+			await f.prompt(sessionId);
+			const card = permissions[0].toolCall;
+			const updates = f.updates
+				.map(({ update }) => update)
+				.filter(
+					(update) =>
+						update.sessionUpdate === "tool_call" ||
+						update.sessionUpdate === "tool_call_update",
+				);
+			expect(card.title).toMatch(/^run_command: "node"/);
+			expect(card.content?.[0]).toMatchObject({
+				type: "content",
+				content: {
+					type: "text",
+					text: expect.stringContaining(
+						`Effective cwd: ${JSON.stringify(resolve(CWD, input.cwd))}`,
+					),
+				},
+			});
+			expect(JSON.stringify(card.content)).toContain("Timeout: 3000 ms");
+			expect(JSON.stringify([permissions, updates])).not.toContain(secret);
+			expect(updates.map((update) => update.status)).toEqual(
+				optionId === "allow"
+					? ["pending", "in_progress", "completed"]
+					: ["pending", "failed"],
+			);
+			for (const update of updates) {
+				expect(update.title).toBe(card.title);
+				if (update.status === "pending") {
+					expect(JSON.stringify(update.content)).toContain("Requested cwd:");
+					expect(JSON.stringify(update.content)).not.toContain(
+						"Effective cwd:",
+					);
+				} else {
+					expect(update.content?.[0]).toEqual(card.content?.[0]);
+				}
+				expect(update.rawInput).toEqual({
+					...input,
+					args: [...input.args.slice(0, -1), "[redacted]"],
+				});
+			}
+			expect(updates.at(-1)).toMatchObject({
+				content: [
+					card.content![0],
+					{ type: "content", content: { type: "text", text: "Tool result" } },
+				],
+				rawOutput: { result: "retained" },
+			});
+			expect(execute).toHaveBeenCalledTimes(optionId === "allow" ? 1 : 0);
+			expect(input.args.at(-1)).toBe(secret);
+		},
+	);
+
+	// oxlint-disable-next-line max-statements -- One real native journey binds schema input, held approval and subprocess cwd.
+	it("approves and executes the same cwd when the ACP workspace is a symlink", async () => {
+		const root = await mkdtemp(
+			resolve(await realpath(tmpdir()), "d3r-acp-command-cwd-"),
+		);
+		directories.push(root);
+		const home = resolve(root, "home");
+		const project = resolve(root, "real", "project");
+		const link = resolve(root, "link");
+		await Promise.all([mkdir(home), mkdir(project, { recursive: true })]);
+		await symlink(
+			project,
+			link,
+			process.platform === "win32" ? "junction" : "dir",
+		);
+		const native = nativeFixture();
+		type Stream = ReturnType<typeof native.models.streamSimple>;
+		type Message = Awaited<ReturnType<Stream["result"]>>;
+		const response = (content: Message["content"]): Stream => {
+			const reason = content.some((part) => part.type === "toolCall")
+				? "toolUse"
+				: "stop";
+			const message: Message = {
+				role: "assistant",
+				content,
+				api: MODEL_B.api,
+				provider: MODEL_B.provider,
+				model: MODEL_B.id,
+				stopReason: reason,
+				timestamp: 0,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			};
+			const events = [
+				{ type: "start" as const, partial: message },
+				{
+					type: "done" as const,
+					reason: reason as "toolUse" | "stop",
+					message,
+				},
+			][Symbol.iterator]();
+			// Only the provider event iterator and final response are consumed by the real loop.
+			return {
+				[Symbol.asyncIterator]: () => ({ next: async () => events.next() }),
+				result: async () => message,
+			} as Stream;
+		};
+		const input = {
+			command: process.execPath,
+			args: [
+				"-e",
+				"require('node:fs').writeFileSync('executed-cwd.txt', process.cwd())",
+			],
+			cwd: "../project",
+		};
+		native.models.streamSimple
+			.mockImplementationOnce(() =>
+				response([
+					{
+						type: "toolCall",
+						id: "cwd-command",
+						name: "run_command",
+						arguments: input,
+					},
+				]),
+			)
+			.mockImplementationOnce(() =>
+				response([
+					{
+						type: "toolCall",
+						id: "report",
+						name: "d3r_report",
+						arguments: { status: "completed", summary: "Command finished" },
+					},
+				]),
+			)
+			.mockImplementation(() =>
+				response([{ type: "text", text: "Finished." }]),
+			);
+		const deps = await native.server(
+			{ home },
+			{
+				realpath,
+				createEmbeddedRuntime,
+				loadAgentResources: async () => ({
+					...native.resources,
+					skills: [],
+					vaultRoot: resolve(project, ".agents", "vault"),
+					agents: native.resources.agents.map((agent) => ({
+						...agent,
+						spec: {
+							...agent.spec,
+							capabilities:
+								agent.spec.name === "designer"
+									? [...agent.spec.capabilities, "bash"]
+									: agent.spec.capabilities,
+						},
+					})),
+				}),
+			},
+		);
+		const seen = deferred<RequestPermissionRequest>();
+		const release = deferred<boolean>();
+		const f = open(
+			deps.createSession,
+			deps,
+			client().onRequest("session/request_permission", async ({ params }) => {
+				if (params.toolCall.title?.startsWith("run_command:")) {
+					seen.resolve(params);
+					return {
+						outcome: {
+							outcome: "selected",
+							optionId: (await release.promise) ? "allow" : "reject",
+						},
+					};
+				}
+				return { outcome: { outcome: "selected", optionId: "allow" } };
+			}),
+		);
+		await f.initialize();
+		const { sessionId } = await f.newSession(link);
+		const pending = f.peer.agent.request("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "/design Check command cwd" }],
+		});
+		try {
+			const { toolCall } = await Promise.race([
+				seen.promise,
+				pending.then(() => {
+					throw new Error("Command permission was not requested");
+				}),
+			]);
+			expect(toolCall.rawInput).toEqual({
+				...input,
+				cwd: project,
+				timeoutMs: 30_000,
+			});
+			const preview = toolCall.content?.[0];
+			expect(preview).toMatchObject({
+				type: "content",
+				content: {
+					type: "text",
+					text: expect.stringContaining(
+						`Effective cwd: ${JSON.stringify(project)}`,
+					),
+				},
+			});
+			expect(JSON.stringify(preview)).not.toContain(
+				JSON.stringify(resolve(link, input.cwd)).slice(1, -1),
+			);
+			const initial = f.updates
+				.map(({ update }) => update)
+				.find(
+					(update) =>
+						update.sessionUpdate === "tool_call" &&
+						update.toolCallId === toolCall.toolCallId,
+				);
+			expect(initial).toMatchObject({
+				content: [
+					{
+						type: "content",
+						content: {
+							type: "text",
+							text: expect.stringContaining('Requested cwd: "../project"'),
+						},
+					},
+				],
+			});
+			expect(JSON.stringify(initial)).not.toContain("Effective cwd:");
+			await expect(
+				readFile(resolve(project, "executed-cwd.txt"), "utf8"),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			release.resolve(true);
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+			expect(await readFile(resolve(project, "executed-cwd.txt"), "utf8")).toBe(
+				project,
+			);
+			const updates = f.updates
+				.map(({ update }) => update)
+				.filter((update) => update.sessionUpdate === "tool_call_update")
+				.filter((update) => update.toolCallId === toolCall.toolCallId);
+			expect(updates.map((update) => update.status)).toEqual([
+				"in_progress",
+				"completed",
+			]);
+			for (const update of updates) {
+				expect(update.title).toBe(toolCall.title);
+				expect(update.content?.[0]).toEqual(preview);
+			}
+		} finally {
+			release.resolve(false);
+			await pending.catch(() => {});
+		}
+	});
+
+	it("retains schema-defaulted approval details when later events still carry the original input", async () => {
+		const permissions: RequestPermissionRequest[] = [];
+		const f = open(
+			(session) => ({
+				...runtime(),
+				prompt: async (request) => {
+					const event = {
+						kind: "tool" as const,
+						toolCallId: "defaults",
+						title: "run_command",
+						toolKind: "execute" as const,
+						rawInput: { command: "pwd" },
+					};
+					await request.activity!({ ...event, status: "pending" });
+					await session.client!.requestPermission(
+						{
+							toolCallId: event.toolCallId,
+							title: event.title,
+							kind: event.toolKind,
+							input: { command: "pwd", args: [], cwd: CWD, timeoutMs: 30_000 },
+						},
+						request.signal,
+					);
+					await request.activity!({ ...event, status: "in_progress" });
+					await request.activity!({
+						...event,
+						status: "completed",
+						content: [{ type: "terminal", terminalId: "result-terminal" }],
+					});
+					return "completed";
+				},
+			}),
+			{},
+			client().onRequest("session/request_permission", ({ params }) => {
+				permissions.push(params);
+				return { outcome: { outcome: "selected", optionId: "allow" } };
+			}),
+		);
+		await f.initialize();
+		const { sessionId } = await f.newSession();
+		await f.prompt(sessionId);
+		const card = permissions[0].toolCall;
+		expect(JSON.stringify(card.content)).toContain("Timeout: 30000 ms");
+		const updates = f.updates
+			.map(({ update }) => update)
+			.filter((update) => update.sessionUpdate === "tool_call_update");
+		expect(updates.map((update) => update.status)).toEqual([
+			"in_progress",
+			"completed",
+		]);
+		for (const update of updates) {
+			expect(update.title).toBe(card.title);
+			expect(update.content?.[0]).toEqual(card.content?.[0]);
+			expect(update.rawInput).toEqual({ command: "pwd" });
+		}
+		expect(updates.at(-1)?.content?.[1]).toEqual({
+			type: "terminal",
+			terminalId: "result-terminal",
+		});
+	});
+
+	it("makes setup trust, MCP plans and mutation inputs visible even on execute/edit cards", async () => {
+		const permissions: RequestPermissionRequest[] = [];
+		const inputs = [
+			{
+				title: "Trust workspace for this session",
+				kind: "execute" as const,
+				input: {
+					cwd: CWD,
+					summary:
+						"Instructions may guide provider requests and incur charges; trust is not saved.",
+				},
+			},
+			{
+				title: "Connect MCP remote",
+				kind: "execute" as const,
+				input: {
+					command: "node",
+					args: ["-e", "runServer()"],
+					environment: [
+						{ name: "PATH", value: "/bin" },
+						{ name: "API_KEY", value: "[REDACTED]" },
+					],
+					warning: "UNSANDBOXED host execution",
+				},
+			},
+			{
+				title: "write_file",
+				kind: "edit" as const,
+				input: {
+					path: "notes.txt",
+					content: "```\n[link](https://untrusted.invalid)\n```",
+				},
+			},
+		];
+		const f = open(
+			async (session) => {
+				await Promise.all(
+					inputs.map((request, index) =>
+						session.client!.requestPermission(
+							{ ...request, toolCallId: `setup-${index}` },
+							session.signal!,
+						),
+					),
+				);
+				return runtime();
+			},
+			{},
+			client().onRequest("session/request_permission", ({ params }) => {
+				permissions.push(params);
+				return { outcome: { outcome: "selected", optionId: "reject" } };
+			}),
+		);
+		await f.initialize();
+		await f.newSession();
+		expect(permissions).toHaveLength(inputs.length);
+		for (const request of inputs) {
+			const card = permissions.find(
+				(permission) => permission.toolCall.title === request.title,
+			)!.toolCall;
+			expect(card.rawInput).toEqual(request.input);
+			expect(card.content?.[0]).toMatchObject({
+				type: "content",
+				content: { type: "text", text: expect.stringContaining("Input (JSON") },
+			});
+		}
+		expect(JSON.stringify(permissions)).toContain(inputs[0].input.summary);
+		expect(JSON.stringify(permissions)).toContain("/bin");
+		expect(JSON.stringify(permissions)).toContain("[REDACTED]");
+	});
+
 	it("negotiates permission/fs/terminal/form services and stores terminal output for replay", async () => {
 		const persistence = await store();
 		const events: string[] = [];
@@ -854,8 +1339,12 @@ describe("native ACP full surface", () => {
 		const { sessionId } = await f.newSession();
 		await f.prompt(sessionId);
 		expect(events).toEqual(["create", "wait", "output", "release"]);
+		const preview = {
+			type: "content",
+			content: { type: "text", text: expect.stringContaining("Input (JSON") },
+		};
 		expect(f.updates[0].update).toMatchObject({
-			content: [{ type: "terminal", terminalId: "t" }],
+			content: [preview, { type: "terminal", terminalId: "t" }],
 		});
 		const saved = await persistence.get(sessionId);
 		expect(saved?.records).toContainEqual({
@@ -863,6 +1352,7 @@ describe("native ACP full surface", () => {
 			update: expect.objectContaining({
 				sessionUpdate: "tool_call",
 				content: [
+					preview,
 					{ type: "content", content: { type: "text", text: "terminal text" } },
 				],
 			}),

@@ -2,6 +2,7 @@ import {
 	type AgentContext,
 	type ClientCapabilities,
 	type SessionUpdate,
+	type ToolCall,
 	type TerminalOutputResponse,
 	type WaitForTerminalExitResponse,
 } from "@agentclientprotocol/sdk";
@@ -11,6 +12,8 @@ import { z } from "zod";
 import { waitFor } from "./errors.ts";
 import { createClientWrites } from "./client-writes.ts";
 import { createSecretCollection } from "./secrets.ts";
+import { toolCallPresentation } from "./presentation.ts";
+import { redactSessionData } from "./store.ts";
 
 /** Terminal cleanup must not block shutdown on a non-cooperating client. */
 const CLEANUP_TIMEOUT_MS = 1000;
@@ -44,6 +47,11 @@ export const createClientServices = (
 	const lifetime = new AbortController();
 	const writes = createClientWrites(sessionId, client, connectionSignal);
 	const secretCollection = createSecretCollection(secrets);
+	// Activities may retain pre-schema input, so keep the preview actually shown for approval.
+	const permissionPreviews = new Map<
+		string,
+		Pick<ToolCall, "title" | "content">
+	>();
 	const terminals = new Set<TerminalState>();
 	const output = new Map<string, string>();
 	const signalFor = (signal: AbortSignal) =>
@@ -106,6 +114,14 @@ export const createClientServices = (
 				return false;
 			}
 			try {
+				const presentation = toolCallPresentation(request, {
+					permission: true,
+					secrets: secretCollection.values,
+				});
+				permissionPreviews.set(request.toolCallId, {
+					title: presentation.title,
+					content: presentation.content,
+				});
 				const result = await waitFor(
 					client.request(
 						"session/request_permission",
@@ -113,9 +129,8 @@ export const createClientServices = (
 							sessionId,
 							toolCall: {
 								toolCallId: request.toolCallId,
-								title: request.title,
 								kind: request.kind,
-								rawInput: request.input,
+								...presentation,
 								status: "pending",
 							},
 							options: [
@@ -270,11 +285,21 @@ export const createClientServices = (
 		},
 	};
 	const finishTurn = async () => {
-		await Promise.all([writes.settle(), ...[...terminals].map(cleanup)]);
+		try {
+			await Promise.all([writes.settle(), ...[...terminals].map(cleanup)]);
+		} finally {
+			permissionPreviews.clear();
+		}
 	};
 	return {
 		services,
 		secrets: secretCollection.values,
+		permissionPresentation: (toolCallId: string) => {
+			const preview = permissionPreviews.get(toolCallId);
+			return preview
+				? redactSessionData(preview, secretCollection.values)
+				: undefined;
+		},
 		settleWrites: writes.settle,
 		hasUnknownWrites: writes.hasUnknownOutcome,
 		finishTurn,

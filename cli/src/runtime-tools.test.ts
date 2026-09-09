@@ -5,6 +5,7 @@ import {
 	mkdtemp,
 	mkdir,
 	readFile,
+	realpath,
 	rm,
 	symlink,
 	writeFile,
@@ -283,6 +284,13 @@ describe("workspace runtime tools", () => {
 					await expect(
 						execute("write_file", { path, content: "bad" }),
 					).rejects.toThrow(/outside allowed roots/);
+					await expect(
+						execute(
+							"search",
+							{ path, query: "outside" },
+							{ ...context, roots: [base] },
+						),
+					).rejects.toThrow(/outside allowed roots/);
 				},
 			),
 		);
@@ -299,8 +307,17 @@ describe("workspace runtime tools", () => {
 			{ ...context, roots: [cwd, other] },
 		);
 		expect(result.text).toContain("allowed");
+		const search = await execute(
+			"search",
+			{ path: other, query: "allowed" },
+			{ ...context, roots: [cwd, other] },
+		);
+		expect(search.text).toBe(`${join(other, "notes.txt")}:1: allowed`);
 		await expect(
 			execute("read_file", { path: join(other, "notes.txt") }),
+		).rejects.toThrow(/outside allowed roots/);
+		await expect(
+			execute("search", { path: other, query: "allowed" }),
 		).rejects.toThrow(/outside allowed roots/);
 	});
 
@@ -319,13 +336,16 @@ describe("workspace runtime tools", () => {
 		".ssh/id_ed25519",
 		".agents/sessions/turn.json",
 		".agents/private/data",
-	])("denies sensitive reads and writes: %s", async (path) => {
+	])("denies sensitive reads, writes and searches: %s", async (path) => {
 		await expect(execute("read_file", { path })).rejects.toThrow(
 			/Sensitive path/,
 		);
 		await expect(
 			execute("write_file", { path, content: "bad" }),
 		).rejects.toThrow(/Sensitive path/);
+		await expect(execute("search", { path, query: "secret" })).rejects.toThrow(
+			/Sensitive path/,
+		);
 	});
 
 	it("refuses symlink escapes and links replaced after a read", async () => {
@@ -342,6 +362,9 @@ describe("workspace runtime tools", () => {
 				await expect(execute("read_file", { path })).rejects.toThrow(/Symlink/);
 				await expect(
 					execute("write_file", { path, content: "bad" }),
+				).rejects.toThrow(/Symlink/);
+				await expect(
+					execute("search", { path, query: "private" }),
 				).rejects.toThrow(/Symlink/);
 			}),
 		);
@@ -387,6 +410,7 @@ describe("workspace runtime tools", () => {
 		expect(result.content).toEqual([
 			{ type: "diff", path, oldText: "unsaved", newText: "edited" },
 		]);
+		expect(result.locations).toEqual([{ path, line: 1 }]);
 		expect(buffer).toBe("edited");
 		expect(await readFile(path, "utf8")).toBe("disk");
 		expect(client.requestPermission).not.toHaveBeenCalled();
@@ -400,6 +424,14 @@ describe("workspace runtime tools", () => {
 				throw new Error("editor unavailable");
 			}),
 		};
+		const search = await execute(
+			"search",
+			{ query: "disk" },
+			{ ...context, client },
+		);
+		expect(search.text).toBe(`${join(cwd, "notes.txt")}:1: disk`);
+		expect(search.locations).toBeUndefined();
+		expect(client.readTextFile).not.toHaveBeenCalled();
 		await expect(
 			execute("read_file", { path: "notes.txt" }, { ...context, client }),
 		).rejects.toThrow("editor unavailable");
@@ -490,33 +522,200 @@ describe("workspace runtime tools", () => {
 		expect(writeTextFile).not.toHaveBeenCalled();
 	});
 
+	it("discovers disk matches without editor reads or follow locations, then deliberately reads an unsaved buffer", async () => {
+		const path = join(cwd, "notes.txt");
+		const other = join(cwd, "other.txt");
+		await Promise.all([
+			writeFile(path, "heading\nneedle on disk"),
+			writeFile(other, "needle elsewhere"),
+		]);
+		const buffer = "heading\nunsaved buffer only";
+		const readTextFile = vi.fn(async () => buffer);
+		const ctx = {
+			...context,
+			client: { requestPermission: vi.fn(), readTextFile },
+		};
+		const search = await execute("search", { query: "needle" }, ctx);
+		expect(search.text.split("\n").toSorted()).toEqual(
+			[`${path}:2: needle on disk`, `${other}:1: needle elsewhere`].toSorted(),
+		);
+		expect(search.content).toEqual([{ type: "text", text: search.text }]);
+		expect(search.locations).toBeUndefined();
+		const bufferSearch = await execute(
+			"search",
+			{ path, query: "unsaved" },
+			ctx,
+		);
+		expect(bufferSearch.text).toBe("");
+		expect(bufferSearch.locations).toBeUndefined();
+		expect(readTextFile).not.toHaveBeenCalled();
+
+		const read = await execute("read_file", { path, startLine: 2 }, ctx);
+		expect(readTextFile).toHaveBeenCalledWith(path, ctx.signal);
+		expect(read.text).toBe(
+			`Snapshot: ${token(buffer)}\n2: unsaved buffer only`,
+		);
+		expect(read.locations).toEqual([{ path, line: 2 }]);
+		expect(await readFile(path, "utf8")).toBe("heading\nneedle on disk");
+	});
+
+	it.each([
+		{ caseSensitive: false, maxResults: 1, lines: [1], truncated: true },
+		{ caseSensitive: false, maxResults: 3, lines: [1, 2, 3], truncated: false },
+		{ caseSensitive: true, maxResults: 3, lines: [1, 3], truncated: false },
+	])(
+		"bounds literal matches and reports truncation: %j",
+		async ({ caseSensitive, maxResults, lines, truncated }) => {
+			const path = join(cwd, "notes.txt");
+			const text = [
+				"needle.*",
+				"NEEDLE.*",
+				"needle.*",
+				"needle but not a literal match",
+			];
+			await writeFile(path, text.join("\n"));
+			const result = await execute("search", {
+				path,
+				query: "needle.*",
+				caseSensitive,
+				maxResults,
+			});
+			expect(
+				result.text.split("\n").filter((line) => !line.startsWith("[")),
+			).toEqual(lines.map((line) => `${path}:${line}: ${text[line - 1]}`));
+			expect(result.text.includes("[Search truncated]")).toBe(truncated);
+			expect(result.locations).toBeUndefined();
+		},
+	);
+
+	it("bounds search output while retaining a navigable match and truncation notice", async () => {
+		const path = join(cwd, "long.txt");
+		await writeFile(path, `needle ${"x".repeat(100_000)}`);
+		const result = await execute("search", { query: "needle" });
+		expect(result.text.startsWith(`${path}:1: needle `)).toBe(true);
+		expect(Buffer.byteLength(result.text)).toBeLessThan(66_000);
+		expect(result.text).toContain("[Output truncated]");
+		expect(result.locations).toBeUndefined();
+	});
+
+	it("reports aggregate scan truncation even without matches", async () => {
+		await Promise.all(
+			Array.from({ length: 9 }, (_, index) =>
+				writeFile(
+					join(cwd, `part-${index}.txt`),
+					Buffer.alloc(1024 * 1024, "x"),
+				),
+			),
+		);
+		const result = await execute("search", { query: "absent" });
+		expect(result.text.trim()).toBe("[Search truncated]");
+		expect(result.locations).toBeUndefined();
+	});
+
 	it("lists and searches the vault but excludes private stores and links", async () => {
 		await mkdir(join(cwd, ".agents", "vault"), { recursive: true });
 		await mkdir(join(cwd, ".git"));
+		await mkdir(join(cwd, ".agents", "private"));
+		await mkdir(join(cwd, "node_modules"));
 		await writeFile(join(cwd, ".agents", "vault", "note.md"), "needle\nNEEDLE");
-		await writeFile(join(cwd, ".git", "config"), "needle secret");
-		await writeFile(join(cwd, ".env"), "needle secret");
-		await writeFile(join(cwd, "binary"), Buffer.from([0, 1]));
+		await Promise.all(
+			[
+				join(cwd, ".git", "config"),
+				join(cwd, ".env"),
+				join(cwd, ".agents", "private", "note.md"),
+				join(cwd, "node_modules", "generated.js"),
+				join(base, "outside.txt"),
+			].map((path) => writeFile(path, "needle excluded")),
+		);
+		await symlink(join(base, "outside.txt"), join(cwd, "link.txt"), "file");
+		await symlink(
+			base,
+			join(cwd, "linked-directory"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 		const listed = await execute("list_directory", {});
-		expect(listed.text).not.toMatch(/\.env|\.git/);
-		const result = await execute("search", { query: "needle", maxResults: 1 });
-		expect(result.text).toContain("note.md:1: needle");
-		expect(result.text).toContain("[Search truncated]");
-		expect(result.text).not.toContain("secret");
-		expect(result.locations).toEqual([
-			{ path: join(cwd, ".agents", "vault", "note.md"), line: 1 },
+		expect(listed.text).not.toMatch(/\.env|\.git|link/);
+		const result = await execute("search", { query: "needle" });
+		const path = join(cwd, ".agents", "vault", "note.md");
+		expect(result.text.split("\n")).toEqual([
+			`${path}:1: needle`,
+			`${path}:2: NEEDLE`,
 		]);
+		expect(result.locations).toBeUndefined();
 	});
 
-	it("rejects binary and oversized text", async () => {
-		await writeFile(join(cwd, "binary"), Buffer.from([0, 1]));
+	it("rejects binary and oversized reads and skips unsafe search candidates", async () => {
+		await writeFile(join(cwd, "binary"), Buffer.from("x\0"));
+		await writeFile(join(cwd, "invalid-utf8"), Buffer.from([120, 255]));
 		await writeFile(join(cwd, "large"), Buffer.alloc(1024 * 1024 + 1, "x"));
+		await writeFile(join(cwd, "valid.txt"), "safe\nx");
 		await expect(execute("read_file", { path: "binary" })).rejects.toThrow(
 			/Binary/,
 		);
 		await expect(execute("read_file", { path: "large" })).rejects.toThrow(
 			/exceeds/,
 		);
+		const result = await execute("search", { query: "x" });
+		expect(result.text).toBe(`${join(cwd, "valid.txt")}:2: x`);
+		expect(result.locations).toBeUndefined();
+	});
+
+	it.each([undefined, ".", "../project"])(
+		"normalizes command cwd %s against the canonical factory before approval",
+		async (requestedCwd) => {
+			const project = join(await realpath(base), "real", "project");
+			const link = join(base, "link");
+			await mkdir(project, { recursive: true });
+			await symlink(
+				project,
+				link,
+				process.platform === "win32" ? "junction" : "dir",
+			);
+			const tool = createWorkspaceTools({ cwd: await realpath(link) }).find(
+				({ name }) => name === "run_command",
+			)!;
+			const input = Object.freeze({
+				command: process.execPath,
+				args: ["-e", "process.stdout.write(process.cwd())", "two words"],
+				...(requestedCwd === undefined ? {} : { cwd: requestedCwd }),
+			});
+			const parsed = tool.schema.parse(input);
+			expect(parsed).toEqual({ ...input, cwd: project, timeoutMs: 30_000 });
+			expect(tool.schema.parse(parsed)).toEqual(parsed);
+			expect(input.cwd).toBe(requestedCwd);
+			if (requestedCwd === "../project") {
+				expect(parsed.cwd).not.toBe(join(link, requestedCwd));
+			}
+			const runCommand = vi.fn(async () => ({ output: "ran", exitCode: 0 }));
+			await tool.execute(parsed, {
+				...context,
+				cwd: link,
+				roots: [project],
+				client: { requestPermission: vi.fn(), runCommand },
+			});
+			expect(runCommand).toHaveBeenCalledWith(
+				{ command: parsed.command, args: input.args, cwd: parsed.cwd },
+				expect.any(AbortSignal),
+			);
+			const result = await tool.execute(parsed, {
+				...context,
+				cwd: link,
+				roots: [project],
+			});
+			expect(result.text).toContain(project);
+		},
+	);
+
+	it("preserves absolute command cwd, argv and timeout while normalizing idempotently", () => {
+		const tool = tools.find(({ name }) => name === "run_command")!;
+		const input = Object.freeze({
+			command: "tool.cmd",
+			args: ["two words", "literal"],
+			cwd,
+			timeoutMs: 1234,
+		});
+		expect(tool.schema.parse(input)).toEqual(input);
+		expect(tool.schema.parse(tool.schema.parse(input))).toEqual(input);
 	});
 
 	it("runs a real subprocess with literal argv and combines stderr", async () => {

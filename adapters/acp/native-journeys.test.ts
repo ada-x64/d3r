@@ -1,7 +1,10 @@
 import {
 	client,
+	type ReadTextFileRequest,
+	type ReadTextFileResponse,
 	type RequestPermissionRequest,
 	type SessionNotification,
+	type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import {
 	mkdir,
@@ -112,24 +115,55 @@ const journeyText = (updates: readonly SessionNotification[]) =>
 		)
 		.join("");
 
+/** Inspect the content ACP clients render, rather than rawInput or rawOutput. */
+const journeyToolText = ({ content }: Pick<ToolCallUpdate, "content">) =>
+	(content ?? [])
+		.flatMap((part) =>
+			part.type === "content" && part.content.type === "text"
+				? [part.content.text]
+				: [],
+		)
+		.join("\n");
+/** Preserve tool identity so assertions cover pending cards and their later results. */
+const journeyTools = (updates: readonly SessionNotification[]) =>
+	updates
+		.map(({ update }) => update)
+		.filter(
+			(update) =>
+				update.sessionUpdate === "tool_call" ||
+				update.sessionUpdate === "tool_call_update",
+		);
+
 /** Offline journeys exercise D3R, not binary launch, Zed rendering, live auth or model judgment. */
 describe("native ACP shipped-workflow journeys", () => {
 	const cleanup: (() => Promise<void>)[] = [];
 	const directories: string[] = [];
-	const open = async (scripts: JourneyScripts) => {
+	const open = async (
+		scripts: JourneyScripts,
+		{
+			workspace = "workspace",
+			readTextFile,
+		}: {
+			workspace?: string;
+			readTextFile?: (
+				request: ReadTextFileRequest,
+			) => Promise<ReadTextFileResponse>;
+		} = {},
+	) => {
 		const root = await mkdtemp(
 			resolve(await realpath(tmpdir()), "d3r-acp-journey-"),
 		);
 		directories.push(root);
 		const home = resolve(root, "home");
-		const cwd = resolve(root, "workspace");
-		await Promise.all([mkdir(home), mkdir(cwd)]);
+		const cwd = resolve(root, workspace);
+		await Promise.all([mkdir(home), mkdir(cwd, { recursive: true })]);
 		await writeFile(
 			resolve(cwd, "AGENTS.md"),
 			"Preserve the offline user's requirements.",
 		);
 		const requests: { role: string; context: JourneyContext }[] = [];
 		const permissions: RequestPermissionRequest[] = [];
+		const reads: ReadTextFileRequest[] = [];
 		const approval = {
 			decide: async (_request: RequestPermissionRequest) => true,
 		};
@@ -166,27 +200,36 @@ describe("native ACP shipped-workflow journeys", () => {
 					}),
 				},
 			);
+			const clientApp = client().onRequest(
+				"session/request_permission",
+				async ({ params }) => {
+					permissions.push(params);
+					const kind = (await approval.decide(params))
+						? "allow_once"
+						: "reject_once";
+					return {
+						outcome: {
+							outcome: "selected",
+							optionId: params.options.find((option) => option.kind === kind)!
+								.optionId,
+						},
+					};
+				},
+			);
 			const f = fixture(deps.createSession, async () => {}, {
 				deps,
-				clientApp: client().onRequest(
-					"session/request_permission",
-					async ({ params }) => {
-						permissions.push(params);
-						const kind = (await approval.decide(params))
-							? "allow_once"
-							: "reject_once";
-						return {
-							outcome: {
-								outcome: "selected",
-								optionId: params.options.find((option) => option.kind === kind)!
-									.optionId,
-							},
-						};
-					},
-				),
+				clientApp: readTextFile
+					? clientApp.onRequest("fs/read_text_file", ({ params }) => {
+							reads.push(params);
+							return readTextFile(params);
+						})
+					: clientApp,
 			});
 			cleanup.push(f.close);
-			await f.initialize();
+			await f.peer.agent.request("initialize", {
+				protocolVersion: 1,
+				clientCapabilities: readTextFile ? { fs: { readTextFile: true } } : {},
+			});
 			return {
 				...f,
 				checkpoint: async (sessionId: string) => {
@@ -204,7 +247,7 @@ describe("native ACP shipped-workflow journeys", () => {
 					}),
 			};
 		};
-		return { cwd, requests, permissions, approval, connect };
+		return { root, cwd, requests, permissions, reads, approval, connect };
 	};
 	afterEach(async () => {
 		try {
@@ -400,14 +443,14 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect.objectContaining({
 				sessionUpdate: "tool_call_update",
 				status: "completed",
-				content: [
+				content: expect.arrayContaining([
 					{
 						type: "diff",
 						path: resolve(j.cwd, "design.md"),
 						oldText: null,
 						newText: design,
 					},
-				],
+				]),
 			}),
 		);
 		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
@@ -415,6 +458,446 @@ describe("native ACP shipped-workflow journeys", () => {
 		);
 		await resumed.peer.agent.request("session/close", { sessionId });
 	});
+
+	// oxlint-disable-next-line max-statements -- Discovery, editor ownership and renewed trust belong to one persisted research journey.
+	it("researches an ancestor vault from a nested worktree and reloads it without widening trust or opening search hits", async () => {
+		const scripts: JourneyScripts = {};
+		const editorText = "Unsaved editor brief: keep the queue local.\n";
+		const j = await open(scripts, {
+			workspace: "repo/worktrees/topic",
+			readTextFile: async ({ path }) => {
+				if (path !== resolve(j.cwd, "brief.txt")) {
+					throw new Error(`Editor cannot open this file: ${path}`);
+				}
+				return { content: editorText };
+			},
+		});
+		const vault = resolve(j.root, "repo/.agents/vault");
+		const note = resolve(vault, "notes/queue.md");
+		const prior = resolve(vault, "notes/prior.md");
+		const local = resolve(j.cwd, "brief.txt");
+		const source = resolve(j.cwd, "queue.ts");
+		const outside = resolve(j.root, "repo/unrelated.txt");
+		const diskNote =
+			"# Prior design\nqueue survives restarts\nqueue needs no service\n";
+		const diskBrief = "# Saved brief\nqueue disk requirement\n";
+		await mkdir(resolve(vault, "notes"), { recursive: true });
+		await Promise.all([
+			writeFile(note, diskNote),
+			writeFile(prior, "queue uses an append-only log\n"),
+			writeFile(local, diskBrief),
+			writeFile(source, "// queue implementation\n// queue recovery\n"),
+			writeFile(outside, "Unrelated parent data must never reach the model."),
+		]);
+		const recon = (summary: string) => [
+			journeyCall("search", { path: vault, query: "queue" }),
+			journeyCall("search", { path: ".", query: "queue" }),
+			journeyCall("read_file", { path: note }),
+			journeyCall("read_file", { path: "brief.txt" }),
+			journeyCall("read_file", { path: "../../unrelated.txt" }),
+			journeyReport(summary),
+			[{ type: "text" as const, text: summary }],
+		];
+		scripts.aggregator = recon("The vault says the queue survives restarts.");
+		scripts.researcher = recon("The saved queue uses an append-only log.");
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const request =
+			"/design Research the local queue; report in chat, no files needed.";
+		j.approval.decide = async () => false;
+		await expect(f.prompt(sessionId, request)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(journeyText(f.updates)).toMatch(
+			/workspace.*permission.*not granted/i,
+		);
+		expect(j.requests).toEqual([]);
+		expect(j.reads).toEqual([]);
+		j.approval.decide = async () => true;
+		await expect(f.prompt(sessionId, request)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(journeyText(f.updates)).toContain(
+			"Discuss design questions before drafting",
+		);
+		expect(new Set(j.requests.map(({ role }) => role))).toEqual(
+			new Set(["aggregator", "researcher"]),
+		);
+		const vaultHits = [
+			`${note}:2: queue survives restarts`,
+			`${note}:3: queue needs no service`,
+			`${prior}:1: queue uses an append-only log`,
+		];
+		const workspaceHits = [
+			`${local}:2: queue disk requirement`,
+			`${source}:1: // queue implementation`,
+			`${source}:2: // queue recovery`,
+		];
+		for (const role of ["aggregator", "researcher"]) {
+			const [
+				initial,
+				vaultSearch,
+				workspaceSearch,
+				noteRead,
+				localRead,
+				outsideRead,
+			] = j.requests
+				.filter((entry) => entry.role === role)
+				.map(({ context }) => context);
+			expect(initial.systemPrompt).toContain(vault);
+			for (const [context, hits] of [
+				[vaultSearch, vaultHits],
+				[workspaceSearch, workspaceHits],
+			] as const) {
+				expect(context.messages.at(-1)).toMatchObject({
+					toolName: "search",
+					isError: false,
+				});
+				for (const hit of hits) {
+					expect(context.messages.at(-1)).toMatchObject({
+						content: expect.arrayContaining([
+							{ type: "text", text: expect.stringContaining(hit) },
+						]),
+					});
+				}
+				expect(JSON.stringify(context.messages.at(-1))).not.toContain(
+					"Unsaved editor brief",
+				);
+			}
+			expect(noteRead.messages.at(-1)).toMatchObject({
+				toolName: "read_file",
+				isError: false,
+			});
+			expect(JSON.stringify(noteRead.messages.at(-1))).toContain(
+				"queue survives restarts",
+			);
+			expect(localRead.messages.at(-1)).toMatchObject({
+				toolName: "read_file",
+				isError: false,
+			});
+			expect(JSON.stringify(localRead.messages.at(-1))).toContain(
+				editorText.trim(),
+			);
+			expect(JSON.stringify(localRead.messages.at(-1))).not.toContain(
+				"queue disk requirement",
+			);
+			expect(outsideRead.messages.at(-1)).toMatchObject({
+				toolName: "read_file",
+				isError: true,
+			});
+		}
+		expect(JSON.stringify(j.requests)).not.toContain(
+			"Unrelated parent data must never reach the model.",
+		);
+		expect(j.reads.map(({ path }) => path)).toEqual([local, local]);
+		const searches = journeyTools(f.updates).filter(
+			({ kind }) => kind === "search",
+		);
+		expect(searches.length).toBeGreaterThan(0);
+		for (const search of searches) {
+			expect(search.locations ?? []).toEqual([]);
+		}
+		const completedSearches = searches.filter(
+			({ status }) => status === "completed",
+		);
+		for (const hits of [vaultHits, workspaceHits]) {
+			const matching = completedSearches.filter((tool) =>
+				hits.every((hit) => journeyToolText(tool).includes(hit)),
+			);
+			expect(matching.map(({ toolCallId }) => toolCallId)).toHaveLength(
+				["aggregator", "researcher"].length,
+			);
+		}
+		expect(journeyTools(f.updates)).toContainEqual(
+			expect.objectContaining({
+				status: "completed",
+				locations: expect.arrayContaining([{ path: local, line: 1 }]),
+				content: expect.arrayContaining([
+					expect.objectContaining({
+						type: "content",
+						content: {
+							type: "text",
+							text: expect.stringContaining(editorText.trim()),
+						},
+					}),
+				]),
+			}),
+		);
+		await expect(readFile(local, "utf8")).resolves.toBe(diskBrief);
+		await expect(readFile(note, "utf8")).resolves.toBe(diskNote);
+		const beforeReload = j.requests.length;
+		const readsBefore = j.reads.length;
+		const permissionsBefore = j.permissions.length;
+		const checkpoint = await f.checkpoint(sessionId);
+		await f.close();
+		const renewedNote = "queue reload uses the same vault on disk";
+		await writeFile(note, `${diskNote}${renewedNote}\n`);
+		scripts.designer = [
+			journeyCall("read_file", { path: note }),
+			journeyReport(renewedNote),
+			[
+				{
+					type: "text",
+					text: "Keep the local append-only queue; no design file was requested.",
+				},
+			],
+		];
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(journeyText(resumed.updates)).toContain(
+			"Discuss design questions before drafting",
+		);
+		expect(j.requests).toHaveLength(beforeReload);
+		expect(j.permissions).toHaveLength(permissionsBefore);
+		j.approval.decide = async () => false;
+		const answer =
+			"Keep the queue local. Re-read the vault note and finish with a report only.";
+		const deniedStart = resumed.updates.length;
+		await expect(resumed.prompt(sessionId, answer)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(journeyText(resumed.updates.slice(deniedStart))).toMatch(
+			/workspace.*permission.*not granted/i,
+		);
+		expect(j.requests).toHaveLength(beforeReload);
+		expect(j.reads).toHaveLength(readsBefore);
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		j.approval.decide = async () => true;
+		await expect(resumed.prompt(sessionId, answer)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const designer = j.requests.slice(beforeReload);
+		expect(new Set(designer.map(({ role }) => role))).toEqual(
+			new Set(["designer"]),
+		);
+		expect(designer[0].context.systemPrompt).toContain(vault);
+		expect(JSON.stringify(designer[0].context.messages)).toContain(
+			"The vault says the queue survives restarts.",
+		);
+		expect(JSON.stringify(designer[0].context.messages)).toContain(
+			"The saved queue uses an append-only log.",
+		);
+		expect(designer[1].context.messages.at(-1)).toMatchObject({
+			toolName: "read_file",
+			isError: false,
+		});
+		expect(JSON.stringify(designer[1].context.messages.at(-1))).toContain(
+			renewedNote,
+		);
+		expect(j.reads).toHaveLength(readsBefore);
+		expect(journeyText(resumed.updates)).toContain(
+			"Workflow /design completed with structured reports.",
+		);
+		for (const { toolCall } of j.permissions) {
+			expect(toolCall.title).toMatch(/^Trust workspace/);
+			const preview = journeyToolText(toolCall);
+			for (const text of [
+				JSON.stringify(j.cwd),
+				JSON.stringify(vault),
+				"not its parent directory",
+				"disk IO, not editor buffers",
+				"Writes still require separate approval",
+				"Trust is not saved",
+			]) {
+				expect(preview).toContain(text);
+			}
+		}
+		expect(j.permissions.slice(permissionsBefore)).toHaveLength(
+			["denied", "allowed"].length,
+		);
+		await expect(readFile(local, "utf8")).resolves.toBe(diskBrief);
+		await expect(readFile(outside, "utf8")).resolves.toBe(
+			"Unrelated parent data must never reach the model.",
+		);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+		await resumed.peer.agent.request("session/close", { sessionId });
+	});
+
+	it.each(["allowed", "denied", "cancelled"] as const)(
+		"shows literal command approval before a real process is %s",
+		// oxlint-disable-next-line max-statements -- Keep the pending permission, process effect and workflow outcome together.
+		async (decision) => {
+			const markerName = "marker file.txt";
+			const literal = "literal value with spaces & no shell";
+			const args = [
+				"-e",
+				"require('node:fs').writeFileSync(process.argv[1], process.argv[2]); console.log(process.argv[2]);",
+				markerName,
+				literal,
+			];
+			const scripts: JourneyScripts = {
+				aggregator: [
+					journeyCall("run_command", {
+						command: process.execPath,
+						args,
+						cwd: "command cwd",
+					}),
+					journeyReport(
+						decision === "allowed"
+							? "The local probe completed."
+							: "The local probe was not authorized.",
+					),
+					[{ type: "text", text: "Recon finished without further commands." }],
+				],
+				researcher: [
+					journeyReport("No external research was needed."),
+					[{ type: "text", text: "Research complete." }],
+				],
+				designer: [
+					journeyReport("Use the local queue."),
+					[{ type: "text", text: "Design complete in chat." }],
+				],
+			};
+			const j = await open(scripts);
+			const cwd = resolve(j.cwd, "command cwd");
+			const marker = resolve(cwd, markerName);
+			await mkdir(cwd);
+			const asked = deferred<RequestPermissionRequest>();
+			const answer = deferred<boolean>();
+			j.approval.decide = async (permission) => {
+				if (permission.toolCall.title?.startsWith("Trust workspace")) {
+					return true;
+				}
+				asked.resolve(permission);
+				return answer.promise;
+			};
+			const f = await j.connect();
+			const { sessionId } = await f.newSession(j.cwd);
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "model",
+				value: nativeModelKey(JOURNEY_MODEL),
+			});
+			const pending = f.prompt(
+				sessionId,
+				"/design Probe the local queue; a chat report is sufficient.",
+			);
+			try {
+				const permission = await Promise.race([
+					asked.promise,
+					pending.then(() => {
+						throw new Error("Turn ended without requesting command permission");
+					}),
+				]);
+				const preview = journeyToolText(permission.toolCall);
+				for (const text of [
+					JSON.stringify(process.execPath),
+					JSON.stringify(args),
+					JSON.stringify(cwd),
+				]) {
+					expect(preview).toContain(text);
+				}
+				expect(preview).toMatch(/UNSANDBOXED/);
+				expect(preview).toMatch(/outside the workspace/);
+				expect(preview).toMatch(/literal argv/i);
+
+				const { title } = permission.toolCall;
+				expect(title).toContain(
+					`run_command: ${JSON.stringify(process.execPath)}`,
+				);
+				expect(title).toContain('["-e",');
+				expect(journeyTools(f.updates)).toContainEqual(
+					expect.objectContaining({
+						toolCallId: permission.toolCall.toolCallId,
+						title,
+					}),
+				);
+				await expect(readFile(marker)).rejects.toMatchObject({
+					code: "ENOENT",
+				});
+				// A protocol round trip leaves the permission pending; only this role must wait.
+				await f.peer.agent.request("session/list", {});
+				expect(
+					j.requests.filter(({ role }) => role === "aggregator"),
+				).toHaveLength(1);
+				await expect(readFile(marker)).rejects.toMatchObject({
+					code: "ENOENT",
+				});
+				if (decision === "cancelled") {
+					await f.peer.agent.notify("session/cancel", { sessionId });
+				} else {
+					answer.resolve(decision === "allowed");
+				}
+				await expect(pending).resolves.toEqual({
+					stopReason: decision === "cancelled" ? "cancelled" : "end_turn",
+				});
+				if (decision === "cancelled") {
+					// Even a late approval cannot revive the cancelled process.
+					answer.resolve(true);
+					await f.peer.agent.request("session/list", {});
+					expect(
+						j.requests.filter(({ role }) => role === "aggregator"),
+					).toHaveLength(1);
+				} else {
+					const result = j.requests
+						.filter(({ role }) => role === "aggregator")[1]
+						.context.messages.at(-1);
+					expect(result).toMatchObject({
+						toolName: "run_command",
+						isError: decision !== "allowed",
+					});
+					const completed = journeyTools(f.updates).findLast(
+						({ toolCallId }) => toolCallId === permission.toolCall.toolCallId,
+					)!;
+					expect(completed.title).toBe(title);
+					expect(journeyToolText(completed)).toContain(preview);
+					expect(completed.status).toBe(
+						decision === "allowed" ? "completed" : "failed",
+					);
+					if (decision === "allowed") {
+						await expect(readFile(marker, "utf8")).resolves.toBe(literal);
+						expect(JSON.stringify(result)).toContain(literal);
+						expect(journeyToolText(completed)).toContain(`${literal}\n`);
+						expect(journeyToolText(completed)).toContain("Exit code: 0");
+					} else {
+						expect(JSON.stringify(result)).toMatch(/permission.*denied/i);
+					}
+					expect(journeyText(f.updates)).toContain(
+						"Discuss design questions before drafting",
+					);
+					await expect(
+						f.prompt(
+							sessionId,
+							"Finish with a chat report; do not run more commands.",
+						),
+					).resolves.toEqual({ stopReason: "end_turn" });
+					expect(journeyText(f.updates)).toContain(
+						"Workflow /design completed with structured reports.",
+					);
+					expect(
+						Object.values(scripts).every((steps) => steps.length === 0),
+					).toBe(true);
+				}
+			} finally {
+				answer.resolve(false);
+				await f.peer.agent.notify("session/cancel", { sessionId });
+				await pending;
+			}
+			if (decision !== "allowed") {
+				await expect(readFile(marker)).rejects.toMatchObject({
+					code: "ENOENT",
+				});
+			}
+			expect(
+				j.permissions.filter(({ toolCall }) =>
+					toolCall.title?.startsWith("run_command:"),
+				),
+			).toHaveLength(1);
+			await f.peer.agent.request("session/close", { sessionId });
+		},
+	);
 
 	it.each(["denied", "cancelled"] as const)(
 		"recovers a %s /develop write without replay, then implements, reviews and audits through real tools",
@@ -464,10 +947,11 @@ describe("native ACP shipped-workflow journeys", () => {
 						throw new Error("Turn ended without requesting write permission");
 					}),
 				]);
-				expect(permission.toolCall).toMatchObject({
-					title: "write_file",
-					rawInput: { path: "queue.txt", content },
-				});
+				expect(permission.toolCall.title).toBe("write_file");
+				expect(journeyToolText(permission.toolCall)).toContain("queue.txt");
+				expect(journeyToolText(permission.toolCall)).toContain(
+					JSON.stringify(content),
+				);
 				expect(
 					j.permissions.filter(
 						({ toolCall }) => toolCall.title === "write_file",

@@ -16,6 +16,7 @@ import {
 	type WorkspaceAccess,
 } from "./resource-paths.ts";
 import { withResourceDeadline } from "./resource-io.ts";
+import { discoverVaultRoot } from "./resource-vault.ts";
 export { loadMcpConfig } from "./resource-mcp.ts";
 
 /** Setup cancellation and injected readers stay local to this resource load. */
@@ -40,7 +41,7 @@ export interface SkillDefinition {
 	readonly path: string;
 }
 
-/** The shared vault is always workspace-local, independently of agent overlays. */
+/** The nearest ancestral vault is independent of the exact home/workspace agent overlays. */
 export interface AgentResources {
 	readonly agents: AgentDefinition[];
 	readonly workflow: Workflow;
@@ -132,6 +133,7 @@ const readAgentResources = async (
 	}: ResourceLoadOptions & { signal: AbortSignal },
 ): Promise<AgentResources> => {
 	signal.throwIfAborted();
+	const vaultRoot = await discoverVaultRoot(resolve(cwd), { signal });
 	const core = await realpath(dirname(resolveCorePackage()));
 	const coreRoot = await checkedWorkspaceRoot(core, signal);
 	const resourcePath = async (path: string, root: string): Promise<string> => {
@@ -337,7 +339,7 @@ const readAgentResources = async (
 		skills: [...skills.values()].toSorted((a, b) =>
 			a.name.localeCompare(b.name),
 		),
-		vaultRoot: join(resolve(cwd), ".agents", "vault"),
+		vaultRoot,
 	};
 };
 

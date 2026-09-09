@@ -93,7 +93,7 @@ D3R loads inert resources from global `~/.agents/` and workspace `.agents/`:
 - `skills/**/SKILL.md`: skills exposed through the inert `read_skill` tool.
 - `workflow.yaml`: optional workflow command overrides.
 - `mcp.json`: optional MCP server configuration.
-- `vault/`: workspace workflow documents and templates.
+- `vault/`: workflow documents and templates, discovered as described below.
 
 Built-in role definitions and workflow chains come from the installed core
 package, not copied prompt definitions. Workspace agent/skill IDs replace global
@@ -101,6 +101,22 @@ IDs. Referenced resources are bounded and validated; executable extensions and
 hooks are never loaded. No directory is created just to discover configuration.
 Instructions and skill content guide models but are not executable
 authorization.
+
+Vault discovery walks from the session workspace upward to the filesystem root
+and selects the nearest existing `.agents/vault` directory. This supports nested
+worktrees whose shared vault lives in the parent repository. Discovery is
+bounded and rejects symlinked, malformed, or inaccessible candidates rather than
+silently selecting another vault. If none exists, the suggested location remains
+`<workspace>/.agents/vault`; discovery does not create it.
+
+Only that vault directory, not its parent repository, is added to tool access
+after the workspace trust request explicitly names it. Ancestor instructions,
+skills, models, and MCP configuration are not loaded by this search. External
+vault files use disk IO; workspace editor buffers remain authoritative for
+explicit reads and edits. The vault location is pinned per session: if discovery
+finds a different location on reload, start a new thread instead of silently
+redirecting the saved workflow. This includes older threads that pinned the
+former worktree-local path when a shared ancestor vault exists.
 
 ## Workflow commands
 
@@ -140,6 +156,21 @@ Trust is not carried across restoration. File mutations, commands, MCP
 connections, and MCP calls require separate approval. Missing, denied, unknown,
 or cancelled permission results do not authorize execution.
 
+Command approvals show the executable, literal arguments, effective working
+directory, and execution warning in visible ACP content, not only raw input. The
+compact title may shorten a long command; the detail preview retains the
+arguments with JSON quoting and masks recognized credential values. It is not a
+shell command to copy verbatim. Platform/client wrappers may apply, including
+`cmd.exe` for Windows batch files. The choices remain **Allow once** and
+**Reject**; remembered approvals are not implemented.
+
+An approval-gated tool waits for its permission response before executing. This
+does not freeze the whole session: independent parallel workflow roles may
+continue while another role awaits approval, and already-streamed text may
+remain visible. Reject denies that call, not the entire turn; use cancellation
+to stop the active turn. Read-only tools run under workspace trust without a
+separate permission prompt for each call.
+
 If no model is selected or setup permission is not granted, D3R replies with
 setup guidance and ends the turn normally, without contacting a model or
 connecting to MCP. Select a model or retry with the required approvals in the
@@ -155,6 +186,12 @@ existing file. Disk writes use staged atomic replacement and preimage checks;
 structured diffs show actual old and new content. Negotiated editor reads/writes
 include unsaved buffers. Editor protocols do not provide atomic
 compare-and-swap, so a concurrent human edit can still race a write.
+
+Search scans saved disk contents without opening each candidate through the
+editor. Results retain file paths and line numbers in their text, but are not
+emitted as bulk follow-agent locations. Search therefore does not include
+unsaved editor changes; explicitly reading a chosen file still uses its editor
+buffer and provides a deliberate follow location.
 
 Direct filesystem tools are limited to the session roots and reject sensitive
 paths and symlink escapes. Additional roots must be supplied again on

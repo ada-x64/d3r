@@ -203,6 +203,31 @@ describe("native agent resources", () => {
 		]);
 	});
 
+	it("discovers an ancestor vault without loading its other agent resources", async () => {
+		const parent = join(base, "parent");
+		const vault = join(parent, ".agents", "vault");
+		await Promise.all([
+			mkdir(vault, { recursive: true }),
+			put(join(parent, "AGENTS.md"), "DO NOT LOAD PARENT"),
+			put(join(parent, ".agents", "system-prompt.md"), "DO NOT LOAD SYSTEM"),
+			put(join(parent, ".agents", "agents", "invalid.md"), "invalid agent"),
+			put(
+				join(parent, ".agents", "skills", "invalid", "SKILL.md"),
+				"invalid skill",
+			),
+			put(join(parent, ".agents", "workflow.yaml"), "invalid workflow"),
+			put(join(parent, ".agents", "mcp.json"), "invalid MCP"),
+			put(join(parent, ".agents", "models.json"), "invalid models"),
+		]);
+		const result = await load();
+		expect(result.vaultRoot).toBe(vault);
+		expect(result.instructions).toBe("");
+		expect(result.systemPrompt).toBeUndefined();
+		expect(result.skills).toEqual([]);
+		expect(result.agents.map(({ spec }) => spec.name)).toEqual(["one"]);
+		expect(Object.keys(result.workflow.commands)).toEqual(["build"]);
+	});
+
 	it("combines exact-root instruction files without parent discovery", async () => {
 		await Promise.all([
 			put(join(base, "parent", "AGENTS.md"), "DO NOT LOAD PARENT"),

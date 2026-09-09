@@ -12,6 +12,7 @@ import { waitFor } from "./errors.ts";
 import { runtimeContent, type PromptParams } from "./params.ts";
 import { type Session } from "./session.ts";
 import { type SessionRecord } from "./store.ts";
+import { toolCallPresentation } from "./presentation.ts";
 
 /** Initial tool events establish identity before any progress updates. */
 const activityUpdate = (
@@ -36,27 +37,40 @@ const activityUpdate = (
 		? "tool_call_update"
 		: "tool_call";
 	session.tools.add(event.toolCallId);
+	const presentation = toolCallPresentation(
+		{ title: event.title, kind: event.toolKind, input: event.rawInput },
+		{ secrets: session.secrets },
+	);
+	const permission = session.services.permissionPresentation(event.toolCallId);
+	const preview =
+		permission?.content ??
+		(event.rawInput === undefined ? [] : (presentation.content ?? []));
 	const tool: ToolCall = {
 		toolCallId: event.toolCallId,
-		title: event.title,
+		title: permission?.title ?? presentation.title,
 		kind: event.toolKind,
 		status: event.status,
-		...(event.content
+		...(preview.length || event.content
 			? {
-					content: event.content.map((item) =>
-						item.type === "text"
-							? {
-									type: "content" as const,
-									content: { type: "text" as const, text: item.text },
-								}
-							: { ...item },
-					),
+					content: [
+						...preview,
+						...(event.content ?? []).map((item) =>
+							item.type === "text"
+								? {
+										type: "content" as const,
+										content: { type: "text" as const, text: item.text },
+									}
+								: { ...item },
+						),
+					],
 				}
 			: {}),
 		...(event.locations
 			? { locations: event.locations.map((location) => ({ ...location })) }
 			: {}),
-		...(event.rawInput === undefined ? {} : { rawInput: event.rawInput }),
+		...(presentation.rawInput === undefined
+			? {}
+			: { rawInput: presentation.rawInput }),
 		...(event.rawOutput === undefined ? {} : { rawOutput: event.rawOutput }),
 	};
 	return sessionUpdate === "tool_call"

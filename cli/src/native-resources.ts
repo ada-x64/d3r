@@ -4,6 +4,7 @@ import { compileWorkflow, EngineState, restoreEngine } from "@d3r/core/engine";
 import { type RuntimeTool } from "@d3r/core/runtime";
 import { z } from "zod";
 import { isWithinRoot } from "./resource-paths.ts";
+import { isAncestorVaultRoot } from "./resource-vault.ts";
 import { type AgentDefinition, type AgentResources } from "./resources.ts";
 import { THOUGHT_LEVELS } from "./native-models.ts";
 
@@ -285,7 +286,7 @@ export const parseNativeCheckpoint = (value: unknown): NativeCheckpoint => {
 	validateNativeResources(parsed.resources);
 	const { home, cwd } = parsed.sources;
 	if (
-		parsed.resources.vaultRoot !== join(cwd, ".agents", "vault") ||
+		!isAncestorVaultRoot(cwd, parsed.resources.vaultRoot) ||
 		parsed.resources.skills.some(
 			(skill) =>
 				![home, cwd].some((root) =>
