@@ -118,6 +118,63 @@ finds a different location on reload, start a new thread instead of silently
 redirecting the saved workflow. This includes older threads that pinned the
 former worktree-local path when a shared ancestor vault exists.
 
+## Vault-relative tools
+
+Native sessions expose the vault tools directly; no symlink or shell command is
+needed to read a template. Paths use `/` separators and are relative to the
+session's discovered, pinned vault, not the worktree:
+
+```text
+vault_read({"path": ".misc/templates/remember.md"})
+vault_ls({"path": "process/designs"})
+vault_find({"glob": ".misc/archive/**/*.md", "query": "approval"})
+```
+
+| Tool          | Native behavior                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| `vault_read`  | Read saved text with a full-file snapshot token, or list a directory.                                 |
+| `vault_ls`    | List immediate children; defaults to the vault root.                                                  |
+| `vault_find`  | Find files by glob, body substring, and/or frontmatter kind, including `.misc`.                       |
+| `vault_lint`  | Validate frontmatter for explicit paths or discovered Markdown files.                                 |
+| `vault_write` | Approved raw-text or frontmatter/body write with checked parent creation and atomic file publication. |
+| `vault_edit`  | Approved literal replacement with a snapshot and exact match count.                                   |
+| `vault_mv`    | Approved, non-overwriting move of a regular text file using its snapshot.                             |
+| `vault_rm`    | Approved removal of a regular text file using its snapshot.                                           |
+
+Role capabilities determine which tools are offered. Reads, listings, search,
+and lint run under workspace/vault trust; writes, edits, moves, and removals
+require separate approval. Vault tools always use disk IO, even for a vault
+inside the workspace. They do not use Zed's unsaved buffers or accept a caller's
+vault-root override. Ordinary workspace file tools retain their existing editor
+behavior.
+
+`vault_read` returns JSON text containing `path`, `text`, `snapshot`, and
+`truncated`. Follow `nextOffset` to read subsequent pages: `offset` and `limit`
+count Unicode code points, with a maximum/default page size of 8192. Every page
+carries the snapshot of the whole file; restart the read if snapshots differ.
+Files are capped at 1 MiB. Directory results and scans report incomplete
+coverage with `truncated`/`skipped` rather than claiming exhaustive results.
+
+For `vault_write`, `mode: "raw"` uses `contents`; `mode: "doc"` uses `kind`,
+optional `frontmatter`, and `body`. Doc mode writes YAML frontmatter without
+executing language tags or parsing the body as frontmatter. It does not merge a
+template automatically. Existing-file writes, edits, moves, and removals require
+the snapshot from `vault_read`. New-file creation can omit it. Reads and edits
+use the same pinned root after restoration, with renewed trust.
+
+Native move/remove currently support files only, not directories or recursive
+operations. Moves create a private-mode destination then remove the revalidated
+source; they do not preserve source metadata and are not an atomic transaction.
+If the second step fails, the destination is retained and the result identifies
+both paths for manual recovery. Checked empty parents may remain after a later
+write failure. Root, traversal, private-store, symlink, and hard-link accesses
+remain restricted.
+
+`vault_init` is not an agent tool. Initialization remains an explicit
+`d3r vault init` operation; no native vault tool implicitly initializes,
+commits, or pushes the vault. Directory archival still requires an explicitly
+approved command rather than `vault_mv`.
+
 ## Workflow commands
 
 - `/design <topic>`: aggregation/research, a human discussion checkpoint,

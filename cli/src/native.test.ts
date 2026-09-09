@@ -364,14 +364,23 @@ describe("native dependency composition", () => {
 		expect(child.systemPrompt).toContain(f.resources.skills[0].path);
 		expect(child.systemPrompt).toContain("Skill description");
 		expect(child.systemPrompt).toContain("MUST call d3r_report exactly once");
-		expect(child.tools?.map(({ name }) => name)).toEqual([
-			"read_file",
-			"write_file",
-			"list_directory",
-			"search",
-			"read_skill",
-			"d3r_report",
-		]);
+		expect(new Set(child.tools?.map(({ name }) => name))).toEqual(
+			new Set([
+				"read_file",
+				"write_file",
+				"list_directory",
+				"search",
+				"read_skill",
+				"vault_read",
+				"vault_ls",
+				"vault_find",
+				"vault_lint",
+				"vault_write",
+				"vault_mv",
+				"vault_rm",
+				"d3r_report",
+			]),
+		);
 		expect(
 			child.tools?.find(({ name }) => name === "write_file")?.permission,
 		).toBe("ask");

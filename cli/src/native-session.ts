@@ -29,6 +29,7 @@ import { createWorkflowReportTool } from "./workflow-runtime.ts";
 import { createNativeMcpSecurity } from "./native-mcp.ts";
 import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
+import { createVaultTools } from "./vault-tools.ts";
 
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
@@ -339,6 +340,7 @@ export const createLazyNativeSession = ({
 					vaultRoot,
 				),
 				createNativeSkillTool(saved.resources),
+				...createVaultTools({ vaultRoot }),
 				...opened.tools.map((tool) => ({
 					...tool,
 					permission: "ask" as const,

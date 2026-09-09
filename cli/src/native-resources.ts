@@ -19,6 +19,14 @@ const LOCAL_CAPABILITIES: Readonly<
 	write_file: "write",
 	edit_file: "edit",
 	run_command: "bash",
+	vault_read: "read",
+	vault_ls: "read",
+	vault_find: "read",
+	vault_lint: "read",
+	vault_write: "write",
+	vault_edit: "edit",
+	vault_mv: "write",
+	vault_rm: "write",
 };
 /** Explicit tool names extend a role with selected MCP tools, not all remote tools. */
 export const nativeRoleTools = (
@@ -68,7 +76,7 @@ const resourceContext = (resources: AgentResources): string =>
 	[
 		resources.systemPrompt ?? "",
 		resources.instructions,
-		`Workspace vault location: ${resources.vaultRoot}. Read relevant instructions and templates before writing.`,
+		`Workspace vault location: ${resources.vaultRoot}. Use vault_read, vault_ls, vault_find, and vault_lint for vault documents; use vault_write/vault_edit for approved artifact changes. Their paths are relative to this pinned vault, not the repository or process cwd. In role briefs, .misc/templates/, .misc/archive/, process/, notes/, and issues/ refer to vault-relative paths. For example, read .misc/templates/remember.md with vault_read, not read_file. Read relevant vault instructions and templates before writing; do not substitute core/seed templates for an inaccessible vault. vault_read returns a file snapshot; pass it to every overwrite, edit, move, or removal. Vault tools use saved disk contents, not unsaved editor buffers. vault_mv/vault_rm support files only, not directories; directory archival requires an explicitly approved command. No tool implicitly initializes or commits the vault.`,
 		"Skills are inert text. Use read_skill with a skill's name to read its pinned SKILL.md before using it. Reading a skill does not authorize commands or code execution.",
 		...resources.skills.map(
 			(skill) =>

@@ -339,7 +339,7 @@ const walkFiles = async (
 };
 
 /** Lock files coordinate independent tool factories without mutable global state. */
-const withDiskLock = async <T>(
+export const withDiskLock = async <T>(
 	path: string,
 	access: WorkspaceAccess,
 	operation: () => Promise<T>,

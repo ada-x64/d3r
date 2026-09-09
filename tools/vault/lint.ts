@@ -49,7 +49,8 @@ export interface VaultLintResult {
 	summary: VaultLintSummary;
 }
 
-const lintRow = (
+/** Validate an already-read document without performing filesystem IO. */
+export const lintRow = (
 	row: Pick<VaultWalkRow, "rel" | "frontmatter">,
 ): VaultLintFinding => {
 	const data = row.frontmatter ?? {};
