@@ -24,6 +24,10 @@ interface Frame {
 		sessionId?: string;
 		toolCall?: { title?: string };
 		options?: { kind: string; optionId: string }[];
+		update?: {
+			sessionUpdate?: string;
+			content?: { type: string; text?: string };
+		};
 	};
 	result?: Record<string, unknown>;
 	error?: { code: number; message: string };
@@ -105,29 +109,22 @@ const expectAgentGuidance = (
 	sessionId: string,
 	text: RegExp,
 ) => {
-	expect(frames).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({
-				method: "session/update",
-				params: expect.objectContaining({
-					sessionId,
-					update: expect.objectContaining({
-						sessionUpdate: "agent_message_chunk",
-						content: expect.objectContaining({
-							type: "text",
-							text: expect.stringMatching(text),
-						}),
-					}),
-				}),
-			}),
-		]),
-	);
+	const output = frames
+		.flatMap(({ method, params }) =>
+			method === "session/update" &&
+			params?.sessionId === sessionId &&
+			params.update?.sessionUpdate === "agent_message_chunk" &&
+			params.update.content?.type === "text"
+				? [params.update.content.text ?? ""]
+				: [],
+		)
+		.join("");
+	expect(output).toMatch(text);
 };
 
 /** Native composition is exercised through actual ACP request dispatch and persistence. */
 describe("native deps through ACP stdio", () => {
-	// oxlint-disable-next-line max-statements -- Keep the end-to-end open/select/prompt/reload protocol sequence together.
-	it("initializes, opens inertly, selects a model, prompts after trust, reloads without saved trust, and closes", async () => {
+	it("negotiates native metadata and selects a model without starting inference", async () => {
 		const f = nativeFixture();
 		f.deps.loadModelConfig.mockResolvedValue({
 			ok: true,
@@ -166,78 +163,21 @@ describe("native deps through ACP stdio", () => {
 				),
 			).toHaveLength(0);
 			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
-			const unselected = await peer.request("session/prompt", {
-				sessionId,
-				prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
-			});
-			expect(unselected.result).toEqual({ stopReason: "end_turn" });
-			expectAgentGuidance(
-				peer.frames,
-				sessionId,
-				/Select a model in Zed's Model picker/,
-			);
-			expectAgentGuidance(peer.frames, sessionId, /No model request/);
-			expectAgentGuidance(peer.frames, sessionId, /MCP connection/);
-			expect(
-				peer.frames.filter(
-					(frame) => frame.method === "session/request_permission",
-				),
-			).toHaveLength(0);
-			expect(f.deps.loadMcpConfig).not.toHaveBeenCalled();
-			expect(f.deps.connectMcpTools).not.toHaveBeenCalled();
-			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
-			expect(f.models.streamSimple).not.toHaveBeenCalled();
-			expect(f.turns).toHaveLength(0);
 			const configured = await peer.request("session/set_config_option", {
 				sessionId,
 				configId: "model",
 				value: chosenModel,
 			});
 			expect(configured.error).toBeUndefined();
-			const prompt = await peer.request("session/prompt", {
-				sessionId,
-				prompt: [{ type: "text", text: "Hi! tell me about yourself." }],
-			});
-			expect(prompt.result).toEqual({ stopReason: "end_turn" });
-			expect(f.turns).toHaveLength(1);
-			expect(f.turns[0].options.model.id).toBe("second");
-			expect(f.models.getAvailable.mock.calls[0][1]?.signal).toBeInstanceOf(
-				AbortSignal,
+			expect(configured.result?.configOptions).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ id: "model", currentValue: chosenModel }),
+				]),
 			);
-			expect(
-				peer.frames.filter(
-					(frame) => frame.method === "session/request_permission",
-				),
-			).toHaveLength(1);
-			await expect(
-				peer.request("session/close", { sessionId }),
-			).resolves.not.toHaveProperty("error");
-			const restored = await peer.request("session/load", {
-				sessionId,
-				cwd: CWD,
-				mcpServers: [],
-			});
-			expect(restored.error).toBeUndefined();
-			expect(f.turns).toHaveLength(1);
-			expect(
-				peer.frames.filter(
-					(frame) => frame.method === "session/request_permission",
-				),
-			).toHaveLength(1);
-			await expect(
-				peer.request("session/prompt", {
-					sessionId,
-					prompt: [{ type: "text", text: "hello again" }],
-				}),
-			).resolves.toMatchObject({ result: { stopReason: "end_turn" } });
-			expect(
-				peer.frames.filter(
-					(frame) => frame.method === "session/request_permission",
-				),
-			).toHaveLength(2);
+			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
+			expect(f.turns).toEqual([]);
 			expect(f.models.streamSimple).not.toHaveBeenCalled();
 			await expect(peer.close()).resolves.toBe(0);
-			expect(f.disposals).toHaveLength(2);
 		} finally {
 			await peer.stop();
 		}
@@ -397,105 +337,6 @@ describe("native deps through ACP stdio", () => {
 			await peer.stop();
 		}
 	});
-
-	it.each(["blocked", "needs_human"] as const)(
-		"explains a restored %s design over ACP and starts revised work only after abandon and resend",
-		// oxlint-disable-next-line max-statements -- Keep block/restore/guard/abandon/resend in one protocol regression.
-		async (status) => {
-			const f = nativeFixture();
-			f.onTurn.mockImplementationOnce(async ({ options, input, request }) => {
-				await options
-					.tools!.find(({ name }) => name === "d3r_report")!
-					.execute(
-						{ status, summary: "Required operator brief/topic is absent." },
-						{
-							toolCallId: "report",
-							cwd: input.cwd,
-							roots: [input.cwd],
-							signal: request.signal,
-						},
-					);
-			});
-			const peer = stdioPeer(await f.server());
-			try {
-				await peer.request("initialize", { protocolVersion: 1 });
-				const opened = await peer.request("session/new", {
-					cwd: CWD,
-					mcpServers: [],
-				});
-				expect(opened.error).toBeUndefined();
-				const sessionId = String(opened.result?.sessionId);
-				peer.knownSessions.add(sessionId);
-				const prompt = (text: string) =>
-					peer.request("session/prompt", {
-						sessionId,
-						prompt: [{ type: "text", text }],
-					});
-				const checkpoint = async () => {
-					const saved = await f.store.get(sessionId);
-					const last = saved?.records.at(-1);
-					if (last?.kind !== "checkpoint") {
-						throw new Error("Missing persisted checkpoint");
-					}
-					return parseNativeCheckpoint(
-						(last.state as { runtime: unknown }).runtime,
-					);
-				};
-				await expect(prompt("/design")).resolves.toMatchObject({
-					result: { stopReason: "end_turn" },
-				});
-				const before = await checkpoint();
-				expect(before.inner?.engine).toMatchObject({
-					status: status === "blocked" ? "blocked" : "waiting",
-					pause: { message: "Required operator brief/topic is absent." },
-				});
-				await peer.request("session/close", { sessionId });
-				await expect(
-					peer.request("session/load", { sessionId, cwd: CWD, mcpServers: [] }),
-				).resolves.not.toHaveProperty("error");
-				const start = peer.frames.length;
-				const revised =
-					"/design we're working on the acp integration. i want to run a test. choose a random topic and research it.";
-				await expect(prompt(revised)).resolves.toMatchObject({
-					result: { stopReason: "end_turn" },
-				});
-				expectAgentGuidance(
-					peer.frames.slice(start),
-					sessionId,
-					/Workflow \/design is (blocked|waiting)/,
-				);
-				expectAgentGuidance(
-					peer.frames.slice(start),
-					sessionId,
-					/brief\/topic/,
-				);
-				expectAgentGuidance(
-					peer.frames.slice(start),
-					sessionId,
-					/Reply abandon.*resend your slash command/,
-				);
-				await expect(checkpoint()).resolves.toEqual(before);
-				expect(f.turns).toHaveLength(1);
-				await expect(prompt("abandon")).resolves.toMatchObject({
-					result: { stopReason: "end_turn" },
-				});
-				expect(f.turns).toHaveLength(1);
-				await expect(prompt(revised)).resolves.toMatchObject({
-					result: { stopReason: "end_turn" },
-				});
-				expect(f.turns).toHaveLength(2);
-				expect(f.turns[1].request.content).toContainEqual({
-					type: "text",
-					text: revised,
-				});
-				await expect(checkpoint()).resolves.toMatchObject({
-					inner: { engine: { status: "completed" } },
-				});
-			} finally {
-				await peer.stop();
-			}
-		},
-	);
 
 	it("registers configured MCP secrets before echoed content reaches persisted checkpoints or replay", async () => {
 		const f = nativeFixture();

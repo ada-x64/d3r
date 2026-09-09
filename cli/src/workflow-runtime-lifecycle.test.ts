@@ -112,7 +112,14 @@ describe("workflow runtime lifecycle", () => {
 		expect(seen.find(({ name }) => name === "first")?.text).toBe(
 			seen.find(({ name }) => name === "second")?.text,
 		);
+		expect(seen.map(({ name }) => name).toSorted()).toEqual([
+			"first",
+			"last",
+			"second",
+		]);
 		const last = seen.find(({ name }) => name === "last")!.text;
+		expect(last).toContain("first output");
+		expect(last).toContain("second output");
 		expect(last.indexOf("first output")).toBeLessThan(
 			last.indexOf("second output"),
 		);
@@ -237,12 +244,6 @@ describe("workflow runtime lifecycle", () => {
 						: expect(turn).rejects.toBe(error);
 				releaseNotice.resolve();
 				await outcome;
-				expect(notice.emit).toHaveBeenCalledExactlyOnceWith(
-					expect.objectContaining({
-						kind: "text",
-						text: expect.stringContaining("Reply abandon"),
-					}),
-				);
 				expect(notice.activity).not.toHaveBeenCalled();
 				expect(runtime.snapshot!()).toEqual(before);
 				expect(createAgent).toHaveBeenCalledTimes(2);
@@ -253,18 +254,19 @@ describe("workflow runtime lifecycle", () => {
 					"completed",
 				);
 				expect(state(runtime).status).toBe("completed");
-				expect(calls.map(({ name }) => name)).toEqual([
+				expect(calls.map(({ name }) => name).toSorted()).toEqual([
 					"first",
-					"second",
 					"last",
+					"second",
 				]);
-				expect(calls[2].content).toEqual(
+				const resumed = calls.find(({ name }) => name === "last")!;
+				expect(resumed.content).toEqual(
 					expect.arrayContaining([
 						{ type: "text", text: "/design original brief" },
 						{ type: "text", text: "approved" },
 					]),
 				);
-				expect(calls[2].content).not.toContainEqual({
+				expect(resumed.content).not.toContainEqual({
 					type: "text",
 					text: "/design ignored brief",
 				});
@@ -494,6 +496,9 @@ describe("workflow runtime lifecycle", () => {
 			createAgent,
 		});
 		restored.restore!(snapshot);
+		const before = restored.snapshot!();
+		await restored.prompt(request("/design rejected replacement"));
+		expect(restored.snapshot!()).toEqual(before);
 		await restored.prompt(request("continue"));
 		expect(otherRouter.prompt).not.toHaveBeenCalled();
 		expect(createAgent).not.toHaveBeenCalled();

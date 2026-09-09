@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCredentialStore } from "./auth-store.ts";
 
@@ -256,16 +257,58 @@ describe.skipIf(process.platform === "win32")(
 			await entered.promise;
 			const controller = new AbortController();
 			const callback = vi.fn(async () => fakeOAuth);
+			const acquire = lockfile.lock;
+			const contentions: unknown[] = [];
+			vi.spyOn(lockfile, "lock").mockImplementation(async (file, options) => {
+				try {
+					return await acquire(file, options);
+				} catch (error) {
+					contentions.push(error);
+					throw error;
+				}
+			});
+			const lockBefore = await fs.stat(`${path}.lock`);
 			const waiting = store.modify("openai", callback, {
 				signal: controller.signal,
 			});
-			controller.abort(new Error("fake-secret-abort-reason"));
-			await expect(waiting).rejects.not.toThrow("fake-secret");
+			const outcome = Promise.allSettled([waiting]);
+			try {
+				// Observe a real failed acquisition, not just the preflight abort check.
+				await vi.waitFor(() =>
+					expect(contentions).toContainEqual(
+						expect.objectContaining({ code: "ELOCKED" }),
+					),
+				);
+				controller.abort(new Error("fake-secret-abort-reason"));
+				const [settled] = await outcome;
+				expect(settled).toMatchObject({
+					status: "rejected",
+					reason: expect.objectContaining({
+						message: expect.stringContaining(
+							"Private credential operation failed",
+						),
+					}),
+				});
+				if (settled.status === "rejected") {
+					expect(String(settled.reason)).not.toContain("fake-secret");
+				}
+				expect(callback).not.toHaveBeenCalled();
+				const lockAfter = await fs.stat(`${path}.lock`);
+				expect(lockAfter.isDirectory()).toBe(true);
+				expect([lockAfter.dev, lockAfter.ino]).toEqual([
+					lockBefore.dev,
+					lockBefore.ino,
+				]);
+			} finally {
+				controller.abort();
+				resume.resolve();
+				await Promise.all([active, outcome]);
+			}
 			expect(callback).not.toHaveBeenCalled();
-			const lock = await fs.stat(`${path}.lock`);
-			expect(lock.isDirectory()).toBe(true);
-			resume.resolve();
-			await active;
+			expect(await store.read("openai")).toEqual(fakeOAuth);
+			await expect(fs.stat(`${path}.lock`)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
 		});
 
 		it("keeps the lock until an aborted callback settles", async () => {

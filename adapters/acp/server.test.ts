@@ -878,6 +878,7 @@ describe("native ACP full surface", () => {
 		"cancels a blocked %s client without waiting for its cooperative response",
 		async (kind, expectedEvent) => {
 			const events: string[] = [];
+			const formOutcomes: PromiseSettledResult<string | null>[] = [];
 			let release: (value: { terminalId: string }) => void = vi.fn();
 			const never = new Promise<never>(() => {});
 			const app = client()
@@ -923,9 +924,15 @@ describe("native ACP full surface", () => {
 								request.signal,
 							);
 						} else if (kind === "form") {
-							expect(
-								await input.client!.ask!("Question", request.signal),
-							).toBeNull();
+							try {
+								const value = await input.client!.ask!(
+									"Question",
+									request.signal,
+								);
+								formOutcomes.push({ status: "fulfilled", value });
+							} catch (error) {
+								formOutcomes.push({ status: "rejected", reason: error });
+							}
 						} else {
 							await input.client!.runCommand!(
 								{ command: "cmd", args: [], cwd: CWD },
@@ -947,6 +954,10 @@ describe("native ACP full surface", () => {
 			await vi.waitFor(() => expect(events).toContain(expectedEvent));
 			await f.peer.agent.notify("session/cancel", { sessionId });
 			await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+			if (kind === "form") {
+				// Cancellation maps runtime failures to a normal stop; assert outside it.
+				expect(formOutcomes).toEqual([{ status: "fulfilled", value: null }]);
+			}
 			if (kind === "late-terminal") {
 				release({ terminalId: "late" });
 			}

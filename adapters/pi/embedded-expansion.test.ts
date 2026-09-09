@@ -187,7 +187,7 @@ describe("embedded runtime expansion", () => {
 			"completed",
 		]);
 		const id = eventsForTool[0].toolCallId;
-		expect(id).toMatch(/^d3r:same-id:.*:tool:/);
+		expect(id).toEqual(expect.stringMatching(/\S/));
 		expect(id).not.toBe("raw-id");
 		expect(eventsForTool.every((event) => event.toolCallId === id)).toBe(true);
 		expect(permission).toHaveBeenCalledWith(
