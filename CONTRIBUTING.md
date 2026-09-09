@@ -89,8 +89,17 @@ scripts written in TypeScript.
 
 ## Tests
 
-ALWAYS add tests when writing new code, I don't care what the schema says. See
-docs/testing.md for best practices.
+ALWAYS add tests when writing new code, I don't care what the schema says. For
+features and user-visible fixes, prioritize complete end-to-end journeys through
+the production path, with external provider/network IO controlled for offline
+runs. Add focused unit and seam tests where they provide distinct value; they
+are not a substitute for proving the assembled feature works.
+
+Test correctness and UX consistency, not incidental implementation details.
+Reviewed snapshots of meaningful user-visible output are allowed; freezing
+incidental internal shapes or blindly approving changed baselines is not. See
+`docs/testing.md` for journey boundaries, snapshot review, and test-value
+checks.
 
 ## Imports
 

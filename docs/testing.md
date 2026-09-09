@@ -1,13 +1,75 @@
 # Testing conventions
 
-> **Principle.** Many tests does not mean good tests. We test our seams, not our
-> dependencies.
+> **Principle.** Test code correctness and consistency of the user experience.
+> Start feature testing with complete user journeys, not a collection of unit
+> tests. Test counts and coverage percentages are not measures of confidence.
 
-A test that exercises an upstream library's documented behaviour adds
-maintenance cost without buying confidence: when the library changes, the test
-breaks for reasons unrelated to our code; when our code changes, the test passes
-whether or not we broke anything that matters. Every test in this repo should
-pin a behaviour we own at a seam we control.
+## Feature testing: journeys first
+
+For a feature or user-visible bug fix, first state the observable acceptance
+criteria from the user requirement, documented contract, or reproduced failure.
+Do not derive the expected answer solely from what the implementation currently
+does. A separate test-writing agent does not make that answer independent if its
+instructions merely repeat the implementation.
+
+Make a small set of complete end-to-end journeys the primary evidence that the
+feature works. Choose scenarios by risk and distinct outcomes: successful use,
+an important failure or denial, and recovery where applicable. Extend an
+existing journey when it covers the feature; do not multiply near-identical
+cases to increase the count. If a journey cannot be automated, explain the
+missing boundary and record manual validation rather than calling unit coverage
+end-to-end coverage.
+
+For native ACP, the target path is:
+
+```text
+ACP requests -> native composition -> shipped workflow -> real embedded loop
+             -> tools, effects, checkpoints -> client-visible response
+```
+
+- Keep D3R's production path intact, including resource loading, role dispatch,
+  tool argument validation, permission handling, and persistence. Use isolated
+  temporary workspaces and private state, not the developer's credentials or
+  working files.
+- Replace external provider/network IO with deterministic fixtures. Feed model
+  responses through the real embedded loop; do not replace `prompt()`, directly
+  submit successful role reports, or substitute a simpler workflow and call the
+  result a shipped-workflow journey. Inspect consequential provider requests so
+  canned success cannot hide missing user context or malformed tools.
+- Drive the client boundary and assert visible outcomes plus actual effects:
+  useful messages, correct stop reasons, intended file contents, and successful
+  recovery without unauthorized or repeated work. When streaming segmentation is
+  not a contract, assemble the response before asserting its content.
+- Include the compiled executable when validating launch, packaging, or stdio
+  behavior. In-process ACP journeys do not prove that the installed binary
+  launches correctly. An initialization/EOF smoke test alone does not establish
+  that a feature works.
+- State what is outside the test. An offline ACP client does not validate Zed's
+  rendered UI, live authentication, or a real model's judgment. Use targeted
+  client/manual checks and separately controlled live evaluations for those.
+
+Keep offline journeys bounded and repeatable: no paid provider calls or real
+login required, no arbitrary sleeps for synchronization, and deterministic
+cleanup of temporary files and processes.
+
+### Focused tests support the journeys
+
+Unit and narrow integration tests remain useful for pure logic, input domains,
+security boundaries, concurrency, and failure injection that would be expensive
+or hard to diagnose end to end. Prefer properties such as round trips,
+idempotence, and no-effects-before-approval where applicable. They complement,
+not substitute for, evidence that the assembled feature works.
+
+Prefer real implementations, then behavioral fakes, then stubs, then interaction
+mocks. Assertions about calls are justified when the interaction is the
+contract, such as not invoking a provider before approval. Do not freeze
+incidental helper calls, object identity, parallel arrival order, or ID
+spelling. An implementation-only refactor should not require changing behavioral
+tests.
+
+Test the D3R behavior that uses a dependency, not the dependency's documented
+guarantees. A test that merely verifies a mock returned its configured answer
+adds maintenance cost without demonstrating product correctness.
 
 ## Runner basics
 
@@ -27,7 +89,9 @@ Other scripts:
 
 Configuration lives in `vitest.config.ts` (shared defaults: `node` environment,
 `forks` pool, exclude rules, coverage settings) and `vitest.workspace.ts` (the
-two-project shape and the `dist` alias map).
+two-project shape and the `dist` alias map). Report their results separately
+when discussing confidence: running a case against both projects does not make
+it two independent behavioral guarantees.
 
 ## Test-double categories
 
@@ -78,11 +142,58 @@ fixture proves the end-to-end behaviour cheaply.
 
 ### Snapshots
 
-Use `toMatchInlineSnapshot()` for small, local payloads where seeing the
-expected value next to the assertion aids the reader. Use the
-`__snapshots__/<file>.snap` external form for larger fixtures where inline noise
-would drown the test. Do not adopt `node:test`'s snapshot format; Vitest's is
-the project default.
+Snapshots are allowed when they protect a deliberately chosen user-visible
+surface: rendered output, CLI help and diagnostics, generated documents, or a
+representative assembled conversation. Their purpose is intentional UX change
+detection. Do not confuse this with freezing incidental internal data shapes,
+object dumps, mock transcripts, or transport chunk boundaries.
+
+A useful snapshot has:
+
+- A representative scenario and a baseline captured from the exercised product
+  path, then independently reviewed for correctness. Capturing the current
+  output does not by itself make that output correct.
+- A named UX guarantee and a bounded, readable diff. Prefer a stable projection
+  of what the user sees over an entire ACP envelope or runtime object.
+- Minimal normalization of genuinely irrelevant variability, such as temporary
+  roots or timestamps. Do not normalize away errors, ordering that matters,
+  missing content, or other differences the test is meant to expose.
+- Explicit assertions for critical semantics: for example, a guidance snapshot
+  does not replace checking the stop reason, permission outcome, file effect, or
+  preservation of a checkpoint.
+- Human review of intentional baseline changes. Do not bulk-accept updates just
+  to make CI green. Keep credentials and private user/project content out of
+  committed fixtures; recorded data must be safe to retain.
+
+Snapshot baselines provide empirical examples, not automatic statistical
+confidence. Exact snapshots of nondeterministic live-model prose are not a
+reliable CI oracle. Use deterministic provider fixtures for repeatable product
+journeys; evaluate real-model quality separately with representative samples,
+repeated runs, and an explicit rubric.
+
+Use `toMatchInlineSnapshot()` for small reviewable output and external
+`__snapshots__/<file>.snap` files when they improve reviewability. Vitest is the
+project default. A before/after comparison using a runtime's `snapshot()` API
+can instead be a state-preservation invariant; it is not necessarily a golden
+output snapshot test.
+
+### Review test value, not just test results
+
+Before considering a feature verified, ask:
+
+- Which user requirement or regression does each journey establish? Which real
+  components does it execute, and which boundaries are substituted or untested?
+- Could a plausible bug still pass because the fixture manufactures success, the
+  expectation comes from the same logic, or production code catches an assertion
+  thrown inside a callback? Observe outcomes and assert outside such callbacks.
+- Does a race test actually reach the contested state before cancellation or
+  failure is injected? Use a synchronization point, not an immediate abort that
+  tests only preflight.
+- Would a behavior-preserving refactor break this assertion? If so, is the
+  frozen detail an intentional UX or compatibility contract?
+- Does the test add a distinct guarantee, or repeat existing coverage with more
+  incidental assertions? Use targeted fault injection or mutation checks when
+  needed to establish that the oracle detects the intended failure.
 
 ## Caveats
 
