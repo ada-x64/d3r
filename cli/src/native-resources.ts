@@ -3,6 +3,15 @@ import { AgentSpec, Workflow } from "@d3r/core";
 import { compileWorkflow, EngineState, restoreEngine } from "@d3r/core/engine";
 import { type RuntimeTool } from "@d3r/core/runtime";
 import { z } from "zod";
+import { parseEmbeddedCheckpoint } from "@d3r/adapter-pi/embedded";
+import {
+	validateContinuations,
+	WorkflowContinuations,
+} from "./workflow-continuations.ts";
+import {
+	ORCHESTRATOR_PROMPT,
+	NATIVE_BRIEF_CONTRACT,
+} from "./workflow-phase-tools.ts";
 import { isWithinRoot } from "./resource-paths.ts";
 import { isAncestorVaultRoot } from "./resource-vault.ts";
 import { type AgentDefinition, type AgentResources } from "./resources.ts";
@@ -94,12 +103,15 @@ const resourceContext = (resources: AgentResources): string =>
 export const nativeSystemPrompt = (
 	resources: AgentResources,
 	agent?: AgentDefinition,
-): string =>
-	[
+	orchestrated = false,
+): string => {
+	const routingPrompt = orchestrated ? ORCHESTRATOR_PROMPT : ROUTING_PROMPT;
+	return [
 		agent
 			? `You are ${agent.spec.name}. ${agent.spec.description}\n\n${agent.prompt}`
-			: ROUTING_PROMPT,
+			: routingPrompt,
 		resourceContext(resources),
+		...(agent && orchestrated ? [NATIVE_BRIEF_CONTRACT] : []),
 		"Use read_file, list_directory, and search for workspace inspection when available. Read before edit_file/write_file and retain the returned snapshot. All mutations, commands, and MCP calls require approval; never bypass a denial. A tool absent from your tool list is unavailable.",
 		...(agent
 			? [
@@ -107,6 +119,7 @@ export const nativeSystemPrompt = (
 				]
 			: []),
 	].join("\n\n");
+};
 /** JSON-only recursive data; the backend owns the semantic validation of its private checkpoint. */
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 /** Recursive schema is used only after the bounded, accessor-free copy below. */
@@ -150,7 +163,10 @@ const Inner = z
 		engine: EngineState.nullable(),
 		history: z.array(Content),
 		input: z.array(Content),
+		phaseHistory: z.array(Content).optional(),
 		summary: WorkflowSummary.optional(),
+		orchestrated: z.boolean().optional(),
+		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
 		routingInput: z.array(Content),
@@ -324,6 +340,14 @@ export const parseNativeCheckpoint = (value: unknown): NativeCheckpoint => {
 	const { inner } = parsed;
 	if (inner) {
 		const restored = inner.engine ? restoreEngine(inner.engine) : null;
+		validateContinuations(
+			restored,
+			inner.continuations ?? [],
+			inner.orchestrated === true,
+		);
+		for (const continuation of inner.continuations ?? []) {
+			parseEmbeddedCheckpoint(continuation.checkpoint);
+		}
 		if (
 			parsed.selection.model === null ||
 			inner.phase !== parsed.phase ||

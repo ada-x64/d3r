@@ -12,6 +12,8 @@ import {
 	type RuntimeSession,
 	type RuntimeStopReason,
 	type RuntimeTool,
+	type RuntimeToolContext,
+	type RuntimeToolResult,
 } from "@d3r/core/runtime";
 import {
 	answerCheckpoint,
@@ -22,11 +24,24 @@ import {
 	interruptEngine,
 	recordOutcome,
 	restoreEngine,
+	resumeInterruptedBatch,
+	resumeReportedBatch,
 	settleBatch,
 	WorkflowOutcome,
 	type ExecutionRecord,
 } from "@d3r/core/engine";
 import { type AgentDefinition } from "./resources.ts";
+import { PhaseAction, renderWorkflowBrief } from "./workflow-phase-tools.ts";
+import {
+	WorkflowContinuations,
+	WorkflowJsonValue as JsonValue,
+	type WorkflowJson as Json,
+	type WorkflowContinuation,
+	snapshotWorkflowJson,
+	validateContinuations,
+	canResumeWorkflow,
+	describeWorkflowState,
+} from "./workflow-continuations.ts";
 import {
 	fallbackWorkflowSummary,
 	WorkflowSummary,
@@ -39,6 +54,8 @@ export type WorkflowReport = (outcome: unknown) => void;
 /** Resource and model selection remain owned by the composition root. */
 export interface WorkflowRuntimeOptions {
 	readonly routing: RuntimeSession;
+	/** Keep the conversation in routing and expose phase execution only through tools. */
+	readonly orchestrated?: boolean;
 	readonly workflow: Workflow;
 	readonly agents: readonly AgentDefinition[];
 	readonly createAgent: (
@@ -49,6 +66,14 @@ export interface WorkflowRuntimeOptions {
 		input: WorkflowSummaryInput,
 		signal: AbortSignal,
 	) => Promise<string>;
+}
+
+/** Phase tools are callable only inside the owning orchestrator prompt. */
+export interface WorkflowRuntime extends RuntimeSession {
+	readonly runPhase: (
+		action: PhaseAction,
+		context: RuntimeToolContext,
+	) => Promise<RuntimeToolResult>;
 }
 
 /** Install exactly one report tool per child; a natural-language answer is not a report. */
@@ -88,19 +113,7 @@ const Content = z.discriminatedUnion("type", [
 		})
 		.strict(),
 ]);
-/** Routing checkpoints must be serializable, not executable session objects. */
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-/** The routing runtime still owns validation of its checkpoint's internal format. */
-const JsonValue: z.ZodType<Json> = z.lazy(() =>
-	z.union([
-		z.null(),
-		z.boolean(),
-		z.number().finite(),
-		z.string(),
-		z.array(JsonValue),
-		z.record(JsonValue),
-	]),
-);
+
 /** A snapshot pins all command definitions, including a phase selected but not started. */
 const Checkpoint = z
 	.object({
@@ -111,7 +124,10 @@ const Checkpoint = z
 		engine: EngineState.nullable(),
 		history: z.array(Content),
 		input: z.array(Content),
+		phaseHistory: z.array(Content).optional(),
 		summary: WorkflowSummary.optional(),
+		orchestrated: z.boolean().optional(),
+		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
 		routingInput: z.array(Content),
@@ -253,14 +269,16 @@ const recoverRouting = async (
 // oxlint-disable-next-line max-statements -- One closure owns the per-session lifecycle and its injected IO.
 export const createWorkflowRuntime = (
 	options: WorkflowRuntimeOptions,
-): RuntimeSession => {
+): WorkflowRuntime => {
 	const { routing, createAgent } = options;
+	const orchestrated = options.orchestrated === true;
 	let workflow = Workflow.parse(options.workflow);
 	checkResources(workflow, options.agents);
 	let phase = "routing";
 	let engine: EngineState | null = null;
 	let history: RuntimeContent[] = [];
 	let input: RuntimeContent[] = [];
+	let phaseHistory: RuntimeContent[] = [];
 	let summary: string | null = null;
 	let routingInput: RuntimeContent[] = [];
 	let routingInterrupted = false;
@@ -268,6 +286,10 @@ export const createWorkflowRuntime = (
 	let routingHistory = 0;
 	let recoveringConfig: readonly RuntimeConfigOption[] | null = null;
 	let routingBusy = false;
+	let routingRequest: RuntimePrompt | null = null;
+	let phaseBusy = false;
+	let phaseUsed = false;
+	let continuations: WorkflowContinuation[] = [];
 	let disposed = false;
 	let configuring: Promise<unknown> | null = null;
 	let pending: Promise<RuntimeStopReason> | null = null;
@@ -326,7 +348,7 @@ export const createWorkflowRuntime = (
 		});
 	};
 	const context = (): RuntimeContent[] => [
-		...history,
+		...(orchestrated ? phaseHistory : history),
 		...input,
 		...outputs(engine),
 		{
@@ -341,6 +363,12 @@ export const createWorkflowRuntime = (
 	): Promise<void> => {
 		const toolCallId = `${namespace}:role:${++sequence}:${record.id}`;
 		let child: RuntimeSession | null = null;
+		let settled = false;
+		let completedBeforeCancellation = false;
+		let retained: Json | undefined = undefined;
+		const savedChild = continuations.find(
+			({ recordId }) => recordId === record.id,
+		);
 		const result: {
 			outcome?: WorkflowOutcome;
 			error?: string;
@@ -378,11 +406,32 @@ export const createWorkflowRuntime = (
 
 			child = created;
 			seenChildren.add(child);
+			if (savedChild) {
+				if (!child.restore) {
+					throw new Error("Interrupted role cannot restore its conversation");
+				}
+				child.restore(structuredClone(savedChild.checkpoint));
+				await applySelection(child, routing.getConfig?.() ?? []);
+			}
 			request.signal.throwIfAborted();
+			// A new invocation can perform new effects; its predecessor is no longer a safe resume point.
+			continuations = continuations.filter(
+				({ recordId }) => recordId !== record.id,
+			);
 			result.accepting = true;
 			const reason = await child.prompt({
 				...request,
-				content: structuredClone([...request.content]),
+				content: structuredClone([
+					...request.content,
+					...(savedChild
+						? [
+								{
+									type: "text" as const,
+									text: "Continue this unfinished role using the retained conversation and tool results plus the user's latest answer or correction. This is a new role invocation, not a replay. Inspect current state before further changes; do not repeat earlier commands or mutations automatically. Previous reports do not complete this invocation: call d3r_report once after addressing the correction.",
+								},
+							]
+						: []),
+				]),
 				activity: async (event) => {
 					if (
 						event.kind === "tool" &&
@@ -401,6 +450,9 @@ export const createWorkflowRuntime = (
 						parentToolCallId: chunk.parentToolCallId ?? toolCallId,
 					}),
 			});
+			settled = true;
+			completedBeforeCancellation =
+				orchestrated && reason === "completed" && !request.signal.aborted;
 			if (reason === "cancelled") {
 				controller!.abort();
 			}
@@ -422,14 +474,35 @@ export const createWorkflowRuntime = (
 		} finally {
 			result.accepting = false;
 			if (child) {
+				if (
+					orchestrated &&
+					settled &&
+					(request.signal.aborted ||
+						(!result.error && result.outcome?.status === "needs_human")) &&
+					child.snapshot &&
+					child.restore
+				) {
+					try {
+						retained = snapshotWorkflowJson(child.snapshot());
+					} catch {
+						// No continuation is safer than recreating a role without its effect evidence.
+					}
+				}
 				try {
 					await child.dispose();
 				} catch {
+					retained = undefined;
 					result.error ??= "Role cleanup failed; workflow paused.";
 				}
 			}
 		}
-		if (!request.signal.aborted) {
+		continuations = continuations.filter(
+			({ recordId }) => recordId !== record.id,
+		);
+		if (retained !== undefined) {
+			continuations.push({ recordId: record.id, checkpoint: retained });
+		}
+		if (!request.signal.aborted || completedBeforeCancellation) {
 			engine = recordOutcome(engine!, record.id, result);
 		}
 		await request.activity?.({
@@ -438,7 +511,7 @@ export const createWorkflowRuntime = (
 			title: record.role!,
 			toolKind: "other",
 			status:
-				!request.signal.aborted &&
+				(!request.signal.aborted || completedBeforeCancellation) &&
 				!result.error &&
 				result.outcome?.status === "completed"
 					? "completed"
@@ -482,11 +555,15 @@ export const createWorkflowRuntime = (
 	};
 	const drive = async (request: RuntimePrompt): Promise<RuntimeStopReason> => {
 		await plan(request);
-		while (engine!.status === "ready") {
+		while (engine!.status === "ready" || engine!.status === "running") {
 			request.signal.throwIfAborted();
-			engine = beginBatch(engine!);
+			if (engine!.status === "ready") {
+				engine = beginBatch(engine!);
+			}
 			await plan(request);
-			const batch = engine.records.filter(({ status }) => status === "running");
+			const batch = engine!.records.filter(
+				({ status }) => status === "running",
+			);
 			const batchRequest = { ...request, content: context() };
 			const results = await Promise.allSettled(
 				batch.map((record) =>
@@ -506,8 +583,10 @@ export const createWorkflowRuntime = (
 		}
 		if (engine!.status === "completed") {
 			phase = "routing";
-			await summarize(request);
-		} else {
+			if (!orchestrated) {
+				await summarize(request);
+			}
+		} else if (!orchestrated) {
 			const decision = ["failure", "report", "interrupted"].includes(
 				engine!.pause!.kind,
 			)
@@ -534,12 +613,142 @@ export const createWorkflowRuntime = (
 		engine = null;
 		input = [];
 		summary = null;
+		continuations = [];
+		phaseHistory = [];
+	};
+	const canResume = () => canResumeWorkflow(engine, continuations);
+	const phaseState = () =>
+		describeWorkflowState(engine, { phase, resumable: canResume() });
+	// oxlint-disable-next-line max-statements -- A phase tool owns its transition and effect lifetime under one guard.
+	const runPhase = async (
+		value: PhaseAction,
+		tool: RuntimeToolContext,
+	): Promise<RuntimeToolResult> => {
+		const action = PhaseAction.parse(value);
+		if (
+			!orchestrated ||
+			!routingRequest ||
+			!routingBusy ||
+			disposed ||
+			(tool.requestSignal ?? tool.signal) !== routingRequest.signal
+		) {
+			throw new Error("Phase tools require an active orchestrator turn");
+		}
+		tool.signal.throwIfAborted();
+		if (action.action === "status") {
+			return { text: phaseState() };
+		}
+		if (phaseBusy || phaseUsed) {
+			return {
+				text: "A phase action already ran in this turn. Present its result to the user before starting or continuing more work.",
+				isError: true,
+			};
+		}
+		phaseBusy = true;
+		try {
+			if (action.action === "abandon") {
+				if (!active()) {
+					return {
+						text: "There is no unfinished phase to abandon.",
+						isError: true,
+					};
+				}
+				input.push({
+					type: "text",
+					text: `User-directed abandonment: ${action.reason}`,
+				});
+				archiveWorkflow();
+				phase = "routing";
+				return {
+					text: "Phase abandoned. Existing effects remain; no work was replayed or undone.",
+				};
+			}
+			if (action.action === "start") {
+				if (active() || !Object.hasOwn(workflow.commands, action.phase)) {
+					return {
+						text: `Cannot replace unfinished work or start an unknown phase.\n\n${phaseState()}`,
+						isError: true,
+					};
+				}
+				const started = createEngine(
+					workflow,
+					action.phase,
+					action.mode ?? null,
+				);
+				archiveWorkflow();
+				engine = started;
+				phaseHistory = structuredClone(history);
+				({ phase } = action);
+				input = [
+					...structuredClone(routingInput),
+					{
+						type: "text",
+						text: `Conversation-derived phase brief (formal vault documents intentionally optional):\n\n${renderWorkflowBrief(action.brief)}`,
+					},
+				];
+			} else {
+				if (!active()) {
+					return {
+						text: "There is no unfinished phase to continue.",
+						isError: true,
+					};
+				}
+				if (canResume()) {
+					engine =
+						engine!.status === "interrupted"
+							? resumeInterruptedBatch(engine!)
+							: resumeReportedBatch(engine!);
+				} else if (
+					engine!.status === "waiting" &&
+					["mode", "human", "semi"].includes(engine!.pause!.kind)
+				) {
+					try {
+						engine = answerCheckpoint(engine!, action.instructions);
+					} catch {
+						return {
+							text: `The checkpoint answer was not accepted.\n\n${phaseState()}`,
+							isError: true,
+						};
+					}
+				} else if (engine!.status !== "ready") {
+					return {
+						text: `This phase cannot safely continue.\n\n${phaseState()}`,
+						isError: true,
+					};
+				}
+				input.push(...structuredClone(routingInput), {
+					type: "text",
+					text: `Latest user correction or checkpoint answer:\n${action.instructions}`,
+				});
+			}
+			phaseUsed = true;
+			try {
+				await drive({ ...routingRequest, signal: tool.signal });
+			} catch (error) {
+				if (engine?.status === "running") {
+					engine = engine.records.some(({ status }) => status === "running")
+						? interruptEngine(engine)
+						: settleBatch(engine);
+					if (engine.status === "completed") {
+						phase = "routing";
+					}
+				}
+				throw error;
+			}
+			return { text: phaseState() };
+		} finally {
+			phaseBusy = false;
+		}
 	};
 	const route = async (request: RuntimePrompt): Promise<RuntimeStopReason> => {
-		archiveWorkflow();
+		if (!orchestrated || !active()) {
+			archiveWorkflow();
+		}
 		routingBefore = routing.snapshot?.();
 		routingInput = structuredClone([...request.content]);
 		routingBusy = true;
+		routingRequest = request;
+		phaseUsed = false;
 		const text = new Map<string, string>();
 		try {
 			const reason = await routing.prompt({
@@ -547,6 +756,14 @@ export const createWorkflowRuntime = (
 				content: [
 					...structuredClone(history.slice(routingHistory)),
 					...request.content,
+					...(orchestrated
+						? [
+								{
+									type: "text" as const,
+									text: `D3R runtime phase state (authoritative):\n${phaseState()}`,
+								},
+							]
+						: []),
 				],
 				emit: async (chunk) => {
 					await request.emit(chunk);
@@ -558,8 +775,13 @@ export const createWorkflowRuntime = (
 					}
 				},
 			});
-			routingInterrupted = reason === "cancelled" || request.signal.aborted;
-			if (!routingInterrupted) {
+			routingInterrupted =
+				!orchestrated && (reason === "cancelled" || request.signal.aborted);
+			if (
+				!routingInterrupted &&
+				reason !== "cancelled" &&
+				!request.signal.aborted
+			) {
 				history.push(
 					...routingInput
 						.filter((item) => item.type === "text")
@@ -580,10 +802,11 @@ export const createWorkflowRuntime = (
 			}
 			return request.signal.aborted ? "cancelled" : reason;
 		} catch (error) {
-			routingInterrupted = true;
+			routingInterrupted = !orchestrated;
 			throw error;
 		} finally {
 			routingBusy = false;
+			routingRequest = null;
 		}
 	};
 	// oxlint-disable-next-line max-statements -- Explicit directive and recovery branches must not silently start a new run.
@@ -596,6 +819,9 @@ export const createWorkflowRuntime = (
 			.join("\n")
 			.trim();
 		const directive = /^\/([^\s]+)/.exec(text)?.[1];
+		if (orchestrated) {
+			return route(request);
+		}
 		if ((active() || routingInterrupted) && directive) {
 			try {
 				await say(
@@ -690,6 +916,7 @@ export const createWorkflowRuntime = (
 	return {
 		getConfig,
 		getCommands,
+		runPhase,
 		setConfig: async (id, value) => {
 			assertIdle();
 			if (id === "phase") {
@@ -732,7 +959,7 @@ export const createWorkflowRuntime = (
 				.catch((error: unknown) => {
 					if (
 						engine?.status === "running" ||
-						(active() && current.signal.aborted)
+						(!orchestrated && active() && current.signal.aborted)
 					) {
 						engine = interruptEngine(engine!);
 					}
@@ -766,11 +993,17 @@ export const createWorkflowRuntime = (
 				history,
 				input,
 				...(summary === null ? {} : { summary }),
-				routing: routingBusy ? routingBefore : routing.snapshot(),
+				...(orchestrated ? { orchestrated, continuations, phaseHistory } : {}),
+				routing: snapshotWorkflowJson(
+					routingBusy ? routingBefore : routing.snapshot(),
+				),
 				routingBefore:
-					routingBusy || routingInterrupted ? routingBefore : undefined,
+					routingBusy || routingInterrupted
+						? snapshotWorkflowJson(routingBefore)
+						: undefined,
 				routingHistory,
-				routingInterrupted: routingBusy || routingInterrupted,
+				routingInterrupted:
+					!orchestrated && (routingBusy || routingInterrupted),
 				routingInput,
 			});
 		},
@@ -806,6 +1039,14 @@ export const createWorkflowRuntime = (
 			if (!routing.restore) {
 				throw new Error("Routing runtime does not support restore");
 			}
+			validateContinuations(
+				restored,
+				parsed.continuations ?? [],
+				parsed.orchestrated === true,
+			);
+			if ((parsed.orchestrated === true) !== orchestrated) {
+				throw new Error("Saved orchestration mode differs from the runtime");
+			}
 			routing.restore(structuredClone(parsed.routing));
 			({
 				workflow,
@@ -817,6 +1058,8 @@ export const createWorkflowRuntime = (
 				routingHistory,
 			} = parsed);
 			engine = restored;
+			continuations = structuredClone(parsed.continuations ?? []);
+			phaseHistory = structuredClone(parsed.phaseHistory ?? []);
 			summary = parsed.summary ?? null;
 			routingBefore = parsed.routingBefore ?? parsed.routing;
 		},

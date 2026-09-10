@@ -135,7 +135,9 @@ describe("workflow engine", () => {
 		expect(state.records.at(-1)?.status).toBe("pending");
 	});
 	it("feeds changes_requested to the next iteration and exits only on approval", () => {
-		let state = batch(automatic());
+		let state = batch(automatic(), () =>
+			done("Implemented", { allDone: true }),
+		);
 		state = batch(state, () =>
 			done("Fix the race", { review: "changes_requested" }),
 		);
@@ -144,7 +146,7 @@ describe("workflow engine", () => {
 				(record) => record.outcome?.review === "changes_requested",
 			)?.outcome?.summary,
 		).toBe("Fix the race");
-		state = batch(state);
+		state = batch(state, () => done("Fixed the race", { allDone: true }));
 		state = batch(state, () => done("Reviewed", { review: "approved" }));
 		expect(
 			state.records.filter((record) => record.status === "skipped").length,
@@ -155,14 +157,124 @@ describe("workflow engine", () => {
 		).toBe("auditor");
 		expect(batch(state).status).toBe("completed");
 	});
-	it("accepts implementor allDone but not other roles' completion hints", () => {
-		const state = batch(automatic(), () =>
+	it("requires the declared develop review even after implementor allDone", () => {
+		const start = automatic();
+		const state = batch(start, () => done("Nothing left", { allDone: true }));
+		expect(state.records.slice(1)).toEqual(start.records.slice(1));
+		expect(
+			beginBatch(state).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("reviewer");
+		const approved = batch(state, () =>
+			done("Reviewed", { review: "approved" }),
+		);
+		expect(
+			beginBatch(approved).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("auditor");
+		expect(batch(approved).status).toBe("completed");
+		expect(start.records.every((record) => record.status === "pending")).toBe(
+			true,
+		);
+	});
+	it("accepts allDone in a standalone implementor loop", () => {
+		const custom = graph([
+			{ kind: "loop", max: 2, body: [{ kind: "agent", name: "implementor" }] },
+			{ kind: "agent", name: "auditor" },
+		]);
+		const state = batch(createEngine(custom, "test"), () =>
 			done("Nothing left", { allDone: true }),
 		);
+		expect(
+			state.records.slice(1, -1).every((record) => record.status === "skipped"),
+		).toBe(true);
 		expect(
 			beginBatch(state).records.find((record) => record.status === "running")
 				?.role,
 		).toBe("auditor");
+	});
+	it("does not let a reviewer in a later iteration prevent allDone", () => {
+		const custom = graph([
+			{
+				kind: "loop",
+				max: 2,
+				body: [
+					{ kind: "agent", name: "reviewer" },
+					{ kind: "agent", name: "implementor" },
+				],
+			},
+			{ kind: "agent", name: "auditor" },
+		]);
+		const reviewed = batch(createEngine(custom, "test"));
+		const state = batch(reviewed, () =>
+			done("Nothing left", { allDone: true }),
+		);
+		expect(
+			state.records
+				.filter((record) => record.role === "reviewer")
+				.map((record) => record.status),
+		).toEqual(["completed", "skipped"]);
+		expect(
+			beginBatch(state).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("auditor");
+	});
+	it("does not let an outer reviewer prevent closing an implementor-only inner loop", () => {
+		const custom = graph([
+			{
+				kind: "loop",
+				max: 2,
+				body: [
+					{
+						kind: "loop",
+						max: 2,
+						body: [{ kind: "agent", name: "implementor" }],
+					},
+					{ kind: "agent", name: "reviewer" },
+				],
+			},
+			{ kind: "agent", name: "auditor" },
+		]);
+		const state = batch(createEngine(custom, "test"), () =>
+			done("Inner work done", { allDone: true }),
+		);
+		expect(
+			state.records.slice(1, 4).every((record) => record.status === "skipped"),
+		).toBe(true);
+		expect(
+			beginBatch(state).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("reviewer");
+		const approved = batch(state, () =>
+			done("Outer approved", { review: "approved" }),
+		);
+		expect(
+			beginBatch(approved).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("auditor");
+	});
+	it("does not skip a nested reviewer within the implementor's current iteration", () => {
+		const custom = graph([
+			{
+				kind: "loop",
+				max: 2,
+				body: [
+					{ kind: "agent", name: "implementor" },
+					{ kind: "loop", max: 2, body: [{ kind: "agent", name: "reviewer" }] },
+				],
+			},
+		]);
+		const start = createEngine(custom, "test");
+		const state = batch(start, () =>
+			done("Outer work done", { allDone: true }),
+		);
+		expect(state.records.slice(1)).toEqual(start.records.slice(1));
+		expect(
+			beginBatch(state).records.find((record) => record.status === "running")
+				?.role,
+		).toBe("reviewer");
+	});
+	it("does not accept other roles' completion hints", () => {
 		const wrongRole = batch(
 			batch(automatic(), () => done("Not a reviewer", { review: "approved" })),
 			() => done("Not an implementor", { allDone: true }),
@@ -282,21 +394,35 @@ describe("workflow engine", () => {
 		expect(state.status).toBe("blocked");
 		expect(state.records.at(-1)?.status).toBe("pending");
 	});
-	it("gives changes_requested precedence over conflicting parallel approvals", () => {
-		const custom = graph([
-			{
-				kind: "loop",
-				max: 1,
-				body: [{ kind: "parallel", agents: ["reviewer", "implementor"] }],
-			},
-		]);
-		const state = batch(createEngine(custom, "test"), (role) =>
-			role === "reviewer"
-				? done("Fix this", { review: "changes_requested" })
-				: done("Done", { allDone: true }),
-		);
-		expect(state.status).toBe("blocked");
-	});
+	it.each([
+		["reviewer", "implementor"],
+		["implementor", "reviewer"],
+	])(
+		"gives changes_requested precedence over parallel allDone in %j order",
+		(...agents) => {
+			const custom = graph([
+				{
+					kind: "loop",
+					max: 1,
+					body: [{ kind: "parallel", agents }],
+				},
+				{ kind: "agent", name: "auditor" },
+			]);
+			const state = batch(createEngine(custom, "test"), (role) =>
+				role === "reviewer"
+					? done("Fix this", { review: "changes_requested" })
+					: done("Done", { allDone: true }),
+			);
+			expect(state.status).toBe("blocked");
+			expect(state.records.some((record) => record.status === "skipped")).toBe(
+				false,
+			);
+			expect(state.records.at(-1)).toMatchObject({
+				role: "auditor",
+				status: "pending",
+			});
+		},
+	);
 	it.each([0, -1, 1.5, Infinity, 10_001])(
 		"rejects invalid loop max %s",
 		(max) => {

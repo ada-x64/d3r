@@ -203,6 +203,7 @@ describe("embedded runtime expansion", () => {
 			{ path: "a", text: "default" },
 			{
 				toolCallId: id,
+				requestSignal: expect.any(AbortSignal),
 				cwd: CWD,
 				roots: [CWD, root],
 				signal: expect.any(AbortSignal),

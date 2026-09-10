@@ -13,6 +13,14 @@ import {
 	testPrompt,
 } from "./native-test-support.ts";
 
+/** Phase controls belong only to the persistent router, never to delegated workers. */
+const PHASE_TOOLS = [
+	"d3r_start_phase",
+	"d3r_continue_phase",
+	"d3r_abandon_phase",
+	"d3r_phase_status",
+];
+
 /** Composition contracts cover real selector/checkpoint/workflow code with offline injected IO. */
 describe("native dependency composition", () => {
 	const fixtures: ReturnType<typeof nativeFixture>[] = [];
@@ -341,29 +349,55 @@ describe("native dependency composition", () => {
 		);
 	});
 
-	it("uses neutral routing, declared role prompts, capability filtering, reports, and current routing selection", async () => {
+	it("keeps a persistent neutral router with isolated, capability-filtered workers and current selection", async () => {
 		const f = fixture();
 		const session = await f.open();
 		await session.prompt(testPrompt());
 		const router = f.turns[0].options;
-		expect(router.systemPrompt).toContain("/design");
-		expect(router.systemPrompt).toContain("/delegate");
-		expect(router.systemPrompt).toContain("/develop");
-		expect(router.systemPrompt).toContain("/summarize");
-		expect(router.systemPrompt).toContain("Loaded custom system prompt.");
+		[
+			"/design",
+			"/delegate",
+			"/develop",
+			"/summarize",
+			"Loaded custom system prompt.",
+		].forEach((text) => expect(router.systemPrompt).toContain(text));
 		expect(router.systemPrompt).not.toContain("LEGACY PERSONA");
+		expect(router.tools?.map(({ name }) => name)).toEqual(
+			expect.arrayContaining(PHASE_TOOLS),
+		);
+		expect(router.tools?.map(({ name }) => name)).not.toContain("d3r_report");
+		expect(f.deps.createWorkflowRuntime).toHaveBeenCalledWith(
+			expect.objectContaining({ orchestrated: true }),
+		);
 		await session.setConfig!("model", nativeModelKey(MODEL_A));
 		await session.setConfig!("thought_level", "high");
 		await session.prompt(testPrompt("/design a thing"));
-		const child = f.turns[1].options;
+		expect(f.turns.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"routing",
+			"designer",
+		]);
+		expect(f.turns[1].runtime).toBe(f.turns[0].runtime);
+		expect(f.turns[1].runtime.getConfig?.()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "model",
+					value: nativeModelKey(MODEL_A),
+				}),
+				expect.objectContaining({ id: "thought_level", value: "high" }),
+			]),
+		);
+		const child = f.turns[2].options;
 		expect(child.model.id).toBe("first");
 		expect(child.thinkingLevel).toBe("high");
-		expect(child.systemPrompt).toContain("Declared designer persona.");
-		expect(child.systemPrompt).toContain("Pinned workspace instructions.");
-		expect(child.systemPrompt).toContain(f.resources.vaultRoot);
-		expect(child.systemPrompt).toContain(f.resources.skills[0].path);
-		expect(child.systemPrompt).toContain("Skill description");
-		expect(child.systemPrompt).toContain("MUST call d3r_report exactly once");
+		[
+			"Declared designer persona.",
+			"Pinned workspace instructions.",
+			f.resources.vaultRoot,
+			f.resources.skills[0].path,
+			"Skill description",
+			"MUST call d3r_report exactly once",
+		].forEach((text) => expect(child.systemPrompt).toContain(text));
 		expect(new Set(child.tools?.map(({ name }) => name))).toEqual(
 			new Set([
 				"read_file",
@@ -382,29 +416,190 @@ describe("native dependency composition", () => {
 			]),
 		);
 		expect(
+			child.tools?.filter(({ name }) => PHASE_TOOLS.includes(name)),
+		).toEqual([]);
+		expect(
 			child.tools?.find(({ name }) => name === "write_file")?.permission,
 		).toBe("ask");
+		expect(parseNativeCheckpoint(session.snapshot!()).inner).toMatchObject({
+			orchestrated: true,
+			engine: { status: "completed" },
+		});
+		expect(f.deps.createEmbeddedRuntime).toHaveBeenCalledTimes(2);
+		expect(f.disposals).toEqual([f.turns[2].runtime]);
+		await session.dispose();
+		expect(f.disposals).toEqual([f.turns[2].runtime, f.turns[0].runtime]);
+	});
+
+	it("hands conversation context to workers without requiring formal vault documents", async () => {
+		const f = fixture();
+		const session = await f.open();
+		const discussion =
+			"Search keeps running after cancellation; keep the existing API.";
+		await session.prompt(testPrompt(discussion));
+		const router = f.turns[0].options;
+		const start = vi.spyOn(
+			router.tools!.find(({ name }) => name === "d3r_start_phase")!,
+			"execute",
+		);
+		await session.prompt(testPrompt("/design Fix search cancellation"));
+		expect(start).toHaveBeenCalledExactlyOnceWith(
+			{
+				phase: "design",
+				brief: {
+					goal: "Fix search cancellation",
+					context: expect.stringContaining(discussion),
+					acceptanceCriteria: [
+						"Complete the requested phase and report the outcome.",
+					],
+					constraints: [],
+				},
+			},
+			expect.objectContaining({ cwd: CWD, roots: [CWD] }),
+		);
+		expect(router.systemPrompt).toContain(
+			"No prior phase or formal vault documents are required",
+		);
+		expect(router.systemPrompt).toContain("never fabricate citations");
+		const child = f.turns.find(
+			({ options }) => options.budgetLabel === "designer",
+		)!;
+		expect(child.options.systemPrompt).toContain(
+			"conversation brief intentionally substitutes for schema, design, and plan documents",
+		);
+		expect(child.options.systemPrompt).toContain(
+			"Preserve all project constraints, approval requirements, and your assigned role remit",
+		);
+		expect(child.request.content).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ text: expect.stringContaining(discussion) }),
+				expect.objectContaining({
+					text: expect.stringContaining("## Goal\nFix search cancellation"),
+				}),
+				expect.objectContaining({
+					text: expect.stringContaining("## Acceptance criteria"),
+				}),
+			]),
+		);
 		expect(
 			parseNativeCheckpoint(session.snapshot!()).inner?.engine?.status,
 		).toBe("completed");
-		const summary = f.turns.find(
-			({ options }) => options.budgetLabel === "workflow summary",
-		)!;
-		expect(summary.options).toMatchObject({
-			model: MODEL_A,
-			thinkingLevel: "high",
-			tools: [],
-			maxTurns: 1,
-			maxTotalTurns: 1,
-		});
-		expect(f.disposals).toEqual([f.turns[1].runtime, summary.runtime]);
 	});
+
+	it("returns the phase response from the same router after its tool finishes, without a summary runtime or replay", async () => {
+		const f = fixture();
+		const session = await f.open();
+		await session.prompt(testPrompt());
+		const [router] = f.turns;
+		const start = vi.spyOn(
+			router.options.tools!.find(({ name }) => name === "d3r_start_phase")!,
+			"execute",
+		);
+		const prompt = testPrompt("/design a thing");
+		await session.prompt(prompt);
+		expect(f.turns[1].runtime).toBe(router.runtime);
+		expect(f.turns[1].request.content.at(-1)).toEqual({
+			type: "text",
+			text: expect.stringMatching(
+				/^D3R runtime phase state \(authoritative\):\nNo active workflow/,
+			),
+		});
+		expect(start).toHaveBeenCalledTimes(1);
+		await expect(start.mock.results[0].value).resolves.toEqual({
+			text: expect.stringMatching(/Status: completed[\s\S]*Role completed/),
+		});
+		expect(vi.mocked(prompt.emit).mock.calls.map(([chunk]) => chunk)).toEqual([
+			expect.objectContaining({
+				kind: "text",
+				text: "Offline reply",
+				parentToolCallId: expect.any(String),
+			}),
+			{ kind: "text", messageId: "offline-reply", text: "Offline reply" },
+		]);
+		const checkpoint = parseNativeCheckpoint(session.snapshot!());
+		expect(checkpoint.inner).not.toHaveProperty("summary");
+		expect(checkpoint.inner?.history.at(-1)).toEqual({
+			type: "text",
+			text: "Routing response:\nOffline reply",
+		});
+		await session.prompt(testPrompt("Thanks, what happened?"));
+		expect(f.turns.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"routing",
+			"designer",
+			"routing",
+		]);
+		expect(f.turns.at(-1)!.runtime).toBe(router.runtime);
+		expect(start).toHaveBeenCalledTimes(1);
+		expect(f.deps.createEmbeddedRuntime).toHaveBeenCalledTimes(2);
+		expect(f.disposals).toEqual([f.turns[2].runtime]);
+	});
+
+	it.each([
+		{ failure: "missing report", error: "Missing or invalid d3r_report" },
+		{ failure: "execution failure", error: "Role setup or execution failed" },
+	])(
+		"retains $failure for router discussion without replaying or replacing the worker",
+		async ({ failure, error }) => {
+			const f = fixture();
+			const completeTurn = f.onTurn.getMockImplementation()!;
+			f.onTurn.mockImplementation(async (turn) => {
+				if (turn.options.budgetLabel !== "designer") {
+					await completeTurn(turn);
+					return;
+				}
+				if (failure === "execution failure") {
+					throw new Error("private worker failure details");
+				}
+				await turn.request.emit({
+					kind: "text",
+					messageId: "prose",
+					text: "Prose is not a report",
+				});
+			});
+			const session = await f.open();
+			await expect(session.prompt(testPrompt("/design a thing"))).resolves.toBe(
+				"completed",
+			);
+			const blocked = parseNativeCheckpoint(session.snapshot!()).inner!.engine;
+			expect(blocked).toMatchObject({
+				status: "blocked",
+				pause: { kind: "failure", message: expect.stringContaining(error) },
+			});
+			expect(f.disposals).toEqual([f.turns[1].runtime]);
+			await session.prompt(testPrompt("What needs attention?"));
+			expect(f.turns.at(-1)!.request.content.at(-1)).toEqual({
+				type: "text",
+				text: expect.stringMatching(
+					/^D3R runtime phase state \(authoritative\):[\s\S]*Status: blocked/,
+				),
+			});
+			await session.prompt(testPrompt("/design replacement"));
+			expect(parseNativeCheckpoint(session.snapshot!()).inner?.engine).toEqual(
+				blocked,
+			);
+			expect(JSON.stringify(session.snapshot!())).not.toContain(
+				"private worker failure details",
+			);
+			expect(f.turns.map(({ options }) => options.budgetLabel)).toEqual([
+				"routing",
+				"designer",
+				"routing",
+				"routing",
+			]);
+			expect(f.turns.at(-1)!.runtime).toBe(f.turns[0].runtime);
+			expect(f.deps.createEmbeddedRuntime).toHaveBeenCalledTimes(2);
+			expect(f.disposals).toEqual([f.turns[1].runtime]);
+		},
+	);
 
 	it("restores resource and model pins synchronously, without granting trust or creating runtime/MCP effects", async () => {
 		const f = fixture();
 		const first = await f.open();
+		await first.setConfig!("thought_level", "high");
 		await first.prompt(testPrompt());
 		const checkpoint = first.snapshot!();
+		expect(parseNativeCheckpoint(checkpoint).inner?.orchestrated).toBe(true);
 		await first.dispose();
 		f.deps.loadAgentResources.mockResolvedValue({
 			...f.resources,
@@ -428,6 +623,12 @@ describe("native dependency composition", () => {
 		const permissions = f.requestPermission.mock.calls.length;
 		const mcp = f.deps.connectMcpTools.mock.calls.length;
 		expect(loaded.restore!(checkpoint)).toBeUndefined();
+		expect(loaded.getConfig?.()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "model", value: chosenModel }),
+				expect.objectContaining({ id: "thought_level", value: "high" }),
+			]),
+		);
 		expect(loaded.getCommands?.()).toEqual([
 			{ name: "design", description: "Design" },
 		]);
@@ -443,9 +644,88 @@ describe("native dependency composition", () => {
 		expect(child.systemPrompt).toContain("Pinned workspace instructions.");
 		expect(child.systemPrompt).not.toContain("CHANGED");
 		expect(child.model.id).toBe("first");
+		expect(child.thinkingLevel).toBe("high");
+		expect(parseNativeCheckpoint(loaded.snapshot!()).inner?.orchestrated).toBe(
+			true,
+		);
 		expect(
 			parseNativeCheckpoint(loaded.snapshot!()).resources.instructions,
 		).toBe("Pinned workspace instructions.");
+	});
+
+	// oxlint-disable-next-line max-statements -- Follow a legacy restore through inert setup, direct dispatch, summary, and disposal.
+	it("restores an inner checkpoint without an orchestration flag as legacy, including its isolated summary", async () => {
+		const f = fixture();
+		const first = await f.open();
+		await first.prompt(testPrompt());
+		const checkpoint = parseNativeCheckpoint(first.snapshot!());
+		delete checkpoint.inner!.orchestrated;
+		delete checkpoint.inner!.continuations;
+		await first.dispose();
+		const loaded = await f.open();
+		expect(loaded.restore!(checkpoint)).toBeUndefined();
+		expect(f.deps.createEmbeddedRuntime).toHaveBeenCalledTimes(1);
+		expect(f.deps.connectMcpTools).toHaveBeenCalledTimes(1);
+		expect(f.requestPermission).toHaveBeenCalledTimes(1);
+		await loaded.prompt(testPrompt());
+		expect(f.requestPermission).toHaveBeenCalledTimes(2);
+		expect(f.deps.createWorkflowRuntime).toHaveBeenLastCalledWith(
+			expect.objectContaining({ orchestrated: false }),
+		);
+		const [, router] = f.turns;
+		expect(
+			router.options.tools?.filter(({ name }) => PHASE_TOOLS.includes(name)),
+		).toEqual([]);
+		expect(router.options.systemPrompt).toContain("native workflow router");
+		expect(router.options.systemPrompt).not.toContain("LEGACY PERSONA");
+		expect(
+			router.request.content.some(
+				(item) =>
+					item.type === "text" &&
+					item.text.startsWith("D3R runtime phase state (authoritative):"),
+			),
+		).toBe(false);
+		await loaded.setConfig!("model", nativeModelKey(MODEL_A));
+		await loaded.setConfig!("thought_level", "high");
+		await loaded.prompt(testPrompt("/design legacy request"));
+		expect(f.turns.slice(1).map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"designer",
+			"workflow summary",
+		]);
+		const [child, summary] = f.turns.slice(2);
+		expect(child.options.systemPrompt).toContain("Declared designer persona.");
+		expect(child.options.systemPrompt).not.toContain(
+			"conversation brief intentionally substitutes",
+		);
+		expect(
+			child.options.tools?.filter(({ name }) => PHASE_TOOLS.includes(name)),
+		).toEqual([]);
+		expect(child.options.model).toEqual(MODEL_A);
+		expect(child.options.thinkingLevel).toBe("high");
+		expect(summary.options).toMatchObject({
+			model: MODEL_A,
+			thinkingLevel: "high",
+			tools: [],
+			maxTurns: 1,
+			maxTotalTurns: 1,
+		});
+		const restored = parseNativeCheckpoint(loaded.snapshot!());
+		expect(restored.inner?.engine?.status).toBe("completed");
+		expect(restored.inner?.summary).toBe("Offline reply");
+		expect(restored.inner).not.toHaveProperty("orchestrated");
+		expect(f.disposals).toEqual([
+			f.turns[0].runtime,
+			child.runtime,
+			summary.runtime,
+		]);
+		await loaded.dispose();
+		expect(f.disposals).toEqual([
+			f.turns[0].runtime,
+			child.runtime,
+			summary.runtime,
+			router.runtime,
+		]);
 	});
 
 	it("rejects corrupt snapshots atomically without invoking getters or widening workspace roots", async () => {

@@ -141,25 +141,70 @@ export const nativeFixture = () => {
 	};
 	const turns: TestTurn[] = [];
 	const disposals: RuntimeSession[] = [];
-	const onTurn = vi.fn(async ({ options, input, request }: TestTurn) => {
-		const report = options.tools?.find(({ name }) => name === "d3r_report");
-		if (report) {
-			await report.execute(
-				{ status: "completed", summary: "Role completed" },
-				{
-					toolCallId: "report",
-					cwd: input.cwd,
-					roots: [input.cwd],
-					signal: request.signal,
-				},
+	const onTurn = vi.fn(
+		async ({ options, input, request, runtime }: TestTurn) => {
+			const context = {
+				toolCallId: "offline-tool",
+				cwd: input.cwd,
+				roots: [input.cwd, ...(input.additionalDirectories ?? [])],
+				signal: request.signal,
+			};
+			const start = options.tools?.find(
+				({ name }) => name === "d3r_start_phase",
 			);
-		}
-		await request.emit({
-			kind: "text",
-			messageId: "offline-reply",
-			text: "Offline reply",
-		});
-	});
+			const text = request.content
+				.filter((item) => item.type === "text")
+				.map((item) => item.text);
+			const [state, message] = text.toReversed();
+			// Only the latest user request drives this fake model, never slash commands in handed-off history.
+			const command = state?.startsWith(
+				"D3R runtime phase state (authoritative):",
+			)
+				? /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(message ?? "")
+				: null;
+			if (start && command) {
+				const [, phase, goal] = command;
+				const action = start.schema.safeParse({
+					phase,
+					brief: {
+						goal: goal?.trim() || message,
+						context: turns
+							.filter((turn) => turn.runtime === runtime)
+							.flatMap((turn) => turn.request.content)
+							.filter((item) => item.type === "text")
+							.map((item) => item.text)
+							.filter(
+								(item) =>
+									!item.startsWith("D3R runtime phase state (authoritative):"),
+							)
+							.join("\n\n"),
+						acceptanceCriteria: [
+							"Complete the requested phase and report the outcome.",
+						],
+						constraints: [],
+					},
+				});
+				if (action.success) {
+					await start.execute(action.data, {
+						...context,
+						toolCallId: "start-phase",
+					});
+				}
+			}
+			const report = options.tools?.find(({ name }) => name === "d3r_report");
+			if (report) {
+				await report.execute(
+					{ status: "completed", summary: "Role completed" },
+					{ ...context, toolCallId: "report" },
+				);
+			}
+			await request.emit({
+				kind: "text",
+				messageId: "offline-reply",
+				text: "Offline reply",
+			});
+		},
+	);
 	const deps = {
 		createModelRuntime: vi.fn<NativeDependencies["createModelRuntime"]>(
 			async () => models,

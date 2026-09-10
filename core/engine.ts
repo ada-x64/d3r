@@ -292,7 +292,7 @@ export const recordOutcome = (
 	return state;
 };
 
-/** Only role-specific, explicit success closes the innermost loop containing a batch. */
+/** Explicit success closes the innermost loop without letting allDone bypass review. */
 const closeLoops = (state: EngineState, batch: ExecutionRecord[]): void => {
 	if (batch.some((record) => record.outcome?.review === "changes_requested")) {
 		return;
@@ -303,6 +303,23 @@ const closeLoops = (state: EngineState, batch: ExecutionRecord[]): void => {
 			(record.role === "implementor" && record.outcome?.allDone === true);
 		const loop = record.loops.at(-1);
 		if (!success || !loop) {
+			return;
+		}
+		if (
+			record.role === "implementor" &&
+			state.records
+				.slice(state.records.indexOf(record) + 1)
+				.some(
+					(entry) =>
+						entry.kind === "agent" &&
+						entry.role === "reviewer" &&
+						entry.status === "pending" &&
+						entry.loops.some(
+							(scope) =>
+								scope.id === loop.id && scope.iteration === loop.iteration,
+						),
+				)
+		) {
 			return;
 		}
 		state.records
@@ -506,6 +523,82 @@ export const parseEngineState = (input: unknown): EngineState => {
 		throw new Error("Checkpoint pause does not match state");
 	}
 	return state;
+};
+
+/** Continuations cannot replay completed siblings or cross unfinished work outside their batch. */
+const resumableRecords = (
+	state: EngineState,
+	status: "interrupted" | "waiting",
+): ExecutionRecord[] => {
+	const first = state.records.findIndex(
+		(record) => record.kind === "agent" && record.status === status,
+	);
+	if (first === -1) {
+		throw new Error(`No ${status} agents to resume`);
+	}
+	const { batch } = state.records[first];
+	if (
+		state.records.some((record, index) => {
+			if (record.batch === batch) {
+				return (
+					record.kind !== "agent" ||
+					(record.status !== status && record.status !== "completed")
+				);
+			}
+			return index < first
+				? !["completed", "skipped"].includes(record.status)
+				: !["pending", "skipped"].includes(record.status);
+		})
+	) {
+		throw new Error(
+			`${status === "interrupted" ? "Interrupted" : "Reported"} batch cannot bypass unfinished or later settled work`,
+		);
+	}
+	return state.records.filter((record) => record.status === status);
+};
+
+/** Resume only interrupted children; the existing settlement barrier owns advancement. */
+export const resumeInterruptedBatch = (input: EngineState): EngineState => {
+	const state = parseEngineState(input);
+	if (state.status !== "interrupted" || state.pause?.kind !== "interrupted") {
+		throw new Error("Engine is not paused on an interrupted batch");
+	}
+	const records = resumableRecords(state, "interrupted");
+	records.forEach((record) => {
+		record.status = "running";
+	});
+	state.activeBatch = records[0].batch;
+	state.status = "running";
+	state.pause = null;
+	return parseEngineState(state);
+};
+
+/** Call only after an explicit user answer; each needs_human child must report anew. */
+export const resumeReportedBatch = (input: EngineState): EngineState => {
+	const state = parseEngineState(input);
+	if (state.status !== "waiting" || state.pause?.kind !== "report") {
+		throw new Error("Engine is not paused on a needs_human report");
+	}
+	const records = resumableRecords(state, "waiting");
+	if (
+		records.some(
+			(record) =>
+				record.outcome?.status !== "needs_human" || record.error !== undefined,
+		)
+	) {
+		throw new Error(
+			"Reported batch requires needs_human reports without errors",
+		);
+	}
+	records.forEach((record) => {
+		record.status = "running";
+		delete record.outcome;
+		delete record.error;
+	});
+	state.activeBatch = records[0].batch;
+	state.status = "running";
+	state.pause = null;
+	return parseEngineState(state);
 };
 
 /** JSON serialization is explicit and validates completed-output provenance. */

@@ -26,6 +26,7 @@ import {
 	type NativeCheckpoint,
 } from "./native-resources.ts";
 import { createWorkflowReportTool } from "./workflow-runtime.ts";
+import { createWorkflowPhaseTools } from "./workflow-phase-tools.ts";
 import { createNativeMcpSecurity } from "./native-mcp.ts";
 import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
@@ -404,14 +405,27 @@ export const createLazyNativeSession = ({
 					mcpServers: undefined,
 				});
 			};
+			const orchestrated =
+				saved.inner === null || saved.inner.orchestrated === true;
+			const phaseTools = orchestrated
+				? createWorkflowPhaseTools(getCommands(), (action, context) =>
+						phaseRuntime.runPhase(action, context),
+					)
+				: [];
+			if (
+				tools.some((tool) => phaseTools.some(({ name }) => name === tool.name))
+			) {
+				throw new Error("Phase tool names are reserved");
+			}
 			const routing = create(
 				saved.selection,
-				nativeSystemPrompt(saved.resources),
-				{ tools },
+				nativeSystemPrompt(saved.resources, undefined, orchestrated),
+				{ tools: [...tools, ...phaseTools] },
 			);
 			runtime = routing;
-			runtime = deps.createWorkflowRuntime({
+			const phaseRuntime = deps.createWorkflowRuntime({
 				routing,
+				orchestrated,
 				workflow: saved.resources.workflow,
 				agents: saved.resources.agents,
 				summarize: (summary, summarySignal) =>
@@ -433,7 +447,7 @@ export const createLazyNativeSession = ({
 					}
 					return create(
 						currentSelection(routing),
-						nativeSystemPrompt(saved.resources, agent),
+						nativeSystemPrompt(saved.resources, agent, orchestrated),
 						{
 							tools: [
 								...nativeRoleTools(agent, tools),
@@ -444,6 +458,7 @@ export const createLazyNativeSession = ({
 					);
 				},
 			});
+			runtime = phaseRuntime;
 			if (!runtime.snapshot || !runtime.restore || !runtime.setConfig) {
 				throw new Error(
 					"Native workflow runtime must support persistence and configuration",

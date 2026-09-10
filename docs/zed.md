@@ -177,16 +177,104 @@ approved command rather than `vault_mv`.
 
 ## Workflow commands
 
+### New native sessions
+
+Newly initialized native sessions use one persistent orchestrator (the router)
+for the continuous conversation. Ordinary messages and slash commands both go to
+that router, which receives authoritative workflow state every turn. Discuss or
+clarify normally; when you intend an action, the router calls a structured phase
+tool to run the chosen engine phase. Printing a command is not execution.
+
+The built-in phase shortcuts express intent:
+
 - `/design <topic>`: aggregation/research, a human discussion checkpoint,
   design.
-- `/delegate <topic>`: planning and task schemas.
-- `/develop <task>`: bounded implementation/review loop and audit. D3R asks for
-  `semi` or `auto`; `semi` pauses between agent batches.
-- `/summarize <task>`: summarization and archival.
+- `/delegate <topic>`: planning and task schemas when requested.
+- `/develop <task>`: bounded implementation/review loop and audit.
+- `/summarize <task>`: summarization and archival when requested.
 
-The Phase selector can choose a command without running it; the next prompt
-starts it. Ordinary routing conversation helps clarify work and select a phase.
-Routing context is handed to children, and workflow outcomes are returned to the
+**Any configured phase can start independently.** You can go straight to
+`develop` with an adequate conversation brief; no earlier phase or formal vault
+schema, design, or plan documents are prerequisites. The Phase picker selects
+intent while idle, not a launch: your next message still goes through the
+router, and only a phase-tool call starts work. It cannot replace an unfinished
+phase.
+
+The router has four phase tools:
+
+| Tool                 | Parameters and purpose                                                                                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `d3r_start_phase`    | A configured `phase`, structured `brief`, and optional `mode` (`semi` or `auto`); starts only when no unfinished phase is retained.                                   |
+| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch. |
+| `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase when execution is not running. Existing effects remain.                                              |
+| `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                 |
+
+The `brief` contains `goal`, `context`, nonempty `acceptanceCriteria`, and
+`constraints` (an empty list by default). The orchestrator builds it from known
+conversation facts and approved scope, not invented citations. If facts are
+missing, it asks for those facts rather than demanding documents. For `develop`,
+choose `semi` or `auto` explicitly. If the start tool omits `mode`, the engine
+asks; D3R must not silently assume `auto`. `semi` pauses between agent batches;
+`auto` can run the whole phase without those pauses, while still respecting
+required human checkpoints, reviews, and tool approvals.
+
+Core role files are unchanged. The native handoff contract substitutes the
+conversation brief for document-specific schema/design/plan requirements when
+those documents are absent. Roles work in the current approved workspace and
+requested scope, without inventing documents, branches, commits, or approvals.
+They can review working-tree changes and report findings inline without a vault
+artifact unless one was requested. Project constraints, role remit, mandatory
+tests, review gates, and approvals still apply; commits and pushes require
+explicit user authorization. The phase tools themselves do not request separate
+permission: underlying worker tools authorize real effects. The router delegates
+implementation rather than doing the workers' implementation itself.
+
+### Checkpoints and corrections
+
+The runtime permits only **one start or continue per user turn**. A phase may
+run to its next pause or completion, but the router cannot start it and then
+answer its new human checkpoint in that same turn. Waiting, blocked, or
+interrupted results must return a question or recovery guidance to you, not
+trigger an automatic answer, retry, or abandonment.
+
+A role's valid `needs_human` report presents its question and retains its
+conversation checkpoint. Clean cancellation can also retain checkpoints after
+started tools and role cleanup settle. Your answer, correction, or explicit
+continue resumes only the unfinished roles when all required child checkpoints
+are available. Completed parallel siblings and their outcomes remain retained;
+prior commands and mutations are not automatically replayed. Resumed roles must
+inspect current state before further effects and report again.
+
+This is **not a blanket failure retry**. Unknown-write outcomes, failed effect
+settlement or checkpointing, and missing required child checkpoints fail closed;
+D3R cannot safely resume by recreating a role without its retained evidence.
+Inspect the workspace and discuss recovery instead of assuming every blocked or
+interrupted run supports continuation.
+
+To skip a retained phase, explicitly ask to abandon it and then start the
+desired phase. A user-directed abandon can precede a start in the same turn; it
+does not consume the start/continue allowance. It cannot follow a start/continue
+to bypass a new pause. **Abandoning retains all existing effects; it is not
+rollback.** Starting again is a fresh run and can repeat effects, not a
+continuation or a safe automatic recovery procedure.
+
+For example:
+
+1. Send: "Implement search cancellation directly in develop using semi mode.
+   Search currently keeps running after cancellation. Acceptance: cancellation
+   stops the search and regression tests pass. Keep the public API; no new
+   dependencies, commits, or vault documents."
+2. At a human checkpoint or reported question, answer: "Keep the existing
+   cancellation error type. Continue with that correction."
+3. For a correction while work is running, use **Send Immediately** with "Keep
+   the current edits, but change only the search worker; continue with that
+   narrower scope." This cancels and waits before submitting the correction;
+   safe continuation still depends on retained checkpoints. See
+   [Sending corrections in Zed](#sending-corrections-in-zed).
+
+### Role execution and results
+
+Routing context is handed to children, and workflow outcomes return to the
 routing conversation. Plans and named role calls appear as structured ACP
 events. Each role's streamed response and separately labeled thoughts appear
 inside its role tool card, not in the coordinator's chat stream. Parallel roles
@@ -204,36 +292,87 @@ checkpoint when checkpointing succeeds.
 
 The engine executes the declared sequence and parallel batches, requires a
 validated `d3r_report` from every role, and never treats ordinary success prose
-as a completed step. Review approval or implementor `allDone` can terminate a
-loop; loop exhaustion blocks rather than silently skipping to audit. A failed or
-malformed report pauses the workflow.
+as a completed step. It governs role progression, reviews, and checkpoints;
+implementor `allDone` is not a shortcut around required review. Loop exhaustion
+blocks rather than silently skipping to audit. A failed or malformed report
+pauses the workflow.
 
-Those structured reports are internal handoff/checkpoint data, not the final
-chat response. After the entire workflow completes, D3R makes one additional,
+For new native sessions, the **same persistent router** synthesizes phase-tool
+results into one concise Markdown response: the outcome, relevant evidence, and
+any question or next step. There is no separate summary worker/request path.
+Structured reports remain internal handoff/checkpoint data, not JSON to dump
+into chat. The router also handles discussion between phases without launching
+implementation or another phase implicitly.
+
+### Legacy initialized native sessions
+
+An older, already-initialized native checkpoint without the `orchestrated` flag
+keeps the legacy deterministic/slash-command workflow dispatch and separate
+summary behavior below. Reloading or upgrading does not convert that initialized
+session; start a new session for persistent orchestration. This compatibility
+path is distinct from the Pi proxy selected by `d3r acp --legacy`.
+
+In these legacy native sessions, ordinary routing conversation clarifies work
+separately from phase execution. A recognized slash command starts its phase, or
+the Phase selector chooses a phase for the next prompt to start.
+
+After the entire workflow completes, legacy native sessions make one additional,
 tool-free model request using the selected model to synthesize the original
 brief, role outcomes, prior context, and human checkpoint answers. It returns
 one concise Markdown summary of what happened, why, and the next steps, with
 known artifact links and unresolved questions where relevant. This is not a
 role-by-role report dump, a new worker, or a new research pass.
 
-Summary text is buffered until complete; partial text and thoughts are not
-streamed into the parent chat. The cached summary is replayed on load and passed
-to later routing context without another model request. Checkpoints and blocked
-workflows do not trigger final synthesis. If synthesis fails or returns unusable
-text such as raw report JSON, a short Markdown fallback preserves completion and
-points to reviewing the results. Cancelling synthesis never restarts completed
-work or fabricates a successful summary. Detailed role transcripts remain in
-their cards; old checkpoints without a cached summary are still supported.
+Legacy summary text is buffered until complete; partial text and thoughts are
+not streamed into the parent chat. The cached summary is replayed on load and
+passed to later routing context without another model request. Checkpoints and
+blocked workflows do not trigger final synthesis. If synthesis fails or returns
+unusable text such as raw report JSON, a short Markdown fallback preserves
+completion and points to reviewing the results. Cancelling synthesis never
+restarts completed work or fabricates a successful summary. Detailed role
+transcripts remain in their cards; old checkpoints without a cached summary are
+still supported.
 
-Answer declared human checkpoints normally. Blocked or interrupted workflows
-require `abandon` or an explicit `restart`. **Restart reruns the pinned workflow
-from its beginning and can repeat effects.** It is not automatic crash recovery.
+Answer declared human checkpoints normally. In this legacy path, blocked or
+interrupted workflows, including reported role questions, require `abandon` or
+an explicit `restart`, not the new role-continuation tools. **Restart is a
+potentially destructive full rerun: it reruns the pinned workflow from its
+beginning and can repeat previously completed effects.** It does not undo those
+effects and is not automatic crash recovery. An interrupted routing turn also
+requires `abandon` or `restart`; restarting repeats its original prompt and can
+duplicate effects.
 
-A new slash command does not replace an active workflow or interrupted routing
-turn. D3R explains the current block in the conversation instead of reporting an
-internal error. To start with a revised prompt, send `abandon`, then resend the
-slash command with your new instructions. Abandoning does not undo prior
-effects.
+A new slash command does not replace a legacy active workflow or interrupted
+routing turn. D3R explains the current block in the conversation instead of
+reporting an internal error. To start with a revised prompt, send `abandon`,
+then resend the slash command with your new instructions. Abandoning does not
+undo prior effects.
+
+## Sending corrections in Zed
+
+The client behavior here is pinned to Zed main
+[`5a773a406e499a3314ff0ab9b145c63e8489da0e`](https://github.com/zed-industries/zed/commit/5a773a406e499a3314ff0ab9b145c63e8489da0e).
+It is Zed's client-side behavior, not a D3R server queue or a promise that
+queued messages survive reconnect or reload.
+
+- **Send** while an ACP prompt is running queues messages client-side in FIFO
+  order. Zed submits them after the current ACP prompt completes, not between
+  worker tool calls. In `auto`, that prompt may finish the entire phase before a
+  queued correction arrives; use `semi` for regular checkpoints.
+- **Send Immediately** cancels the current prompt, waits for it to finish, then
+  submits the correction as a new prompt. Default shortcuts are
+  `Ctrl+Shift+Enter` on Windows/Linux and `Cmd+Shift+Enter` on macOS. This is
+  cancel-and-continue, not an instruction injected into a still-running worker.
+- **Stop** cancels the active prompt and pauses the client queue. D3R aborts and
+  waits for started runtime/tool work and cleanup to settle before returning
+  `cancelled`. Uncertain writes or failed checkpointing require recovery rather
+  than being reported as a clean cancellation.
+
+True live **Steer** is available for Zed's native agent, not exposed to external
+ACP agents such as D3R. A new correction can resume retained unfinished roles as
+described above, but neither Send nor Send Immediately guarantees continuation
+when a safe child checkpoint is unavailable. Older initialized native sessions
+still use the legacy abandon/restart behavior.
 
 ## Request budgets and extensions
 
@@ -423,14 +562,20 @@ recovery; it cannot be hidden by a normal cancellation result.
 Session history supports list, load (replay), resume (without replay), close,
 and delete. Native state lives under `~/.agents/d3r/private/sessions/`. It
 includes pinned instructions/workflows and conversation checkpoints, not MCP
-launch configuration or saved permission grants. Snapshots restore state without
-executing historical tools.
+launch configuration or saved permission grants. New orchestrated sessions also
+retain eligible unfinished-role checkpoints for reported questions and clean
+cancellation. Snapshots restore state without executing historical tools;
+resuming work requires a new user-directed phase action and all required child
+checkpoints.
 
 An intent is persisted before a prompt or state mutation. An incomplete intent
 cannot silently fall back to an older checkpoint after a crash. Already-issued
 editor writes remain owned until their outcome is known; cancellation cannot
 certify a still-pending write as completed. Ordinary cancellation waits for
-started backend/tool work and cleanup before acknowledging completion.
+started backend/tool work and cleanup before acknowledging completion. A failed
+or missing required child checkpoint does not authorize a fresh role replay;
+unknown-write and checkpoint failures fail closed. A clean cancellation with
+complete retained checkpoints is different from this recovery-required state.
 
 A crash can leave a stale session lock. Confirm no D3R process owns the session
 before manually removing its lock. Incomplete sessions are refused rather than

@@ -64,7 +64,7 @@ const JOURNEY_MODEL: NativeModel = {
 	contextWindow: 16_384,
 	maxTokens: 1024,
 };
-/** Existing journeys keep a successful synthesis distinct from router and role scripts. */
+/** Legacy compatibility journeys retain their separate automatic synthesis provider. */
 const JOURNEY_SUMMARY =
 	"## Workflow complete\n\nThe requested phase is complete; its results are retained for the next decision.\n\n**Next:** Review the results before choosing the next phase.";
 /** Only provider IO is replaced; messages and tool results still pass through Pi. */
@@ -177,6 +177,80 @@ const journeyResultText = (context: JourneyContext, id: string) => {
 				.join("\n")
 		: "";
 };
+/** Shortcut fixtures translate user intent only at provider IO, never at phase execution. */
+const journeyRouterShortcut = (
+	context: JourneyContext,
+): JourneyMessage["content"] | undefined => {
+	const last = context.messages.at(-1);
+	if (
+		last?.role === "toolResult" &&
+		/^d3r_(?:.*_phase|phase_status)$/.test(last.toolName)
+	) {
+		const result = journeyResultText(context, last.toolCallId);
+		return [
+			{
+				type: "text",
+				text:
+					!last.isError && /^## Phase: [^\n]+\nStatus: completed\n/.test(result)
+						? `${JOURNEY_SUMMARY}\n\n${result}`
+						: result,
+			},
+		];
+	}
+	if (last?.role !== "user") {
+		return undefined;
+	}
+	const parts =
+		typeof last.content === "string"
+			? [last.content]
+			: last.content.flatMap((part) =>
+					part.type === "text" ? [part.text] : [],
+				);
+	const text = parts.join("\n");
+	const marker = "D3R runtime phase state (authoritative):\n";
+	const state = text.slice(text.lastIndexOf(marker) + marker.length);
+	const request =
+		parts.findLast((part) => !part.startsWith(marker))?.trim() ?? "";
+	if (request === "status") {
+		return journeyCall("d3r_phase_status", {});
+	}
+	const phase =
+		/^\/(design|delegate|develop|summarize)\b/.exec(request)?.[1] ??
+		/No active workflow\. Selected phase: (design|delegate|develop|summarize)\./.exec(
+			state,
+		)?.[1];
+	if (phase) {
+		return journeyCall("d3r_start_phase", {
+			phase,
+			brief: {
+				goal: request,
+				context: request,
+				acceptanceCriteria: [request],
+			},
+		});
+	}
+	if (/Status: (waiting|blocked|interrupted)/.test(state)) {
+		return request === "abandon"
+			? journeyCall("d3r_abandon_phase", { reason: request })
+			: journeyCall("d3r_continue_phase", { instructions: request });
+	}
+	return undefined;
+};
+/** Explicit router scripts summarize observed role evidence rather than canned success. */
+const journeyPhaseReply =
+	(id: string, heading: string) =>
+	(context: JourneyContext): JourneyMessage["content"] => {
+		const result = journeyResultText(context, id);
+		const evidence = result
+			.split("\n\n")
+			.filter(
+				(part) =>
+					!part.startsWith("## Phase:") && !part.startsWith("Return control"),
+			);
+		return [
+			{ type: "text", text: `## ${heading}\n\n${evidence.join("\n\n")}` },
+		];
+	};
 /** Small real invocation limits make boundary journeys independent of production defaults. */
 const JOURNEY_BUDGET = { maxTurns: 3, maxTotalTurns: 6 };
 /** ACP grants must select an offered option; cancellation is not a rejection selection. */
@@ -248,6 +322,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		scripts: JourneyScripts,
 		{
 			workspace = "workspace",
+			routerShortcuts = true,
 			models = [JOURNEY_MODEL],
 			readTextFile,
 			getWebConfig = () => ({ providerId: "exa" }),
@@ -256,6 +331,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				journeyStream(content),
 		}: {
 			workspace?: string;
+			routerShortcuts?: boolean;
 			models?: NativeModel[];
 			getWebConfig?: NativeDependencies["getWebProviderConfig"];
 			createRuntime?: NativeDependencies["createEmbeddedRuntime"];
@@ -322,7 +398,13 @@ describe("native ACP shipped-workflow journeys", () => {
 			const content =
 				role === "summary" && !Object.hasOwn(scripts, role)
 					? [{ type: "text" as const, text: JOURNEY_SUMMARY }]
-					: scripts[role]?.shift();
+					: ((role === "router" &&
+						routerShortcuts &&
+						context.systemPrompt?.startsWith(
+							"You are D3R's native workflow orchestrator in Zed.",
+						)
+							? journeyRouterShortcut(context)
+							: undefined) ?? scripts[role]?.shift());
 			if (!content) {
 				throw new Error(`Unexpected offline request for ${role}`);
 			}
@@ -385,6 +467,58 @@ describe("native ACP shipped-workflow journeys", () => {
 			});
 			return {
 				...f,
+				/** Restore the old on-disk format through ACP, with no orchestration opt-out in production. */
+				legacySession: async () => {
+					const created = await f.newSession(cwd);
+					const { sessionId } = created;
+					await f.peer.agent.request("session/set_config_option", {
+						sessionId,
+						configId: "model",
+						value: nativeModelKey(JOURNEY_MODEL),
+					});
+					await f.peer.agent.request("session/close", { sessionId });
+					const saved = (await deps.store!.get(sessionId))!;
+					const record = saved.records.at(-1)!;
+					if (record.kind !== "checkpoint") {
+						throw new Error("Missing legacy fixture resource pin");
+					}
+					const pin = journeyCheckpoint(record.state);
+					pin.inner = {
+						version: 1,
+						format: "d3r.workflow",
+						workflow: pin.resources.workflow,
+						phase: "routing",
+						engine: null,
+						history: [],
+						input: [],
+						routingInterrupted: false,
+						routingInput: [],
+						routingHistory: 0,
+						routing: {
+							version: 1,
+							format: "d3r.pi.embedded",
+							model: { provider: JOURNEY_MODEL.provider, id: JOURNEY_MODEL.id },
+							thinkingLevel: "off",
+							messages: [],
+						},
+					};
+					await deps.store!.save({
+						...saved,
+						records: [
+							...saved.records.slice(0, -1),
+							{
+								kind: "checkpoint",
+								state: { ...(record.state as object), runtime: pin },
+							},
+						],
+					});
+					await f.peer.agent.request("session/load", {
+						sessionId,
+						cwd,
+						mcpServers: [],
+					});
+					return created;
+				},
 				saved: (sessionId: string) => deps.store!.get(sessionId),
 				checkpoint: async (sessionId: string) => {
 					const saved = await deps.store!.get(sessionId);
@@ -422,6 +556,1145 @@ describe("native ACP shipped-workflow journeys", () => {
 					.map((path) => rm(path, { recursive: true, force: true })),
 			);
 		}
+	});
+
+	// oxlint-disable-next-line max-statements -- Conversation, actual effects, and subsequent discussion form one acceptance journey.
+	it("orchestrates conversation directly into develop, then discusses the actual reviewed results", async () => {
+		const goal =
+			"Add an offline enqueue helper that preserves insertion order.";
+		const scope =
+			"Only queue.mjs; no dependencies, network, commits, or deployment.";
+		const criterion =
+			"Appending a job returns both jobs in their original order without mutating the input.";
+		const source = "export const enqueue = (jobs, job) => [...jobs, job];\n";
+		const reports = {
+			implementor:
+				"Created queue.mjs; the Node assertion passed for insertion order and unchanged input.",
+			reviewer:
+				"Approved the helper after reading queue.mjs; scope is limited to the requested file.",
+			auditor:
+				"Audited the offline helper and test evidence; no dependencies or deployment were added.",
+		};
+		const scripts: JourneyScripts = {
+			router: [
+				[
+					{
+						type: "text",
+						text: "I can implement that directly. What is the scope, acceptance criterion, and develop mode?",
+					},
+				],
+				journeyCall(
+					"d3r_start_phase",
+					{
+						phase: "develop",
+						brief: {
+							goal,
+							context: scope,
+							acceptanceCriteria: [criterion],
+							constraints: ["Do not commit or deploy."],
+						},
+					},
+					"choose-mode",
+				),
+				journeyPhaseReply("choose-mode", "Choose develop mode"),
+				journeyCall("d3r_continue_phase", { instructions: "auto" }, "develop"),
+				journeyPhaseReply("develop", "Offline helper ready"),
+				(context) => [
+					{
+						type: "text",
+						text: `## Next decision\n\n${journeyResultText(context, "develop").includes(reports.auditor) ? "The reviewed helper is complete. Deployment remains unapproved; no further work was started." : "Missing previous audit evidence."}`,
+					},
+				],
+			],
+			implementor: [
+				journeyCall("write_file", { path: "queue.mjs", content: source }),
+				journeyCall("run_command", {
+					command: process.execPath,
+					args: [
+						"--input-type=module",
+						"-e",
+						"import assert from 'node:assert/strict'; import { enqueue } from './queue.mjs'; const jobs = ['first']; assert.deepEqual(enqueue(jobs, 'second'), ['first', 'second']); assert.deepEqual(jobs, ['first']); console.log('queue assertions passed');",
+					],
+				}),
+				journeyReport(reports.implementor, { allDone: true }),
+				[{ type: "text", text: "Worker implementation response" }],
+			],
+			reviewer: [
+				journeyCall("read_file", { path: "queue.mjs" }),
+				journeyReport(reports.reviewer, { review: "approved" }),
+				[{ type: "text", text: "Worker review response" }],
+			],
+			auditor: [
+				journeyCall("read_file", { path: "queue.mjs" }),
+				...journeyDone(reports.auditor),
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(f.prompt(sessionId, goal)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(j.requests.map(({ role }) => role)).toEqual(["router"]);
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+		).toMatchObject({ orchestrated: true, engine: null });
+		await expect(
+			f.prompt(sessionId, `${scope}\n${criterion}\nImplement directly.`),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner!.engine,
+		).toMatchObject({
+			command: "develop",
+			mode: null,
+			status: "waiting",
+			pause: { kind: "mode" },
+		});
+		expect(j.requests.every(({ role }) => role === "router")).toBe(true);
+		expect(await readdir(j.cwd)).toEqual(["AGENTS.md"]);
+		expect(journeyText(f.updates)).toContain("Choose develop mode");
+		const start = f.updates.length;
+		await expect(f.prompt(sessionId, "auto")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(await readFile(resolve(j.cwd, "queue.mjs"), "utf8")).toBe(source);
+		const files = await readdir(j.cwd);
+		expect(files.toSorted()).toEqual(["AGENTS.md", "queue.mjs"]);
+		const workers = j.requests.filter(({ role }) => role !== "router");
+		expect(new Set(workers.map(({ role }) => role))).toEqual(
+			new Set(Object.keys(reports)),
+		);
+		for (const role of Object.keys(reports)) {
+			const { context } = workers.find((entry) => entry.role === role)!;
+			for (const fact of [goal, scope, criterion, "Do not commit or deploy."]) {
+				expect(JSON.stringify(context.messages)).toContain(fact);
+			}
+			expect(context.systemPrompt).toMatch(
+				/\bno prior phase or formal vault documents are required\b/i,
+			);
+			expect(context.tools?.map(({ name }) => name)).not.toContain(
+				"d3r_start_phase",
+			);
+		}
+		const implemented = workers.findLast(
+			({ role }) => role === "implementor",
+		)!.context;
+		expect(journeyResult(implemented, "run_command")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(implemented, "run_command")).toContain(
+			"queue assertions passed",
+		);
+		const final = j.requests.findLast(({ role }) => role === "router")!.context;
+		expect(journeyResult(final, "develop")).toMatchObject({ isError: false });
+		expect(journeyResultText(final, "develop")).toContain(
+			"## Phase: develop\nStatus: completed\nMode: auto",
+		);
+		for (const report of Object.values(reports)) {
+			expect(journeyText(f.updates.slice(start))).toContain(report);
+		}
+		expect(
+			f.updates
+				.slice(start)
+				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
+		).toHaveLength(1);
+		expect(journeyText(f.updates.slice(start))).toMatch(
+			/^## Offline helper ready/,
+		);
+		expect(journeyText(f.updates.slice(start))).not.toMatch(
+			/Worker .* response|"status"/,
+		);
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"implementor",
+			"reviewer",
+			"auditor",
+		]);
+		expect(j.requests.filter(({ role }) => role === "summary")).toEqual([]);
+		const completed = journeyCheckpoint(await f.checkpoint(sessionId)).inner!;
+		expect(completed.engine).toMatchObject({ status: "completed" });
+		expect(completed).not.toHaveProperty("summary");
+		const beforeDiscussion = j.requests.length;
+		const permissions = j.permissions.length;
+		await expect(
+			f.prompt(
+				sessionId,
+				"What did review find, and can we discuss deployment without starting it?",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(j.requests.slice(beforeDiscussion).map(({ role }) => role)).toEqual([
+			"router",
+		]);
+		expect(j.permissions).toHaveLength(permissions);
+		expect(journeyText(f.updates)).toContain(
+			"Deployment remains unapproved; no further work was started.",
+		);
+		for (const report of Object.values(reports)) {
+			expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+				report,
+			);
+		}
+		for (const { context } of j.requests.filter(
+			({ role }) => role === "router",
+		)) {
+			expect(context.systemPrompt).toMatch(
+				/^You are D3R's native workflow orchestrator in Zed\./,
+			);
+			expect(context.tools?.map(({ name }) => name)).toEqual(
+				expect.arrayContaining([
+					"d3r_start_phase",
+					"d3r_continue_phase",
+					"d3r_abandon_phase",
+					"d3r_phase_status",
+				]),
+			);
+		}
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	// oxlint-disable-next-line max-statements -- The checkpoint and user-directed phase switch must share a persistent conversation.
+	it("orchestrates /design discussion without auto-answering, then abandons it for direct develop", async () => {
+		const brief = {
+			goal: "Create a local queue marker.",
+			context: "No network or formal design artifacts are needed.",
+			acceptanceCriteria: ["queue.txt contains offline only."],
+		};
+		const scripts: JourneyScripts = {
+			router: [
+				journeyCall("d3r_start_phase", { phase: "design", brief }, "design"),
+				journeyCall(
+					"d3r_continue_phase",
+					{ instructions: "Invent an answer and draft now." },
+					"auto-answer",
+				),
+				journeyPhaseReply("design", "Design questions"),
+				journeyCall("d3r_phase_status", {}, "discussion"),
+				journeyPhaseReply(
+					"discussion",
+					"Still discussing; no answer submitted",
+				),
+				journeyCall(
+					"d3r_abandon_phase",
+					{
+						reason:
+							"The user explicitly skipped design and requested direct implementation.",
+					},
+					"skip",
+				),
+				journeyCall(
+					"d3r_start_phase",
+					{ phase: "develop", brief, mode: "auto" },
+					"direct",
+				),
+				journeyPhaseReply("direct", "Direct implementation reviewed"),
+			],
+			aggregator: journeyDone("The workspace needs only a local marker."),
+			researcher: journeyDone(
+				"No network research is necessary; confirm the design scope with the user.",
+			),
+			implementor: [
+				journeyCall("write_file", { path: "queue.txt", content: "offline\n" }),
+				journeyReport("Created the requested offline marker.", {
+					allDone: true,
+				}),
+				[{ type: "text", text: "Marker created." }],
+			],
+			reviewer: [
+				journeyCall("read_file", { path: "queue.txt" }),
+				journeyReport("Approved the exact offline marker contents.", {
+					review: "approved",
+				}),
+				[{ type: "text", text: "Review complete." }],
+			],
+			auditor: journeyDone(
+				"Audited the marker; no design artifact or network operation was created.",
+			),
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(
+			f.prompt(sessionId, "/design Create a local queue marker"),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const waiting = journeyCheckpoint(await f.checkpoint(sessionId)).inner!;
+		expect(waiting).toMatchObject({
+			orchestrated: true,
+			engine: {
+				command: "design",
+				status: "waiting",
+				pause: { kind: "human" },
+			},
+		});
+		const firstFinal = j.requests.at(-1)!.context;
+		expect(journeyResult(firstFinal, "auto-answer")).toMatchObject({
+			isError: true,
+		});
+		expect(journeyResultText(firstFinal, "auto-answer")).toContain(
+			"already ran in this turn",
+		);
+		expect(journeyResultText(firstFinal, "design")).toContain(
+			"Discuss design questions before drafting",
+		);
+		expect(journeyText(f.updates)).toContain(
+			"Discuss design questions before drafting",
+		);
+		expect(j.requests.some(({ role }) => role === "designer")).toBe(false);
+		const beforeDiscussion = j.requests.length;
+		await expect(
+			f.prompt(
+				sessionId,
+				"Why would we need a design document? Let's discuss; do not draft yet.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(
+			j.requests.slice(beforeDiscussion).every(({ role }) => role === "router"),
+		).toBe(true);
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner!.engine,
+		).toEqual(waiting.engine);
+		expect(journeyText(f.updates)).toContain(
+			"Still discussing; no answer submitted",
+		);
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+		]);
+		const start = f.updates.length;
+		await expect(
+			f.prompt(
+				sessionId,
+				"Skip and abandon design. Develop the marker directly in auto mode.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(
+			"offline\n",
+		);
+		expect(await readdir(j.cwd)).not.toContain("design.md");
+		const final = j.requests.at(-1)!.context;
+		expect(journeyResult(final, "skip")).toMatchObject({ isError: false });
+		expect(journeyResultText(final, "skip")).toContain(
+			"Existing effects remain",
+		);
+		expect(journeyResultText(final, "direct")).toContain(
+			"## Phase: develop\nStatus: completed\nMode: auto",
+		);
+		expect(journeyText(f.updates.slice(start))).toContain(
+			"Approved the exact offline marker contents.",
+		);
+		expect(
+			f.updates
+				.slice(start)
+				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
+		).toHaveLength(1);
+		expect(
+			j.requests.some(({ role }) => role === "designer" || role === "summary"),
+		).toBe(false);
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"aggregator",
+			"researcher",
+			"implementor",
+			"reviewer",
+			"auditor",
+		]);
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner!.engine,
+		).toMatchObject({ command: "develop", status: "completed" });
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	// oxlint-disable-next-line max-statements -- Clarification, reload, sibling preservation, and completion prove one real needs_human handoff.
+	it("clarifies a missing fact through needs_human and resumes only the waiting worker's retained conversation", async () => {
+		const question =
+			"How many hours should an offline job be retained before expiration?";
+		const answer =
+			"Retain each offline job for 72 hours; continue research using that limit.";
+		const siblingSummary =
+			"The queue runs locally; no network service is required.";
+		const researchSummary =
+			"The user chose a 72-hour retention limit; expiration can remain local.";
+		const design =
+			"# Queue expiration\n\nRetain offline jobs for 72 hours, then expire them locally.\n";
+		const scripts: JourneyScripts = {
+			router: [
+				journeyCall(
+					"d3r_start_phase",
+					{
+						phase: "design",
+						brief: {
+							goal: "Design expiration for offline jobs.",
+							context:
+								"The retention period is undecided; policy.txt contains the known facts.",
+							acceptanceCriteria: [
+								"Expiration uses the retention period chosen by the user, not an invented default.",
+							],
+						},
+					},
+					"clarify",
+				),
+				journeyPhaseReply("clarify", "Retention decision needed"),
+				journeyCall("d3r_continue_phase", { instructions: answer }, "answer"),
+				journeyPhaseReply(
+					"answer",
+					"Research clarified; confirm before drafting",
+				),
+				journeyCall(
+					"d3r_continue_phase",
+					{
+						instructions:
+							"Draft the local expiration design using the agreed retention limit.",
+					},
+					"draft-design",
+				),
+				journeyPhaseReply("draft-design", "Expiration design ready"),
+			],
+			aggregator: journeyDone(siblingSummary),
+			researcher: [
+				journeyCall("read_file", { path: "policy.txt" }, "retention-read"),
+				journeyCall(
+					"d3r_report",
+					{ status: "needs_human", summary: question },
+					"missing-retention",
+				),
+				[{ type: "text", text: "Waiting for the user's retention decision." }],
+				journeyCall(
+					"d3r_report",
+					{ status: "completed", summary: researchSummary },
+					"clarified-retention",
+				),
+				[{ type: "text", text: "Research now has the missing fact." }],
+			],
+			designer: [
+				journeyCall("write_file", { path: "expiration.md", content: design }),
+				...journeyDone(
+					"Saved expiration.md with the agreed 72-hour local retention policy.",
+				),
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		await writeFile(
+			resolve(j.cwd, "policy.txt"),
+			"Offline jobs expire locally. Retention period: undecided.\n",
+		);
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(
+			f.prompt(
+				sessionId,
+				"Design local expiration; ask me for the missing retention period.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const checkpoint = await f.checkpoint(sessionId);
+		const waiting = journeyCheckpoint(checkpoint).inner!;
+		expect(waiting).toMatchObject({
+			orchestrated: true,
+			engine: {
+				status: "waiting",
+				pause: { kind: "report", message: question },
+			},
+		});
+		const sibling = waiting.engine!.records.find(
+			({ role }) => role === "aggregator",
+		)!;
+		const waitingWorker = waiting.engine!.records.find(
+			({ role }) => role === "researcher",
+		)!;
+		expect(sibling).toMatchObject({
+			status: "completed",
+			outcome: { summary: siblingSummary },
+		});
+		const siblingRequests = j.requests.filter(
+			({ role }) => role === "aggregator",
+		);
+		expect(waitingWorker).toMatchObject({
+			status: "waiting",
+			outcome: { status: "needs_human", summary: question },
+		});
+		expect(waiting.continuations?.map(({ recordId }) => recordId)).toEqual([
+			waitingWorker.id,
+		]);
+		const initial = j.requests.find(
+			({ role }) => role === "researcher",
+		)!.context;
+		expect(JSON.stringify(initial.messages)).toContain(
+			"retention period is undecided",
+		);
+		expect(JSON.stringify(initial.messages)).not.toContain("72 hours");
+		const reported = j.requests.findLast(
+			({ role }) => role === "researcher",
+		)!.context;
+		expect(journeyResult(reported, "missing-retention")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(reported, "retention-read")).toContain(
+			"Retention period: undecided",
+		);
+		expect(journeyText(f.updates)).toContain(question);
+		expect(
+			f.updates.filter(
+				({ update }) => update.sessionUpdate === "agent_message_chunk",
+			),
+		).toHaveLength(1);
+		expect(j.requests.some(({ role }) => role === "designer")).toBe(false);
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+		]);
+		const beforeReload = {
+			requests: j.requests.length,
+			permissions: j.permissions.length,
+			runtimes: j.runtimes.length,
+		};
+		await f.close();
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(j.requests).toHaveLength(beforeReload.requests);
+		expect(j.permissions).toHaveLength(beforeReload.permissions);
+		expect(j.runtimes).toHaveLength(beforeReload.runtimes);
+		expect(journeyText(resumed.updates)).toContain(question);
+		await expect(resumed.prompt(sessionId, answer)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const clarification = j.requests.slice(beforeReload.requests);
+		expect(new Set(clarification.map(({ role }) => role))).toEqual(
+			new Set(["router", "researcher"]),
+		);
+		const resumedWorker = clarification.find(
+			({ role }) => role === "researcher",
+		)!.context;
+		expect(JSON.stringify(resumedWorker.messages)).toContain(answer);
+		expect(journeyResult(resumedWorker, "missing-retention")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResult(resumedWorker, "retention-read")).toMatchObject({
+			isError: false,
+		});
+		expect(
+			journeyResult(
+				clarification.findLast(({ role }) => role === "researcher")!.context,
+				"clarified-retention",
+			),
+		).toMatchObject({ isError: false });
+		const clarified = journeyCheckpoint(
+			await resumed.checkpoint(sessionId),
+		).inner!;
+		expect(clarified.engine).toMatchObject({
+			status: "waiting",
+			pause: { kind: "human" },
+		});
+		expect(clarified.engine!.records).toContainEqual(sibling);
+		expect(
+			clarified.engine!.records.find(({ id }) => id === waitingWorker.id),
+		).toMatchObject({
+			status: "completed",
+			outcome: { status: "completed", summary: researchSummary },
+		});
+		expect(clarified.continuations ?? []).toEqual([]);
+		expect(journeyText(resumed.updates)).toContain(researchSummary);
+		await expect(
+			readFile(resolve(j.cwd, "expiration.md")),
+		).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(
+			resumed.prompt(
+				sessionId,
+				"Draft the local expiration design using the agreed retention limit.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(await readFile(resolve(j.cwd, "expiration.md"), "utf8")).toBe(
+			design,
+		);
+		const designer = j.requests.find(
+			({ role }) => role === "designer",
+		)!.context;
+		for (const fact of [answer, siblingSummary, researchSummary]) {
+			expect(JSON.stringify(designer.messages)).toContain(fact);
+		}
+		const completed = journeyCheckpoint(
+			await resumed.checkpoint(sessionId),
+		).inner!;
+		expect(completed.engine).toMatchObject({ status: "completed" });
+		expect(completed.engine!.records).toContainEqual(sibling);
+		expect(j.requests.filter(({ role }) => role === "aggregator")).toEqual(
+			siblingRequests,
+		);
+		expect(journeyText(resumed.updates)).toContain(
+			"Saved expiration.md with the agreed 72-hour local retention policy.",
+		);
+		expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	it.each(["fresh report", "missing report"] as const)(
+		"settles cancellation after a successful report before delivering a queued correction with %s",
+		// oxlint-disable-next-line max-statements -- The two outcomes share the contested post-report cancellation boundary and real write evidence.
+		async (reporting) => {
+			const original = "Approved queue configuration.\n";
+			const external =
+				"User annotation added after cancellation; do not overwrite.\n";
+			const corrected = "Keep jobs local; deployment remains unapproved.\n";
+			const correction =
+				"Continue the interrupted implementation. Preserve my queue.txt annotation, inspect it, and write the local-only correction to correction.txt.";
+			const oldSummary =
+				"Initial queue configuration was written before the correction.";
+			const freshSummary =
+				"Preserved the user annotation and wrote correction.txt for local-only jobs.";
+			const terminalText =
+				"Report accepted; terminal model stop is still pending.";
+			const atStop = deferred<void>();
+			const abortObserved = deferred<void>();
+			const settle = deferred<void>();
+			const order: string[] = [];
+			const checkpoints: unknown[] = [];
+			const scripts: JourneyScripts = {
+				router: [
+					journeyCall(
+						"d3r_start_phase",
+						{
+							phase: "develop",
+							mode: "auto",
+							brief: {
+								goal: "Configure an offline queue.",
+								context: "Write queue.txt without deploying or committing.",
+								acceptanceCriteria: ["The queue configuration remains local."],
+							},
+						},
+						"initial-develop",
+					),
+					journeyCall(
+						"d3r_continue_phase",
+						{ instructions: correction },
+						"correct-reported-work",
+					),
+					journeyPhaseReply(
+						"correct-reported-work",
+						reporting === "fresh report"
+							? "Correction reviewed"
+							: "Correction needs a fresh report",
+					),
+				],
+				implementor: [
+					journeyCall(
+						"write_file",
+						{ path: "queue.txt", content: original },
+						"approved-queue",
+					),
+					journeyCall(
+						"d3r_report",
+						{ status: "completed", summary: oldSummary, allDone: true },
+						"pre-cancel-report",
+					),
+					[{ type: "text", text: terminalText }],
+					journeyCall("read_file", { path: "queue.txt" }, "current-queue"),
+					journeyCall(
+						"write_file",
+						{ path: "correction.txt", content: corrected },
+						"corrected-queue",
+					),
+					...(reporting === "fresh report"
+						? [
+								journeyCall(
+									"d3r_report",
+									{ status: "completed", summary: freshSummary, allDone: true },
+									"fresh-report",
+								),
+							]
+						: []),
+					[{ type: "text", text: "The correction file is ready." }],
+				],
+				...(reporting === "fresh report"
+					? {
+							reviewer: [
+								journeyCall("read_file", { path: "correction.txt" }),
+								journeyReport(
+									"Approved the corrected local-only queue configuration.",
+									{ review: "approved" },
+								),
+								[
+									{
+										type: "text" as const,
+										text: "Corrected implementation reviewed.",
+									},
+								],
+							],
+							auditor: [
+								journeyCall("read_file", { path: "queue.txt" }),
+								...journeyDone(
+									"Audited the correction and preserved user annotation.",
+								),
+							],
+						}
+					: {}),
+			};
+			const j = await open(scripts, {
+				routerShortcuts: false,
+				streamResponse: (role, content, settings) =>
+					journeyStream(content, async (index) => {
+						const terminalEventIndex = 2;
+						if (
+							role !== "implementor" ||
+							index !== terminalEventIndex ||
+							!content.some(
+								(part) => part.type === "text" && part.text === terminalText,
+							)
+						) {
+							return;
+						}
+						atStop.resolve();
+						try {
+							await waitForAbort(settings!.signal!);
+						} catch (error) {
+							order.push("abort observed");
+							abortObserved.resolve();
+							await settle.promise;
+							throw error;
+						}
+					}),
+			});
+			const f = await j.connect();
+			const { sessionId } = await f.newSession(j.cwd);
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "model",
+				value: nativeModelKey(JOURNEY_MODEL),
+			});
+			const pending = f.prompt(
+				sessionId,
+				"Configure the offline queue in auto mode; do not deploy or commit.",
+			);
+			await Promise.race([
+				atStop.promise,
+				pending.then(() => {
+					throw new Error(
+						"Turn ended before the post-report cancellation boundary",
+					);
+				}),
+			]);
+			const beforeCorrection = j.requests.length;
+			// Model the client's queued message: it must not become an ACP prompt until the cancelled turn acknowledges settlement.
+			const queued = pending.then(async () => {
+				order.push("cancel settled");
+				checkpoints.push(await f.checkpoint(sessionId));
+				await writeFile(resolve(j.cwd, "queue.txt"), external);
+				order.push("correction sent");
+				return f.prompt(sessionId, correction);
+			});
+			try {
+				const reported = j.requests.findLast(
+					({ role }) => role === "implementor",
+				)!.context;
+				expect(journeyResult(reported, "approved-queue")).toMatchObject({
+					isError: false,
+				});
+				expect(journeyResult(reported, "pre-cancel-report")).toMatchObject({
+					isError: false,
+				});
+				expect(journeyResultText(reported, "pre-cancel-report")).toMatch(
+					/report recorded/i,
+				);
+				expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(
+					original,
+				);
+				expect(
+					j.requests.some(
+						({ role }) => role === "reviewer" || role === "auditor",
+					),
+				).toBe(false);
+				await f.peer.agent.notify("session/cancel", { sessionId });
+				await abortObserved.promise;
+				await f.peer.agent.request("session/list", {});
+				expect(order).toEqual(["abort observed"]);
+				expect(j.requests).toHaveLength(beforeCorrection);
+				expect(journeyText(f.updates)).toBe("");
+				settle.resolve();
+				await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+				await expect(queued).resolves.toEqual({ stopReason: "end_turn" });
+			} finally {
+				settle.resolve();
+				await f.peer.agent.notify("session/cancel", { sessionId });
+				await Promise.allSettled([pending, queued]);
+			}
+			expect(order).toEqual([
+				"abort observed",
+				"cancel settled",
+				"correction sent",
+			]);
+			const interrupted = journeyCheckpoint(checkpoints[0]).inner!;
+			expect(interrupted).toMatchObject({
+				orchestrated: true,
+				engine: { status: "interrupted" },
+			});
+			const interruptedWorker = interrupted.engine!.records.find(
+				({ role }) => role === "implementor",
+			)!;
+			expect(interruptedWorker).toMatchObject({ status: "interrupted" });
+			expect(interruptedWorker.outcome).toBeUndefined();
+			expect(
+				interrupted.continuations?.map(({ recordId }) => recordId),
+			).toEqual([interruptedWorker.id]);
+			const recovery = j.requests.slice(beforeCorrection);
+			const resumedWorker = recovery.find(
+				({ role }) => role === "implementor",
+			)!.context;
+			expect(JSON.stringify(resumedWorker.messages)).toContain(correction);
+			expect(journeyResult(resumedWorker, "approved-queue")).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResult(resumedWorker, "pre-cancel-report")).toMatchObject({
+				isError: false,
+			});
+			const finishedWorker = recovery.findLast(
+				({ role }) => role === "implementor",
+			)!.context;
+			expect(journeyResultText(finishedWorker, "current-queue")).toContain(
+				external.trim(),
+			);
+			expect(journeyResult(finishedWorker, "corrected-queue")).toMatchObject({
+				isError: false,
+			});
+			expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(
+				external,
+			);
+			expect(await readFile(resolve(j.cwd, "correction.txt"), "utf8")).toBe(
+				corrected,
+			);
+			const final = journeyCheckpoint(await f.checkpoint(sessionId)).inner!;
+			const worker = final.engine!.records.find(
+				({ id }) => id === interruptedWorker.id,
+			)!;
+			if (reporting === "fresh report") {
+				expect(journeyResult(finishedWorker, "fresh-report")).toMatchObject({
+					isError: false,
+				});
+				expect(worker).toMatchObject({
+					status: "completed",
+					outcome: { summary: freshSummary },
+				});
+				expect(final.engine).toMatchObject({ status: "completed" });
+				expect(new Set(recovery.map(({ role }) => role))).toEqual(
+					new Set(["router", "implementor", "reviewer", "auditor"]),
+				);
+				expect(journeyText(f.updates)).toContain(
+					"Approved the corrected local-only queue configuration.",
+				);
+			} else {
+				expect(journeyResult(finishedWorker, "fresh-report")).toBeUndefined();
+				expect(worker.status).toBe("blocked");
+				expect(worker.outcome).toBeUndefined();
+				expect(final.engine).toMatchObject({
+					status: "blocked",
+					pause: { kind: "failure" },
+				});
+				expect(journeyText(f.updates)).toMatch(
+					/missing or invalid d3r_report/i,
+				);
+				expect(
+					j.requests.some(
+						({ role }) => role === "reviewer" || role === "auditor",
+					),
+				).toBe(false);
+			}
+			const phaseResult = journeyResultText(
+				j.requests.findLast(({ role }) => role === "router")!.context,
+				"correct-reported-work",
+			);
+			expect(phaseResult).toContain(
+				`Status: ${reporting === "fresh report" ? "completed" : "blocked"}`,
+			);
+			expect(phaseResult).not.toContain(oldSummary);
+			expect(final.continuations ?? []).toEqual([]);
+			expect(final).not.toHaveProperty("summary");
+			expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
+			expect(
+				f.updates.filter(
+					({ update }) => update.sessionUpdate === "agent_message_chunk",
+				),
+			).toHaveLength(1);
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+				"write_file",
+				"write_file",
+			]);
+			const writes = journeyTools(f.updates).flatMap((row) =>
+				row.status === "completed"
+					? (row.content?.filter((part) => part.type === "diff") ?? [])
+					: [],
+			);
+			expect(writes).toEqual([
+				{
+					type: "diff",
+					path: resolve(j.cwd, "queue.txt"),
+					oldText: null,
+					newText: original,
+				},
+				{
+					type: "diff",
+					path: resolve(j.cwd, "correction.txt"),
+					oldText: null,
+					newText: corrected,
+				},
+			]);
+			expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+				true,
+			);
+		},
+	);
+
+	// oxlint-disable-next-line max-statements -- Cancellation, durable effects, reload, and correction are one recovery journey.
+	it("orchestrates cancellation after an approved write and reloads only the interrupted role with the user's correction", async () => {
+		const original = "Approved draft before cancellation.\n";
+		const external =
+			"User edited the approved draft while the session was closed.\n";
+		const corrected =
+			"Keep the draft; record the corrected local-only decision here.\n";
+		const correction =
+			"Continue only the interrupted designer. Preserve my draft edit; write corrected.txt instead of final.txt.";
+		const scripts: JourneyScripts = {
+			router: [
+				journeyCall(
+					"d3r_start_phase",
+					{
+						phase: "design",
+						brief: {
+							goal: "Design a local queue.",
+							context: "Retain the user's approved drafts.",
+							acceptanceCriteria: ["Record the chosen local-only design."],
+						},
+					},
+					"design",
+				),
+				journeyPhaseReply("design", "Confirm the design"),
+				journeyCall(
+					"d3r_continue_phase",
+					{
+						instructions:
+							"Use a local-only queue; write the draft and final decision.",
+					},
+					"draft",
+				),
+			],
+			aggregator: journeyDone("Existing local jobs must survive restart."),
+			researcher: journeyDone(
+				"A local-only queue avoids network dependencies.",
+			),
+			designer: [
+				journeyCall(
+					"write_file",
+					{ path: "draft.txt", content: original },
+					"approved-draft",
+				),
+				journeyCall(
+					"write_file",
+					{ path: "final.txt", content: "Superseded decision.\n" },
+					"pending-final",
+				),
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		const asked = deferred<RequestPermissionRequest>();
+		const release = deferred<boolean>();
+		j.approval.decide = async (permission) => {
+			if (JSON.stringify(permission.toolCall.rawInput).includes("final.txt")) {
+				asked.resolve(permission);
+				return release.promise;
+			}
+			return true;
+		};
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(
+			f.prompt(sessionId, "/design Design a local queue"),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const completedRecon = journeyCheckpoint(
+			await f.checkpoint(sessionId),
+		).inner!.engine!.records.filter(
+			({ kind, status }) => kind === "agent" && status === "completed",
+		);
+		expect(completedRecon.map(({ role }) => role).toSorted()).toEqual([
+			"aggregator",
+			"researcher",
+		]);
+		const pending = f.prompt(
+			sessionId,
+			"Use a local-only queue; write the draft and final decision.",
+		);
+		try {
+			const permission = await Promise.race([
+				asked.promise,
+				pending.then(() => {
+					throw new Error("Turn ended before the second write permission");
+				}),
+			]);
+			expect(permission.toolCall.title).toBe("write_file");
+			expect(await readFile(resolve(j.cwd, "draft.txt"), "utf8")).toBe(
+				original,
+			);
+			await expect(readFile(resolve(j.cwd, "final.txt"))).rejects.toMatchObject(
+				{ code: "ENOENT" },
+			);
+			const designer = j.requests.findLast(
+				({ role }) => role === "designer",
+			)!.context;
+			expect(journeyResult(designer, "approved-draft")).toMatchObject({
+				isError: false,
+			});
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+		} finally {
+			release.resolve(false);
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			await pending;
+		}
+		const checkpoint = await f.checkpoint(sessionId);
+		const interrupted = journeyCheckpoint(checkpoint).inner!;
+		expect(interrupted).toMatchObject({
+			orchestrated: true,
+			engine: { status: "interrupted" },
+		});
+		const interruptedRoles = interrupted.engine!.records.filter(
+			({ status }) => status === "interrupted",
+		);
+		expect(interruptedRoles.map(({ role }) => role)).toEqual(["designer"]);
+		expect(interrupted.continuations?.map(({ recordId }) => recordId)).toEqual(
+			interruptedRoles.map(({ id }) => id),
+		);
+		expect(JSON.stringify(interrupted.continuations)).toContain(
+			"approved-draft",
+		);
+		for (const record of completedRecon) {
+			expect(interrupted.engine!.records).toContainEqual(record);
+		}
+		const beforeReload = {
+			requests: j.requests.length,
+			permissions: j.permissions.length,
+			runtimes: j.runtimes.length,
+		};
+		await f.close();
+		await writeFile(resolve(j.cwd, "draft.txt"), external);
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(j.requests).toHaveLength(beforeReload.requests);
+		expect(j.permissions).toHaveLength(beforeReload.permissions);
+		expect(j.runtimes).toHaveLength(beforeReload.runtimes);
+		scripts.router = [
+			journeyCall(
+				"d3r_continue_phase",
+				{ instructions: correction },
+				"correct",
+			),
+			journeyPhaseReply("correct", "Corrected design ready"),
+		];
+		scripts.designer = [
+			journeyCall("read_file", { path: "draft.txt" }, "current-draft"),
+			journeyCall("write_file", { path: "corrected.txt", content: corrected }),
+			...journeyDone(
+				"Preserved the user's draft edit and saved corrected.txt with the local-only decision.",
+			),
+		];
+		j.approval.decide = async () => true;
+		const start = resumed.updates.length;
+		await expect(resumed.prompt(sessionId, correction)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(await readFile(resolve(j.cwd, "draft.txt"), "utf8")).toBe(external);
+		expect(await readFile(resolve(j.cwd, "corrected.txt"), "utf8")).toBe(
+			corrected,
+		);
+		await expect(readFile(resolve(j.cwd, "final.txt"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		const recovery = j.requests.slice(beforeReload.requests);
+		expect(new Set(recovery.map(({ role }) => role))).toEqual(
+			new Set(["router", "designer"]),
+		);
+		const designer = recovery.find(({ role }) => role === "designer")!.context;
+		expect(JSON.stringify(designer.messages)).toContain(correction);
+		expect(journeyResult(designer, "approved-draft")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResult(designer, "pending-final")).toMatchObject({
+			isError: true,
+		});
+		expect(
+			journeyResultText(
+				recovery.findLast(({ role }) => role === "designer")!.context,
+				"current-draft",
+			),
+		).toContain(external.trim());
+		expect(
+			j.permissions
+				.slice(beforeReload.permissions)
+				.map(({ toolCall }) => toolCall.title),
+		).toEqual([expect.stringMatching(/^Trust workspace/), "write_file"]);
+		const effects = journeyTools(resumed.updates.slice(start)).flatMap((row) =>
+			row.status === "completed"
+				? (row.content?.filter((part) => part.type === "diff") ?? [])
+				: [],
+		);
+		expect(effects).toEqual([
+			{
+				type: "diff",
+				path: resolve(j.cwd, "corrected.txt"),
+				oldText: null,
+				newText: corrected,
+			},
+		]);
+		const completed = journeyCheckpoint(
+			await resumed.checkpoint(sessionId),
+		).inner!;
+		expect(completed.engine).toMatchObject({ status: "completed" });
+		for (const record of interrupted.engine!.records.filter(
+			({ status }) => status === "completed",
+		)) {
+			expect(completed.engine!.records).toContainEqual(record);
+		}
+		expect(completed.continuations ?? []).toEqual([]);
+		expect(completed).not.toHaveProperty("summary");
+		expect(journeyText(resumed.updates.slice(start))).toContain(
+			"Preserved the user's draft edit and saved corrected.txt",
+		);
+		expect(
+			resumed.updates
+				.slice(start)
+				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
+		).toHaveLength(1);
+		expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
 	});
 
 	it.each([
@@ -499,21 +1772,27 @@ describe("native ACP shipped-workflow journeys", () => {
 			});
 			const text = journeyText(f.updates);
 			expect(text).toContain(safeError);
-			expect(text).toMatch(/abandon[\s\S]*restart/);
+			expect(text).toContain("Status: blocked");
+			expect(text).toContain("Return control to the user");
 			expect(text).not.toMatch(
 				/effects may have occurred|may have had effects/,
 			);
-			expect(j.requests.map(({ role }) => role)).toEqual(["planner"]);
-			expect(j.requests[0].model).toEqual(selected);
-			expect(JSON.stringify(j.requests[0].context.messages)).toContain(request);
-			expect(j.requests[0].context.tools).toContainEqual(
+			expect(j.requests.map(({ role }) => role)).toEqual([
+				"router",
+				"planner",
+				"router",
+			]);
+			const planner = j.requests.find(({ role }) => role === "planner")!;
+			expect(planner.model).toEqual(selected);
+			expect(JSON.stringify(planner.context.messages)).toContain(request);
+			expect(planner.context.tools).toContainEqual(
 				expect.objectContaining({ name: "d3r_report" }),
 			);
 			expect(
 				journeyTools(f.updates)
 					.filter((row) => row.sessionUpdate === "tool_call")
 					.map(({ title }) => title),
-			).toEqual(["planner"]);
+			).toEqual(["d3r_start_phase", "planner"]);
 			const failed = journeyTools(f.updates).findLast(
 				(row) => row.title === "planner",
 			);
@@ -526,7 +1805,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				f.updates.flatMap(({ update }) =>
 					update.sessionUpdate === "usage_update" ? [update.used] : [],
 				),
-			).toEqual([0]);
+			).toEqual([0, 0, 0]);
 			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 				expect.stringMatching(/^Trust workspace/),
 			]);
@@ -567,12 +1846,17 @@ describe("native ACP shipped-workflow journeys", () => {
 				journeyTools(resumed.updates).findLast((row) => row.title === "planner")
 					?.rawOutput,
 			).toEqual({ error: safeError, failure });
-			expect(j.requests.map(({ role }) => role)).toEqual(["planner"]);
+			expect(j.requests.map(({ role }) => role)).toEqual([
+				"router",
+				"planner",
+				"router",
+			]);
 			expect(j.permissions).toHaveLength(1);
 			await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
 				stopReason: "end_turn",
 			});
 			const routingStart = resumed.updates.length;
+			const routingRequests = j.requests.length;
 			await expect(
 				resumed.prompt(sessionId, "What should I check?"),
 			).resolves.toEqual({
@@ -580,7 +1864,12 @@ describe("native ACP shipped-workflow journeys", () => {
 			});
 			expect(journeyText(resumed.updates.slice(routingStart))).toBe(answer);
 			expect(journeyTools(resumed.updates.slice(routingStart))).toEqual([]);
-			expect(j.requests.map(({ role }) => role)).toEqual(["planner", "router"]);
+			expect(j.requests.slice(routingRequests).map(({ role }) => role)).toEqual(
+				["router"],
+			);
+			expect(j.requests.filter(({ role }) => role === "planner")).toHaveLength(
+				1,
+			);
 			expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
 				safeError,
 			);
@@ -685,12 +1974,17 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(journeyText(f.updates)).toContain(safeError);
 		expect(journeyText(f.updates)).not.toContain("No tool execution started");
 		expect(j.requests.map(({ role }) => role)).toEqual([
+			"router",
 			"planner",
 			"planner",
 			"schemer",
 			"schemer",
+			"router",
 		]);
-		const writeResult = journeyResult(j.requests.at(-1)!.context, "write_file");
+		const writeResult = journeyResult(
+			j.requests.findLast(({ role }) => role === "schemer")!.context,
+			"write_file",
+		);
 		expect(writeResult).toMatchObject({
 			toolName: "write_file",
 			isError: false,
@@ -762,7 +2056,15 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(journeyText(resumed.updates.slice(recoveryStart))).toContain(
 			safeError,
 		);
-		expect(j.requests).toHaveLength(beforeReload.requests);
+		expect(
+			j.requests.slice(beforeReload.requests).map(({ role }) => role),
+		).toEqual(["router", "router"]);
+		expect(
+			journeyResult(j.requests.at(-1)!.context, "d3r_continue_phase"),
+		).toMatchObject({ isError: true });
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner!.engine,
+		).toEqual(journeyCheckpoint(checkpoint).inner!.engine);
 		await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
 			stopReason: "end_turn",
 		});
@@ -771,11 +2073,15 @@ describe("native ACP shipped-workflow journeys", () => {
 		).resolves.toEqual({ stopReason: "end_turn" });
 		expect(
 			j.requests.slice(beforeReload.requests).map(({ role }) => role),
-		).toEqual(["router"]);
+		).toEqual(["router", "router", "router", "router", "router"]);
 		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
 			safeError,
 		);
-		expect(journeyTools(resumed.updates.slice(recoveryStart))).toEqual([]);
+		expect(
+			journeyTools(resumed.updates.slice(recoveryStart))
+				.filter(({ sessionUpdate }) => sessionUpdate === "tool_call")
+				.map(({ title }) => title),
+		).toEqual(["d3r_continue_phase", "d3r_abandon_phase"]);
 		expect(
 			j.permissions.filter(({ toolCall }) => toolCall.title === "write_file"),
 		).toHaveLength(1);
@@ -794,7 +2100,7 @@ describe("native ACP shipped-workflow journeys", () => {
 	});
 
 	// oxlint-disable-next-line max-statements -- A true pre-stream exception must cross ACP as a request error and recover without implicit retry.
-	it("reports a synchronous routing network throw as an ACP request error and requires explicit recovery", async () => {
+	it("legacy compatibility: reports a synchronous routing network throw as an ACP request error and requires explicit recovery", async () => {
 		const greeting = "Ready to discuss the queue.";
 		const recovered =
 			"The earlier conversation is retained; no work was repeated.";
@@ -820,7 +2126,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			},
 		});
 		const f = await j.connect();
-		const { sessionId } = await f.newSession(j.cwd);
+		const { sessionId } = await f.legacySession();
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+		).not.toHaveProperty("orchestrated");
 		await f.peer.agent.request("session/set_config_option", {
 			sessionId,
 			configId: "model",
@@ -1869,7 +3178,7 @@ describe("native ACP shipped-workflow journeys", () => {
 	});
 
 	// oxlint-disable-next-line max-statements -- Follow the evidence, buffered response, persisted replay and next routing turn together.
-	it("synthesizes completed design evidence once with the current model, then replays and routes with the cached Markdown", async () => {
+	it("legacy compatibility: synthesizes completed design evidence once with the current model, then replays and routes with the cached Markdown", async () => {
 		const selected = {
 			...JOURNEY_MODEL,
 			id: "synthesis",
@@ -1953,7 +3262,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			mimeType: "text/plain",
 		};
 		const f = await j.connect();
-		const { sessionId } = await f.newSession(j.cwd);
+		const { sessionId } = await f.legacySession();
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+		).not.toHaveProperty("orchestrated");
 		await f.peer.agent.request("session/set_config_option", {
 			sessionId,
 			configId: "model",
@@ -2212,7 +3524,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		"oversized",
 		"cancelled",
 	] as const)(
-		"retains completed work across %s synthesis and reload without partial output or reruns",
+		"legacy compatibility: retains completed work across %s synthesis and reload without partial output or reruns",
 		// oxlint-disable-next-line max-statements -- Keep final effects, failed synthesis, reload and continuation in one acceptance journey.
 		async (failure) => {
 			const partial = "Unfinished summary must never be shown";
@@ -2270,7 +3582,10 @@ describe("native ACP shipped-workflow journeys", () => {
 					}),
 			});
 			const f = await j.connect();
-			const { sessionId } = await f.newSession(j.cwd);
+			const { sessionId } = await f.legacySession();
+			expect(
+				journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+			).not.toHaveProperty("orchestrated");
 			await f.peer.agent.request("session/set_config_option", {
 				sessionId,
 				configId: "model",
@@ -2482,7 +3797,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		);
 		expect(
 			new Set(j.requests.slice(reconStart).map(({ role }) => role)),
-		).toEqual(new Set(["aggregator", "researcher"]));
+		).toEqual(new Set(["router", "aggregator", "researcher"]));
 		for (const role of ["aggregator", "researcher"]) {
 			const contexts = j.requests
 				.filter((entry) => entry.role === role)
@@ -2539,14 +3854,23 @@ describe("native ACP shipped-workflow journeys", () => {
 		await expect(resumed.prompt(sessionId, replacement)).resolves.toEqual({
 			stopReason: "end_turn",
 		});
-		expect(journeyText(resumed.updates.slice(conflictStart))).toMatch(
-			/\/design[\s\S]*waiting/i,
+		expect(journeyText(resumed.updates.slice(conflictStart))).toContain(
+			"Cannot replace unfinished work",
 		);
 		expect(journeyText(resumed.updates.slice(conflictStart))).toMatch(
-			/abandon[\s\S]*resend/i,
+			/Phase: design[\s\S]*Status: waiting/,
 		);
-		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
-		expect(j.requests).toHaveLength(beforeReload);
+		const retained = journeyCheckpoint(
+			await resumed.checkpoint(sessionId),
+		).inner!;
+		expect(retained.engine).toEqual(
+			journeyCheckpoint(checkpoint).inner!.engine,
+		);
+		expect(retained.input).toEqual(journeyCheckpoint(checkpoint).inner!.input);
+		expect(j.requests.slice(beforeReload).map(({ role }) => role)).toEqual([
+			"router",
+			"router",
+		]);
 		await expect(resumed.prompt(sessionId, answer)).resolves.toEqual({
 			stopReason: "end_turn",
 		});
@@ -2554,10 +3878,16 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(journeyText(resumed.updates)).toContain(JOURNEY_SUMMARY);
 		const continuation = j.requests.slice(beforeReload);
 		expect(new Set(continuation.map(({ role }) => role))).toEqual(
-			new Set(["designer", "summary"]),
+			new Set(["router", "designer"]),
 		);
+		expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 		const { context } = continuation.find(({ role }) => role === "designer")!;
 		expect(JSON.stringify(context.messages)).not.toContain(replacement);
+		expect(
+			JSON.stringify(
+				journeyCheckpoint(await resumed.checkpoint(sessionId)).inner!.input,
+			),
+		).not.toContain(replacement);
 		for (const text of [
 			greeting,
 			request,
@@ -2672,7 +4002,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			"Discuss design questions before drafting",
 		);
 		expect(new Set(j.requests.map(({ role }) => role))).toEqual(
-			new Set(["aggregator", "researcher"]),
+			new Set(["router", "aggregator", "researcher"]),
 		);
 		const vaultHits = [
 			`${note}:2: queue survives restarts`,
@@ -2824,8 +4154,9 @@ describe("native ACP shipped-workflow journeys", () => {
 		});
 		const continuation = j.requests.slice(beforeReload);
 		expect(new Set(continuation.map(({ role }) => role))).toEqual(
-			new Set(["designer", "summary"]),
+			new Set(["router", "designer"]),
 		);
+		expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 		const designer = continuation.filter(({ role }) => role === "designer");
 		expect(designer[0].context.systemPrompt).toContain(vault);
 		expect(JSON.stringify(designer[0].context.messages)).toContain(
@@ -3339,10 +4670,26 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(j.permissions).toHaveLength(permissionsBefore);
 			await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
 			j.approval.decide = async () => true;
-			await expect(resumed.prompt(sessionId, "continue")).resolves.toEqual({
+			const retained = journeyCheckpoint(await resumed.checkpoint(sessionId))
+				.inner!.engine;
+			await expect(
+				resumed.prompt(sessionId, failure === "denied" ? "continue" : "status"),
+			).resolves.toEqual({
 				stopReason: "end_turn",
 			});
-			expect(j.requests).toHaveLength(beforeReload);
+			expect(j.requests.slice(beforeReload).map(({ role }) => role)).toEqual([
+				"router",
+				"router",
+			]);
+			expect(
+				journeyCheckpoint(await resumed.checkpoint(sessionId)).inner!.engine,
+			).toEqual(retained);
+			expect(
+				journeyResult(
+					j.requests.at(-1)!.context,
+					failure === "denied" ? "d3r_continue_phase" : "d3r_phase_status",
+				),
+			).toMatchObject({ isError: failure === "denied" });
 			scripts.implementor = [
 				journeyCall("vault_read", { path: note }, "stale-read"),
 				(context) =>
@@ -3469,10 +4816,15 @@ describe("native ACP shipped-workflow journeys", () => {
 				journeyReport("The external edit is preserved on disk."),
 				[{ type: "text", text: "Audit complete." }],
 			];
-			if (failure === "cancelled") {
-				await resumed.prompt(sessionId, "abandon");
-				await resumed.prompt(sessionId, request);
+			if (failure === "denied") {
+				await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
+					stopReason: "end_turn",
+				});
+				await expect(resumed.prompt(sessionId, request)).resolves.toEqual({
+					stopReason: "end_turn",
+				});
 			}
+			const recoveryRequests = j.requests.length;
 			const editAsked = deferred<RequestPermissionRequest>();
 			const editAnswer = deferred<boolean>();
 			j.approval.decide = async (permission) => {
@@ -3484,7 +4836,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			};
 			const recovery = resumed.prompt(
 				sessionId,
-				failure === "denied" ? "restart" : "auto",
+				failure === "denied" ? "auto" : "continue",
 			);
 			try {
 				const permission = await Promise.race([
@@ -3506,6 +4858,18 @@ describe("native ACP shipped-workflow journeys", () => {
 				await resumed.peer.agent.notify("session/cancel", { sessionId });
 				await recovery;
 			}
+			const resumedImplementor = j.requests
+				.slice(recoveryRequests)
+				.find(({ role }) => role === "implementor")!.context;
+			if (failure === "cancelled") {
+				expect(journeyPage(resumedImplementor, "before-denial").text).toBe(
+					original,
+				);
+				expect(journeyResult(resumedImplementor, "publish-log")).toMatchObject({
+					isError: true,
+				});
+			}
+			expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 			const implementor = j.requests.findLast(
 				({ role }) => role === "implementor",
 			)!.context;
@@ -3902,7 +5266,13 @@ describe("native ACP shipped-workflow journeys", () => {
 				stopReason: "end_turn",
 			});
 			expect(journeyText(f.updates)).toContain("Choose develop mode");
-			expect(j.requests).toEqual([]);
+			expect(j.requests.map(({ role }) => role)).toEqual(["router", "router"]);
+			expect(
+				journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+			).toMatchObject({
+				orchestrated: true,
+				engine: { status: "waiting", mode: null, pause: { kind: "mode" } },
+			});
 			const pending = f.prompt(sessionId, "auto");
 			try {
 				const permission = await Promise.race([
@@ -3949,7 +5319,11 @@ describe("native ACP shipped-workflow journeys", () => {
 				expect(
 					journeyTools(f.updates).map(journeyToolText).join("\n"),
 				).toContain("Write permission was denied");
-				expect(j.requests.at(-1)?.context.messages.at(-1)).toMatchObject({
+				expect(
+					j.requests
+						.findLast(({ role }) => role === "implementor")
+						?.context.messages.at(-1),
+				).toMatchObject({
 					toolName: "d3r_report",
 					isError: false,
 				});
@@ -3970,14 +5344,38 @@ describe("native ACP shipped-workflow journeys", () => {
 			await expect(resumed.prompt(sessionId, replacement)).resolves.toEqual({
 				stopReason: "end_turn",
 			});
-			expect(journeyText(resumed.updates.slice(conflictStart))).toMatch(
-				/abandon[\s\S]*resend/i,
+			expect(journeyText(resumed.updates.slice(conflictStart))).toContain(
+				"Cannot replace unfinished work",
 			);
-			await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
-			await expect(resumed.prompt(sessionId, "continue")).resolves.toEqual({
+			const retained = journeyCheckpoint(
+				await resumed.checkpoint(sessionId),
+			).inner!;
+			expect(retained.engine).toEqual(
+				journeyCheckpoint(checkpoint).inner!.engine,
+			);
+			expect(retained.input).toEqual(
+				journeyCheckpoint(checkpoint).inner!.input,
+			);
+			await expect(
+				resumed.prompt(sessionId, failure === "denied" ? "continue" : "status"),
+			).resolves.toEqual({
 				stopReason: "end_turn",
 			});
-			expect(j.requests).toHaveLength(beforeReload);
+			expect(j.requests.slice(beforeReload).map(({ role }) => role)).toEqual([
+				"router",
+				"router",
+				"router",
+				"router",
+			]);
+			expect(
+				journeyCheckpoint(await resumed.checkpoint(sessionId)).inner!.engine,
+			).toEqual(retained.engine);
+			expect(
+				journeyResult(
+					j.requests.at(-1)!.context,
+					failure === "denied" ? "d3r_continue_phase" : "d3r_phase_status",
+				),
+			).toMatchObject({ isError: failure === "denied" });
 			await expect(readFile(resolve(j.cwd, "queue.txt"))).rejects.toMatchObject(
 				{ code: "ENOENT" },
 			);
@@ -3998,37 +5396,46 @@ describe("native ACP shipped-workflow journeys", () => {
 			];
 			const recoveryUpdates = resumed.updates.length;
 			if (failure === "denied") {
-				await expect(resumed.prompt(sessionId, "restart")).resolves.toEqual({
-					stopReason: "end_turn",
-				});
-			} else {
 				await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
 					stopReason: "end_turn",
 				});
-				expect(j.requests).toHaveLength(beforeReload);
 				await expect(resumed.prompt(sessionId, request)).resolves.toEqual({
 					stopReason: "end_turn",
 				});
-				await expect(resumed.prompt(sessionId, "auto")).resolves.toEqual({
-					stopReason: "end_turn",
-				});
 			}
+			const recoveryRequests = j.requests.length;
+			await expect(
+				resumed.prompt(sessionId, failure === "denied" ? "auto" : "continue"),
+			).resolves.toEqual({ stopReason: "end_turn" });
 			expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(content);
 			expect(journeyText(resumed.updates.slice(recoveryUpdates))).toContain(
 				JOURNEY_SUMMARY,
 			);
-			const recovery = j.requests.slice(beforeReload);
-			expect(recovery.filter(({ role }) => role === "summary")).toHaveLength(1);
+			const recovery = j.requests.slice(recoveryRequests);
+			expect(recovery.filter(({ role }) => role === "summary")).toEqual([]);
+
 			const progression = recovery
-				.filter(({ role }) => role !== "summary")
+				.filter(({ role }) => role !== "router")
 				.map(({ role }) => role)
 				.filter(
 					(role, index, roles) => index === 0 || role !== roles[index - 1],
 				);
 			expect(progression).toEqual(["implementor", "reviewer", "auditor"]);
-			for (const { context } of recovery) {
+			for (const { role, context } of recovery) {
 				expect(JSON.stringify(context.messages)).toContain(request);
-				expect(JSON.stringify(context.messages)).not.toContain(replacement);
+				if (failure === "cancelled" && role !== "router") {
+					expect(JSON.stringify(context.messages)).not.toContain(replacement);
+				}
+			}
+			const completed = journeyCheckpoint(
+				await resumed.checkpoint(sessionId),
+			).inner!;
+			expect(completed.engine).toMatchObject({ status: "completed" });
+			expect(JSON.stringify(completed.input)).not.toContain(replacement);
+			for (const record of retained.engine!.records.filter(
+				({ status }) => status === "completed",
+			)) {
+				expect(completed.engine!.records).toContainEqual(record);
 			}
 			for (const role of ["reviewer", "auditor"]) {
 				const contexts = recovery

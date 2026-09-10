@@ -179,6 +179,8 @@ export interface RuntimeTool {
 /** Runtime tool inputs are scoped to the current turn. */
 export interface RuntimeToolContext {
 	readonly toolCallId: string;
+	/** Originating prompt identity; tool cancellation may combine additional signals. */
+	readonly requestSignal?: AbortSignal;
 	readonly cwd: string;
 	readonly roots: readonly string[];
 	readonly signal: AbortSignal;

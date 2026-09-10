@@ -26,6 +26,7 @@ import { compileTools } from "./embedded-tools.ts";
 import { runEmbeddedTurn } from "./embedded-turn.ts";
 
 export { type ResolveResource } from "./embedded-content.ts";
+export { parseCheckpoint as parseEmbeddedCheckpoint } from "./embedded-checkpoint.ts";
 
 /** Explicit capabilities only; the adapter never discovers providers, auth, or tools. */
 export interface EmbeddedRuntimeOptions {

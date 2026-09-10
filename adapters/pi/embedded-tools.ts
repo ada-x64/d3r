@@ -197,6 +197,7 @@ export const createToolBridge = (
 				call.result = toolResultSchema.parse(
 					await tool.execute(call.args, {
 						toolCallId: call.id,
+						requestSignal,
 						cwd: input.cwd,
 						roots: [input.cwd, ...(input.additionalDirectories ?? [])],
 						signal: activeSignal,
