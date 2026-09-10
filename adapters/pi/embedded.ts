@@ -7,6 +7,13 @@ import {
 	type Models,
 } from "@earendil-works/pi-ai";
 import { type CreateRuntimeSession, type RuntimeTool } from "@d3r/core/runtime";
+import {
+	beginBudgetedRequest,
+	createRequestBudget,
+	parseRequestBudgetLimits,
+	REQUEST_EXTENSION_TOOL,
+	type RequestBudget,
+} from "./embedded-budget.ts";
 import { parseCheckpoint } from "./embedded-checkpoint.ts";
 import {
 	collectModels,
@@ -29,11 +36,13 @@ export interface EmbeddedRuntimeOptions {
 	readonly resolveResource?: ResolveResource;
 	readonly tools?: readonly RuntimeTool[];
 	readonly modelChoices?: readonly Model<Api>[];
+	/** Initial model requests per invocation, including final synthesis (default: 50). */
 	readonly maxTurns?: number;
+	/** Non-extendable ceiling (default: max(maxTurns, 100)). */
+	readonly maxTotalTurns?: number;
+	/** Routing or role name shown in resource-extension approval titles. */
+	readonly budgetLabel?: string;
 }
-
-/** Bound provider requests, including repeated hallucinated tool names. */
-const DEFAULT_MAX_TURNS = 20;
 
 /** Build isolated in-memory conversations with injected IO and idle-only checkpoints. */
 export const createEmbeddedRuntime = (
@@ -41,9 +50,17 @@ export const createEmbeddedRuntime = (
 ): CreateRuntimeSession => {
 	const definitions = compileTools(options.tools);
 	const choices = collectModels(options.model, options.modelChoices);
-	const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
-	if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
-		throw new Error("maxTurns must be a positive safe integer");
+	const limits = parseRequestBudgetLimits(options);
+	if (definitions.some(({ tool }) => tool.name === REQUEST_EXTENSION_TOOL)) {
+		throw new Error(
+			`${REQUEST_EXTENSION_TOOL} is reserved for request budget control`,
+		);
+	}
+	if (
+		options.budgetLabel !== undefined &&
+		typeof options.budgetLabel !== "string"
+	) {
+		throw new Error("budgetLabel must be a string");
 	}
 	if (typeof options.systemPrompt !== "string") {
 		throw new Error("systemPrompt must be a string");
@@ -56,17 +73,37 @@ export const createEmbeddedRuntime = (
 	return (input) => {
 		// External IDs may be reused; provider cleanup and tool presentation must not collide.
 		const providerSessionId = `d3r:${input.sessionId}:${randomUUID()}`;
+		const lifecycle: {
+			busy: boolean;
+			disposed: boolean;
+			budget?: RequestBudget;
+		} = { busy: false, disposed: false };
 		const agent = new Agent({
 			initialState: {
 				systemPrompt: options.systemPrompt,
 				...initial,
 				tools: [],
 			},
-			streamFn: (model, context, settings) =>
-				options.models.streamSimple(model, context, settings),
+			streamFn: (model, context, settings) => {
+				if (!lifecycle.budget) {
+					throw new Error("Model request requires an active invocation budget");
+				}
+				settings?.signal?.throwIfAborted();
+				return options.models.streamSimple(
+					model,
+					{
+						...context,
+						systemPrompt: beginBudgetedRequest(
+							lifecycle.budget,
+							context.systemPrompt,
+						),
+					},
+					settings,
+				);
+			},
 			sessionId: providerSessionId,
 		});
-		const lifecycle = { busy: false, disposed: false };
+
 		const assertIdle = (): void => {
 			if (lifecycle.disposed || lifecycle.busy) {
 				throw new Error("Runtime session is disposed or already running");
@@ -81,15 +118,24 @@ export const createEmbeddedRuntime = (
 					return "cancelled";
 				}
 				lifecycle.busy = true;
+				const budget = createRequestBudget(
+					limits,
+					request.signal,
+					definitions.length > 0,
+				);
+				lifecycle.budget = budget;
 				try {
 					return await runEmbeddedTurn(agent, request, {
 						input,
 						definitions,
-						maxTurns,
+						budget,
+						budgetLabel: options.budgetLabel,
 						namespace: providerSessionId,
 						resolveResource: options.resolveResource,
 					});
 				} finally {
+					budget.active = false;
+					lifecycle.budget = undefined;
 					lifecycle.busy = false;
 				}
 			},

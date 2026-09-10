@@ -30,6 +30,7 @@ import { createNativeMcpSecurity } from "./native-mcp.ts";
 import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
 import { createVaultTools } from "./vault-tools.ts";
+import { createWebTools } from "./web-tools.ts";
 
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
@@ -341,6 +342,10 @@ export const createLazyNativeSession = ({
 				),
 				createNativeSkillTool(saved.resources),
 				...createVaultTools({ vaultRoot }),
+				...createWebTools({
+					config: deps.getWebProviderConfig(),
+					client: input.client,
+				}),
 				...opened.tools.map((tool) => ({
 					...tool,
 					permission: "ask" as const,
@@ -349,7 +354,13 @@ export const createLazyNativeSession = ({
 			const create = (
 				selection: NativeSelection,
 				systemPrompt: string,
-				selectedTools: readonly RuntimeTool[],
+				{
+					tools: selectedTools,
+					budgetLabel = "routing",
+				}: {
+					tools: readonly RuntimeTool[];
+					budgetLabel?: string;
+				},
 			): RuntimeSession => {
 				validateSelection(available, selection);
 				const model = available.find(
@@ -363,6 +374,7 @@ export const createLazyNativeSession = ({
 					model,
 					modelChoices: available,
 					systemPrompt,
+					budgetLabel,
 					thinkingLevel: selection.thinking as NonNullable<
 						Parameters<
 							NativeDependencies["createEmbeddedRuntime"]
@@ -388,7 +400,7 @@ export const createLazyNativeSession = ({
 			const routing = create(
 				saved.selection,
 				nativeSystemPrompt(saved.resources),
-				tools,
+				{ tools },
 			);
 			runtime = routing;
 			runtime = deps.createWorkflowRuntime({
@@ -406,10 +418,13 @@ export const createLazyNativeSession = ({
 					return create(
 						currentSelection(routing),
 						nativeSystemPrompt(saved.resources, agent),
-						[
-							...nativeRoleTools(agent, tools),
-							createWorkflowReportTool(report),
-						],
+						{
+							tools: [
+								...nativeRoleTools(agent, tools),
+								createWorkflowReportTool(report),
+							],
+							budgetLabel: name,
+						},
 					);
 				},
 			});

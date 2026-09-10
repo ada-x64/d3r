@@ -179,6 +179,9 @@ export const nativeFixture = () => {
 		getMcpEnvironment: vi.fn<NativeDependencies["getMcpEnvironment"]>(
 			() => ({}),
 		),
+		getWebProviderConfig: vi.fn<NativeDependencies["getWebProviderConfig"]>(
+			() => ({ providerId: "exa" }),
+		),
 		connectMcpTools: vi.fn<NativeDependencies["connectMcpTools"]>(async () => ({
 			tools: [],
 			dispose: vi.fn(async () => {}),

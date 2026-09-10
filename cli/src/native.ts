@@ -16,6 +16,7 @@ import { createLazyNativeSession } from "./native-session.ts";
 import { loadAgentResources, resolveWorkspaceResource } from "./resources.ts";
 import { createWorkspaceTools } from "./runtime-tools.ts";
 import { createWorkflowRuntime } from "./workflow-runtime.ts";
+import { parseWebProviderConfig } from "./utils/env.ts";
 
 /** Native remains an explicit composition choice; the launcher owns its default switch. */
 export interface NativeOptions {
@@ -45,6 +46,9 @@ export interface NativeDependencies {
 	readonly loadAgentResources: typeof loadAgentResources;
 	readonly loadMcpConfig: typeof loadMcpConfig;
 	readonly getMcpEnvironment: typeof getDefaultEnvironment;
+	readonly getWebProviderConfig: () => ReturnType<
+		typeof parseWebProviderConfig
+	>;
 	readonly connectMcpTools: typeof connectMcpTools;
 	readonly createWorkspaceTools: typeof createWorkspaceTools;
 	readonly createEmbeddedRuntime: typeof createEmbeddedRuntime;
@@ -84,6 +88,7 @@ export const createNativeDeps = async (
 		loadAgentResources,
 		loadMcpConfig,
 		getMcpEnvironment: getDefaultEnvironment,
+		getWebProviderConfig: () => parseWebProviderConfig(process.env),
 		connectMcpTools,
 		createWorkspaceTools,
 		createEmbeddedRuntime,

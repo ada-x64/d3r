@@ -1277,6 +1277,87 @@ describe("native ACP full surface", () => {
 		expect(JSON.stringify(permissions)).toContain("[REDACTED]");
 	});
 
+	it.each(["session/load", "session/resume"] as const)(
+		"keeps scoped grants through turns but not another root, %s, or reconnection",
+		async (method) => {
+			const persistence = await store();
+			const permissions: RequestPermissionRequest[] = [];
+			const factory: OpenRuntimeSession = (session) => ({
+				...runtime(),
+				prompt: async (request) => {
+					expect(
+						await session.client!.requestPermission(
+							{
+								toolCallId: "fetch",
+								title: "web_fetch",
+								kind: "fetch",
+								input: { url: "https://example.com" },
+								scope: { id: "exa:web_fetch", label: "web fetches via Exa" },
+							},
+							request.signal,
+						),
+					).toBe(true);
+					return "completed";
+				},
+			});
+			const app = () =>
+				client().onRequest("session/request_permission", ({ params }) => {
+					permissions.push(params);
+					const option = params.options.find(
+						({ kind }) => kind === "allow_always",
+					);
+					expect(option?.name).toBe(
+						"Allow web fetches via Exa for this thread",
+					);
+					return {
+						outcome: { outcome: "selected", optionId: option!.optionId },
+					};
+				});
+			const f = open(factory, { store: persistence }, app());
+			await f.initialize();
+			const { sessionId } = await f.newSession();
+			await f.prompt(sessionId);
+			await f.prompt(sessionId);
+			expect(permissions).toHaveLength(1);
+			const other = await f.newSession();
+			await f.prompt(other.sessionId);
+			expect(permissions.map((request) => request.sessionId)).toEqual([
+				sessionId,
+				other.sessionId,
+			]);
+			await f.peer.agent.request("session/close", { sessionId });
+			const saved = JSON.stringify(await persistence.get(sessionId));
+			expect(saved).not.toContain("exa:web_fetch");
+			expect(saved).not.toContain("allow_scope");
+			await f.peer.agent.request(method, {
+				sessionId,
+				cwd: CWD,
+				mcpServers: [],
+			});
+			await f.prompt(sessionId);
+			expect(permissions.map((request) => request.sessionId)).toEqual([
+				sessionId,
+				other.sessionId,
+				sessionId,
+			]);
+			await f.close();
+			const reconnected = open(factory, { store: persistence }, app());
+			await reconnected.initialize();
+			await reconnected.peer.agent.request(method, {
+				sessionId,
+				cwd: CWD,
+				mcpServers: [],
+			});
+			await reconnected.prompt(sessionId);
+			expect(permissions.map((request) => request.sessionId)).toEqual([
+				sessionId,
+				other.sessionId,
+				sessionId,
+				sessionId,
+			]);
+		},
+	);
+
 	it("negotiates permission/fs/terminal/form services and stores terminal output for replay", async () => {
 		const persistence = await store();
 		const events: string[] = [];

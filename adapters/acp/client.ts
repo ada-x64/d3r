@@ -24,6 +24,39 @@ const answerSchema = z.object({
 	action: z.literal("accept"),
 	content: z.object({ answer: z.string() }),
 });
+/** Bound shell metadata independently from the compact button text. */
+const SCOPE_LIMITS = { id: 256, label: 4096, displayLabel: 100 };
+/** Scope identities are explicit shell metadata, never inferred from titles or tool input. */
+const permissionScopeSchema = z
+	.object({
+		id: z
+			.string()
+			.min(1)
+			.max(SCOPE_LIMITS.id)
+			.refine(
+				(value) =>
+					value.trim().length > 0 && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(value),
+			),
+		label: z
+			.string()
+			.min(1)
+			.max(SCOPE_LIMITS.label)
+			.refine((value) => value.replace(/[\p{Cc}\p{Cf}\s]/gu, "").length > 0),
+	})
+	.strict();
+
+/** Redact before sanitizing or truncating so neither can expose part of a secret. */
+const scopeLabel = (label: string, secrets: readonly string[]): string => {
+	const safe = redactSessionData(
+		label,
+		secrets.toSorted((a, b) => b.length - a.length),
+	)
+		.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+		.trim();
+	return safe.length > SCOPE_LIMITS.displayLabel
+		? `${safe.slice(0, SCOPE_LIMITS.displayLabel - "...".length)}...`
+		: safe;
+};
 /** A terminal stays alive until the turn ends so tool updates can embed it before release. */
 interface TerminalState {
 	readonly id: string;
@@ -52,6 +85,8 @@ export const createClientServices = (
 		string,
 		Pick<ToolCall, "title" | "content">
 	>();
+	const rememberedScopes = new Set<string>();
+	const scopeRequests = new Map<string, Promise<void>>();
 	const terminals = new Set<TerminalState>();
 	const output = new Map<string, string>();
 	const signalFor = (signal: AbortSignal) =>
@@ -113,6 +148,7 @@ export const createClientServices = (
 			if (signal.aborted) {
 				return false;
 			}
+			const scopeLock: { id?: string; release?: () => void } = {};
 			try {
 				const presentation = toolCallPresentation(request, {
 					permission: true,
@@ -122,6 +158,27 @@ export const createClientServices = (
 					title: presentation.title,
 					content: presentation.content,
 				});
+				const parsed = permissionScopeSchema.safeParse(request.scope);
+				const scope = parsed.success ? parsed.data : undefined;
+				signal.throwIfAborted();
+				if (scope) {
+					scopeLock.id = scope.id;
+					// Wait for a decision, not its grant: only an explicit thread grant is shared.
+					while (scopeRequests.has(scope.id)) {
+						// oxlint-disable-next-line no-await-in-loop -- Each live caller needs its own decision unless a thread grant was selected.
+						await waitFor(scopeRequests.get(scope.id)!, signal);
+						signal.throwIfAborted();
+					}
+					if (rememberedScopes.has(scope.id)) {
+						return true;
+					}
+					scopeRequests.set(
+						scope.id,
+						new Promise<void>((resolve) => {
+							scopeLock.release = resolve;
+						}),
+					);
+				}
 				const result = await waitFor(
 					client.request(
 						"session/request_permission",
@@ -136,19 +193,36 @@ export const createClientServices = (
 							options: [
 								{ optionId: "allow", name: "Allow once", kind: "allow_once" },
 								{ optionId: "reject", name: "Reject", kind: "reject_once" },
+								...(scope
+									? [
+											{
+												optionId: "allow_scope",
+												name: `Allow ${scopeLabel(scope.label, secretCollection.values)} for this thread`,
+												kind: "allow_always" as const,
+											},
+										]
+									: []),
 							],
 						},
 						{ cancellationSignal: signal },
 					),
 					signal,
 				);
-				return (
-					!signal.aborted &&
-					result.outcome.outcome === "selected" &&
-					result.outcome.optionId === "allow"
-				);
+				if (signal.aborted || result.outcome.outcome !== "selected") {
+					return false;
+				}
+				if (scope && result.outcome.optionId === "allow_scope") {
+					rememberedScopes.add(scope.id);
+					return true;
+				}
+				return result.outcome.optionId === "allow";
 			} catch {
 				return false;
+			} finally {
+				if (scopeLock.release && scopeLock.id !== undefined) {
+					scopeRequests.delete(scopeLock.id);
+					scopeLock.release();
+				}
 			}
 		},
 		...(capabilities.fs?.readTextFile
@@ -305,6 +379,8 @@ export const createClientServices = (
 		finishTurn,
 		dispose: async () => {
 			lifetime.abort();
+			rememberedScopes.clear();
+			scopeRequests.clear();
 			await finishTurn();
 			writes.dispose();
 		},

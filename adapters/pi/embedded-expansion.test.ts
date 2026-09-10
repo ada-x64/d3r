@@ -365,7 +365,7 @@ describe("embedded runtime expansion", () => {
 	it.each([undefined, 1])(
 		"bounds unknown tools with maxTurns %s",
 		async (maxTurns) => {
-			const defaultLimit = 20;
+			const defaultLimit = 50;
 			const limit = maxTurns ?? defaultLimit;
 			const execute = vi.fn(async () => ({ text: "unused" }));
 			const f = open({ tools: [tool({ execute })], maxTurns });

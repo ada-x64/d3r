@@ -7,16 +7,23 @@ import {
 	type RuntimeSessionInput,
 	type RuntimeStopReason,
 } from "@d3r/core/runtime";
+import {
+	createRequestExtensionTool,
+	type RequestBudget,
+} from "./embedded-budget.ts";
 import { closeToolBatches } from "./embedded-checkpoint.ts";
 import { prepareContent, type ResolveResource } from "./embedded-content.ts";
-import { createToolBridge, type EmbeddedTool } from "./embedded-tools.ts";
+import {
+	compileTools,
+	createToolBridge,
+	type EmbeddedTool,
+} from "./embedded-tools.ts";
 
 /** Mutable observation data belongs to one invocation, never the provider registry. */
 interface TurnState {
 	messageId: string;
 	finalMessage: AssistantMessage | null;
 	outputFailed: boolean;
-	turns: number;
 }
 
 /** Await delivery without throwing into Pi's parallel tool executor and losing siblings. */
@@ -47,7 +54,6 @@ const observeMessages = async (
 	}
 	if (event.type === "message_end" && event.message.role === "assistant") {
 		state.finalMessage = event.message;
-		state.turns += 1;
 		const { usage } = event.message;
 		await deliver(agent, state, async () =>
 			request.activity?.({
@@ -114,13 +120,15 @@ export const runEmbeddedTurn = async (
 	{
 		input,
 		definitions,
-		maxTurns,
+		budget,
+		budgetLabel,
 		namespace,
 		resolveResource,
 	}: {
 		readonly input: RuntimeSessionInput;
 		readonly definitions: readonly EmbeddedTool[];
-		readonly maxTurns: number;
+		readonly budget: RequestBudget;
+		readonly budgetLabel?: string;
 		readonly namespace: string;
 		readonly resolveResource?: ResolveResource;
 	},
@@ -130,23 +138,29 @@ export const runEmbeddedTurn = async (
 		messageId: "",
 		finalMessage: null,
 		outputFailed: false,
-		turns: 0,
 	};
-	const activity = async (event: RuntimeActivity) =>
-		deliver(agent, state, async () =>
-			request.activity?.(structuredClone(event)),
-		);
-	const bridge = createToolBridge(definitions, input, {
+	const tools =
+		definitions.length > 0
+			? [
+					...definitions,
+					...compileTools([createRequestExtensionTool(budget, budgetLabel)]),
+				]
+			: definitions;
+	const bridge = createToolBridge(tools, input, {
 		namespace,
 		requestSignal: request.signal,
-		activity,
+		activity: async (event: RuntimeActivity) =>
+			deliver(agent, state, async () =>
+				request.activity?.(structuredClone(event)),
+			),
 	});
 	Object.assign(agent, {
 		beforeToolCall: bridge.beforeToolCall,
 		afterToolCall: bridge.afterToolCall,
 		shouldStopAfterTurn: () =>
 			definitions.length === 0 ||
-			state.turns >= maxTurns ||
+			budget.used >= budget.limit ||
+			budget.used >= budget.hard ||
 			state.finalMessage?.stopReason === "length" ||
 			request.signal.aborted ||
 			state.outputFailed,

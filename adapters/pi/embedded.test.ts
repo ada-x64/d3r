@@ -100,7 +100,8 @@ describe("embedded Pi runtime", () => {
 				}),
 			),
 		).resolves.toBe("completed");
-		expect(contexts[0].systemPrompt).toBe("D3R test prompt");
+		expect(contexts[0].systemPrompt).toContain("D3R test prompt");
+		expect(contexts[0].systemPrompt).toContain("Response 1 of 50");
 		expect(contexts[0].tools).toEqual([]);
 		expect(settings[0]?.reasoning).toBe("medium");
 		const text = chunks.filter((chunk) => chunk.kind === "text");

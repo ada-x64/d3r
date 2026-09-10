@@ -27,6 +27,8 @@ const LOCAL_CAPABILITIES: Readonly<
 	vault_edit: "edit",
 	vault_mv: "write",
 	vault_rm: "write",
+	web_search: "web",
+	web_fetch: "web",
 };
 /** Explicit tool names extend a role with selected MCP tools, not all remote tools. */
 export const nativeRoleTools = (
@@ -78,6 +80,7 @@ const resourceContext = (resources: AgentResources): string =>
 		resources.instructions,
 		`Workspace vault location: ${resources.vaultRoot}. Use vault_read, vault_ls, vault_find, and vault_lint for vault documents; use vault_write/vault_edit for approved artifact changes. Their paths are relative to this pinned vault, not the repository or process cwd. In role briefs, .misc/templates/, .misc/archive/, process/, notes/, and issues/ refer to vault-relative paths. For example, read .misc/templates/remember.md with vault_read, not read_file. Read relevant vault instructions and templates before writing; do not substitute core/seed templates for an inaccessible vault. vault_read returns a file snapshot; pass it to every overwrite, edit, move, or removal. Vault tools use saved disk contents, not unsaved editor buffers. vault_mv/vault_rm support files only, not directories; directory archival requires an explicitly approved command. No tool implicitly initializes or commits the vault.`,
 		"Skills are inert text. Use read_skill with a skill's name to read its pinned SKILL.md before using it. Reading a skill does not authorize commands or code execution.",
+		"For external research, use the installed web_search and web_fetch tools rather than curl, shell-based Exa calls, or reading environment credentials. This is the native equivalent of any bash/EXA_API_KEY workflow mentioned in a role brief. Credentials are managed by the host. If web tools report unavailable configuration, ask the operator to configure them; do not inspect or print secrets or work around a denial with run_command. Search and fetch have separate thread approval scopes. Only tools in your tool list are available.",
 		...resources.skills.map(
 			(skill) =>
 				`Skill ${skill.name}: ${skill.description}\nRead: ${skill.path}`,

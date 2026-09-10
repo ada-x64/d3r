@@ -218,6 +218,75 @@ internal error. To start with a revised prompt, send `abandon`, then resend the
 slash command with your new instructions. Abandoning does not undo prior
 effects.
 
+## Request budgets and extensions
+
+Each routing prompt and each dispatched role starts with **50 model requests**,
+with a default hard cap of **100** for that invocation. This counts provider
+requests, not individual tool calls or tokens; final synthesis also consumes a
+request. The model receives its current count, allowance, remaining requests,
+and hard cap before each request, with a warning when five or fewer remain.
+These reminders are not stored as conversation messages.
+
+A role can ask for more through a tool call before its allowance is exhausted:
+
+```text
+d3r_request_extension({"reason": "Finish retrieving sources and save the research report", "additionalRequests": 50})
+```
+
+The permission request names the role and proposed allowance. Only approval
+increases that invocation's limit; it does not affect siblings, later prompts,
+file permissions, or the hard cap. `additionalRequests` accepts 1-50 and
+defaults to the smaller of 50 and available headroom. Duplicate requests are
+suppressed; a denial or failed/cancelled approval cannot increase the limit and
+must not be retried in the same invocation. Extensions never have a
+remembered-approval option.
+
+Request the extension early enough to save and report if it is denied. The
+requesting response itself counts, and there is no hidden extra allowance for a
+final response after `d3r_report`. Hitting the limit still stops unfinished
+work; it does not automatically resume a disposed role or rerun earlier effects.
+
+## Built-in web research
+
+Roles with the `web` capability, including the researcher, receive `web_search`
+and `web_fetch` directly. The native runtime directs them to these tools instead
+of curl or inspecting environment credentials, without changing the underlying
+role definitions.
+
+```text
+web_search({"query": "ACP tool approval behavior", "k": 5})
+web_fetch({"urls": ["https://agentclientprotocol.com/"]})
+```
+
+Configure `EXA_API_KEY` in the D3R host process environment; Exa is the default
+and currently supported `D3R_WEB_SEARCH_PROVIDER`. These credentials are
+separate from model-provider authentication. Missing or invalid configuration
+produces a safe tool error without a network request, rather than requiring a
+shell workaround. Credentials are not model arguments and are redacted from
+retained tool output.
+
+Both operations contact the fixed Exa service: searches send queries, and
+fetches send the requested URLs for extracted text. They may incur Exa charges.
+D3R does not fetch the supplied URLs directly; it rejects non-HTTP(S), userinfo,
+and recognized credential-bearing URLs. Network requests have a 30-second
+deadline, redirects are rejected, response bodies are bounded at 1 MiB, and
+displayed output is capped at 64 KiB with `[Output truncated]` when needed.
+Truncated text is not guaranteed to remain parseable JSON; use smaller
+result/page batches.
+
+The first request offers **Allow once**, **Reject**, and **Allow web searches
+via Exa for this thread** or **Allow web fetches via Exa for this thread**.
+Search and fetch grants are separate. A thread grant covers subsequent calls of
+that kind across roles, including queued concurrent calls, without another
+approval. A fetch grant is not a domain allowlist; it covers all URLs accepted
+by that tool. It never authorizes commands, file/vault mutations, MCP calls, or
+request-budget extensions.
+
+Grants live only in the open session and are not written to checkpoints.
+Closing, reloading, reconnecting, or starting another thread requires fresh
+permission. An **Allow once** decision is not shared with other queued calls,
+and late responses after cancellation cannot create a remembered grant.
+
 ## Permissions and tools
 
 Before the first model request, approve workspace use for the current session.
@@ -233,8 +302,9 @@ when supplied; unnormalized activity uses `# requested cwd: ...` instead. The
 title may shorten a long command, but the detail retains every argument and
 masks recognized credentials. This formatting is display-only: execution still
 uses the original executable, argv, cwd, and timeout, including any
-platform/client launch wrappers. The choices remain **Allow once** and
-**Reject**; remembered approvals are not implemented.
+platform/client launch wrappers. Commands still offer only **Allow once** and
+**Reject**. Remembered approvals are limited to explicit built-in web scopes, as
+described above.
 
 An approval-gated tool waits for its permission response before executing. This
 does not freeze the whole session: independent parallel workflow roles may
@@ -252,12 +322,13 @@ warning; rebuild and restart the agent connection if you still see that warning
 instead of setup guidance.
 
 Native tools include file read/write/edit, directory listing, literal search,
-explicit executable-plus-argv commands, skill reads, and configured MCP tools.
-Use the snapshot token returned by `read_file` when editing or overwriting an
-existing file. Disk writes use staged atomic replacement and preimage checks;
-structured diffs show actual old and new content. Negotiated editor reads/writes
-include unsaved buffers. Editor protocols do not provide atomic
-compare-and-swap, so a concurrent human edit can still race a write.
+explicit executable-plus-argv commands, skill reads, built-in web research, and
+configured MCP tools. Use the snapshot token returned by `read_file` when
+editing or overwriting an existing file. Disk writes use staged atomic
+replacement and preimage checks; structured diffs show actual old and new
+content. Negotiated editor reads/writes include unsaved buffers. Editor
+protocols do not provide atomic compare-and-swap, so a concurrent human edit can
+still race a write.
 
 Search scans saved disk contents without opening each candidate through the
 editor. Results retain file paths and line numbers in their text, but are not

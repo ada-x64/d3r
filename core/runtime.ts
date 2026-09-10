@@ -78,12 +78,19 @@ export type RuntimeActivity =
 			readonly cost?: { readonly amount: number; readonly currency: string };
 	  };
 
+/** A shell-defined grant scope, never derived from model arguments or a display title. */
+export interface RuntimePermissionScope {
+	readonly id: string;
+	readonly label: string;
+}
+
 /** Authorization is requested before privileged effects, never inferred from a title. */
 export interface RuntimePermission {
 	readonly toolCallId: string;
 	readonly title: string;
 	readonly kind: RuntimeToolKind;
 	readonly input: unknown;
+	readonly scope?: RuntimePermissionScope;
 }
 
 /** A command is an executable plus argv, not implicit shell interpolation. */
@@ -151,6 +158,7 @@ export interface RuntimeTool {
 	/** Original schema for tools whose execution validator contains refinements. */
 	readonly inputSchema?: Record<string, unknown>;
 	readonly permission: "ask" | "none";
+	readonly permissionScope?: RuntimePermissionScope;
 	readonly execute: (
 		args: unknown,
 		context: RuntimeToolContext,

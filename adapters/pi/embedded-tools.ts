@@ -154,6 +154,9 @@ export const createToolBridge = (
 						title: tool.name,
 						kind: tool.kind,
 						input: structuredClone(call.args),
+						...(tool.permissionScope === undefined
+							? {}
+							: { scope: tool.permissionScope }),
 					},
 					activeSignal,
 				);

@@ -19,9 +19,15 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { http, HttpResponse } from "msw";
+import { setupServer } from "msw/node";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Models } from "../pi/auth.ts";
-import { createNativeDeps } from "../../cli/src/native.ts";
+import { createEmbeddedRuntime } from "../pi/embedded.ts";
+import {
+	createNativeDeps,
+	type NativeDependencies,
+} from "../../cli/src/native.ts";
 import {
 	nativeModelKey,
 	type NativeModel,
@@ -122,6 +128,19 @@ const journeyResult = (context: JourneyContext, id: string) =>
 	context.messages.findLast(
 		(message) => message.role === "toolResult" && message.toolCallId === id,
 	);
+/** Read model-visible tool output without asserting inside the provider callback. */
+const journeyResultText = (context: JourneyContext, id: string) => {
+	const result = journeyResult(context, id);
+	return result?.role === "toolResult"
+		? result.content
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n")
+		: "";
+};
+/** Small real invocation limits make boundary journeys independent of production defaults. */
+const JOURNEY_BUDGET = { maxTurns: 3, maxTotalTurns: 6 };
+/** ACP grants must select an offered option; cancellation is not a rejection selection. */
+type JourneyDecision = boolean | "allow_scope" | "cancelled";
 /** Read the public JSON text envelope; fixtures must use actual read snapshots. */
 const journeyPage = (context: JourneyContext, id: string) => {
 	const result = journeyResult(context, id);
@@ -143,6 +162,11 @@ const journeyPage = (context: JourneyContext, id: string) => {
 /** Reports are model tool calls, never direct workflow callback submissions. */
 const journeyReport = (summary: string, extra: Record<string, unknown> = {}) =>
 	journeyCall("d3r_report", { status: "completed", summary, ...extra });
+/** A role must submit its structured report and then finish the real model loop. */
+const journeyDone = (summary: string): JourneyMessage["content"][] => [
+	journeyReport(summary),
+	[{ type: "text", text: summary }],
+];
 /** Segmentation is not a UX contract; assert the assembled assistant response. */
 const journeyText = (updates: readonly SessionNotification[]) =>
 	updates
@@ -182,10 +206,14 @@ describe("native ACP shipped-workflow journeys", () => {
 		{
 			workspace = "workspace",
 			readTextFile,
+			getWebConfig = () => ({ providerId: "exa" }),
+			createRuntime = createEmbeddedRuntime,
 			streamResponse = (_role: string, content: JourneyMessage["content"]) =>
 				journeyStream(content),
 		}: {
 			workspace?: string;
+			getWebConfig?: NativeDependencies["getWebProviderConfig"];
+			createRuntime?: NativeDependencies["createEmbeddedRuntime"];
 			streamResponse?: (
 				role: string,
 				content: JourneyMessage["content"],
@@ -210,7 +238,9 @@ describe("native ACP shipped-workflow journeys", () => {
 		const permissions: RequestPermissionRequest[] = [];
 		const reads: ReadTextFileRequest[] = [];
 		const approval = {
-			decide: async (_request: RequestPermissionRequest) => true,
+			decide: async (
+				_request: RequestPermissionRequest,
+			): Promise<JourneyDecision> => true,
 		};
 		const streamSimple: Models["streamSimple"] = (_model, context) => {
 			const role =
@@ -240,6 +270,8 @@ describe("native ACP shipped-workflow journeys", () => {
 			const deps = await createNativeDeps(
 				{ home, version: "journey-test" },
 				{
+					getWebProviderConfig: getWebConfig,
+					createEmbeddedRuntime: createRuntime,
 					createModelRuntime: async () => ({
 						getAvailable: async () => [JOURNEY_MODEL],
 						getProviders: () => [],
@@ -248,13 +280,17 @@ describe("native ACP shipped-workflow journeys", () => {
 					}),
 				},
 			);
+
 			const clientApp = client().onRequest(
 				"session/request_permission",
 				async ({ params }) => {
 					permissions.push(params);
-					const kind = (await approval.decide(params))
-						? "allow_once"
-						: "reject_once";
+					const decision = await approval.decide(params);
+					if (decision === "cancelled") {
+						return { outcome: { outcome: "cancelled" } };
+					}
+					const once = decision ? "allow_once" : "reject_once";
+					const kind = decision === "allow_scope" ? "allow_always" : once;
 					return {
 						outcome: {
 							outcome: "selected",
@@ -280,6 +316,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			});
 			return {
 				...f,
+				saved: (sessionId: string) => deps.store!.get(sessionId),
 				checkpoint: async (sessionId: string) => {
 					const saved = await deps.store!.get(sessionId);
 					const record = saved?.records.at(-1);
@@ -307,6 +344,764 @@ describe("native ACP shipped-workflow journeys", () => {
 					.map((path) => rm(path, { recursive: true, force: true })),
 			);
 		}
+	});
+
+	// oxlint-disable-next-line max-statements -- Follow real HTTP evidence, separate grants, persistence and renewed trust in one research journey.
+	it("researches /design through native Exa tools with thread-scoped consent and no persisted credentials or grants", async () => {
+		const key = "journey-exa-secret+/=";
+		const url = "https://sources.example/durable-queues";
+		const source =
+			"The reference queue fsyncs its journal before acknowledging a job.";
+		const report = `${source}\nProvider echo: [REDACTED]\nSource: ${url}\n`;
+		const network: {
+			url: string;
+			headers: Record<string, string>;
+			body: unknown;
+		}[] = [];
+		const unhandled: string[] = [];
+		const server = setupServer(
+			http.post("https://api.exa.ai/:endpoint", async ({ request, params }) => {
+				network.push({
+					url: request.url,
+					headers: Object.fromEntries(request.headers),
+					body: await request.json(),
+				});
+				return HttpResponse.json({
+					results:
+						params.endpoint === "search"
+							? [
+									{
+										url,
+										highlights: ["Journal durability before acknowledgement"],
+									},
+								]
+							: [{ url, text: `${source}\nProvider echo: ${key}` }],
+				});
+			}),
+		);
+		server.events.on("request:unhandled", ({ request }) =>
+			unhandled.push(request.url),
+		);
+		server.listen({ onUnhandledRequest: "error" });
+		cleanup.push(async () => server.close());
+		const evidence = (context: JourneyContext) => {
+			const { docs } = JSON.parse(
+				journeyResultText(context, "fetch-again"),
+			) as { docs: { url: string; text: string }[] };
+			return `${docs[0].text}\nSource: ${docs[0].url}\n`;
+		};
+		const scripts: JourneyScripts = {
+			aggregator: journeyDone("Local requirements collected."),
+			researcher: [
+				journeyCall(
+					"web_search",
+					{ query: "durable job queue primary sources", k: 1 },
+					"search-first",
+				),
+				journeyCall(
+					"web_search",
+					{ query: "journal acknowledgement ordering", k: 1 },
+					"search-again",
+				),
+				(context) => {
+					const { hits } = JSON.parse(
+						journeyResultText(context, "search-again"),
+					) as { hits: { url: string }[] };
+					return journeyCall(
+						"web_fetch",
+						{ urls: hits.map((hit) => hit.url) },
+						"fetch-first",
+					);
+				},
+				(context) => {
+					const { docs } = JSON.parse(
+						journeyResultText(context, "fetch-first"),
+					) as { docs: { url: string }[] };
+					return journeyCall(
+						"web_fetch",
+						{ urls: docs.map((doc) => doc.url) },
+						"fetch-again",
+					);
+				},
+				(context) =>
+					journeyCall("write_file", {
+						path: "research.md",
+						content: evidence(context),
+					}),
+				(context) => journeyReport(evidence(context)),
+				(context) => [{ type: "text", text: evidence(context) }],
+			],
+			designer: journeyDone("Design grounded in retrieved research."),
+		};
+		const j = await open(scripts, {
+			getWebConfig: () => ({ providerId: "exa", exaApiKey: key }),
+		});
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const request =
+			"/design Research durable queues with web_search and web_fetch; save cited findings in research.md, without shell commands.";
+		j.approval.decide = async () => false;
+		await expect(f.prompt(sessionId, request)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(j.requests).toEqual([]);
+		expect(network).toEqual([]);
+		const search = deferred<JourneyDecision>();
+		const fetch = deferred<JourneyDecision>();
+		const mutation = deferred<JourneyDecision>();
+		j.approval.decide = async ({ toolCall }) => {
+			if (toolCall.title === "web_search") {
+				return search.promise;
+			}
+			if (toolCall.title === "web_fetch") {
+				return fetch.promise;
+			}
+			if (toolCall.title === "write_file") {
+				return mutation.promise;
+			}
+			return true;
+		};
+		const pending = f.prompt(sessionId, request);
+		try {
+			await vi.waitFor(() =>
+				expect(
+					j.permissions.some(({ toolCall }) => toolCall.title === "web_search"),
+				).toBe(true),
+			);
+			expect(network).toEqual([]);
+			search.resolve("allow_scope");
+			await vi.waitFor(() =>
+				expect(
+					j.permissions.some(({ toolCall }) => toolCall.title === "web_fetch"),
+				).toBe(true),
+			);
+			expect(network.map((entry) => entry.url)).toEqual([
+				"https://api.exa.ai/search",
+				"https://api.exa.ai/search",
+			]);
+			fetch.resolve("allow_scope");
+			await vi.waitFor(() =>
+				expect(
+					j.permissions.some(({ toolCall }) => toolCall.title === "write_file"),
+				).toBe(true),
+			);
+			await expect(
+				readFile(resolve(j.cwd, "research.md")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			expect(
+				j.permissions
+					.find(({ toolCall }) => toolCall.title === "write_file")
+					?.options.map(({ kind }) => kind),
+			).toEqual(["allow_once", "reject_once"]);
+			mutation.resolve(true);
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+		} finally {
+			search.resolve(false);
+			fetch.resolve(false);
+			mutation.resolve(false);
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			await pending;
+		}
+		const webPermissions = j.permissions.filter(({ toolCall }) =>
+			toolCall.title?.startsWith("web_"),
+		);
+		expect(webPermissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			"web_search",
+			"web_fetch",
+		]);
+		expect(webPermissions.map(({ options }) => options.at(-1))).toEqual([
+			{
+				optionId: "allow_scope",
+				kind: "allow_always",
+				name: "Allow web searches via Exa for this thread",
+			},
+			{
+				optionId: "allow_scope",
+				kind: "allow_always",
+				name: "Allow web fetches via Exa for this thread",
+			},
+		]);
+		expect(
+			network.map(({ url: endpoint, body }) => ({ endpoint, body })),
+		).toEqual([
+			...[
+				"durable job queue primary sources",
+				"journal acknowledgement ordering",
+			].map((query) => ({
+				endpoint: "https://api.exa.ai/search",
+				body: { query, numResults: 1, contents: { highlights: true } },
+			})),
+			...Array.from({ length: 2 }, () => ({
+				endpoint: "https://api.exa.ai/contents",
+				body: { urls: [url], text: { maxCharacters: expect.any(Number) } },
+			})),
+		]);
+		const researcher = j.requests.findLast(
+			({ role }) => role === "researcher",
+		)!.context;
+		j.requests
+			.filter(({ role }) => role === "researcher")
+			.forEach(({ context }, index) => {
+				expect(context.systemPrompt).toContain(`Response ${index + 1} of 50`);
+				expect(context.systemPrompt).toContain("Hard cap: 100");
+				expect(JSON.stringify(context.messages)).not.toContain(
+					"[D3R request budget",
+				);
+			});
+		expect(JSON.parse(journeyResultText(researcher, "search-again"))).toEqual({
+			hits: [
+				{
+					id: url,
+					title: url,
+					url,
+					highlights: ["Journal durability before acknowledgement"],
+				},
+			],
+		});
+		expect(JSON.parse(journeyResultText(researcher, "fetch-again"))).toEqual({
+			docs: [
+				{ url, title: null, text: `${source}\nProvider echo: [REDACTED]` },
+			],
+		});
+		for (const id of [
+			"search-first",
+			"search-again",
+			"fetch-first",
+			"fetch-again",
+		]) {
+			expect(journeyResult(researcher, id)).toMatchObject({
+				role: "toolResult",
+				isError: false,
+			});
+		}
+		expect(
+			researcher.tools?.find(({ name }) => name === "web_search")?.parameters,
+		).toMatchObject({
+			type: "object",
+			required: ["query"],
+			additionalProperties: false,
+			properties: {
+				query: { type: "string" },
+				k: { type: "integer", default: 5, maximum: 20 },
+			},
+		});
+		expect(
+			researcher.tools?.find(({ name }) => name === "web_fetch")?.parameters,
+		).toMatchObject({
+			type: "object",
+			required: ["urls"],
+			additionalProperties: false,
+			properties: {
+				urls: {
+					type: "array",
+					minItems: 1,
+					maxItems: 20,
+					items: { type: "string", format: "uri" },
+				},
+			},
+		});
+		await expect(readFile(resolve(j.cwd, "research.md"), "utf8")).resolves.toBe(
+			report,
+		);
+		const researchCard = journeyTools(f.updates).findLast(
+			(update) => update.title === "researcher",
+		)!;
+		expect(researchCard).toMatchObject({
+			status: "completed",
+			rawOutput: { status: "completed", summary: report.trim() },
+		});
+		expect(journeyToolText(researchCard)).toContain(report.trim());
+		expect(journeyText(f.updates)).toContain(
+			"Discuss design questions before drafting",
+		);
+		j.approval.decide = async () => true;
+		await expect(
+			f.prompt(
+				sessionId,
+				"Use the retrieved durability findings in the design.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(
+			JSON.stringify(
+				j.requests.find(({ role }) => role === "designer")?.context.messages,
+			),
+		).toContain(source);
+		expect(journeyText(f.updates)).toContain(
+			"Workflow /design completed with structured reports.",
+		);
+
+		const probeScopes = async (
+			connection: typeof f,
+			id: string,
+			reuse = false,
+		) => {
+			const before = j.requests.length;
+			const permissionsBefore = j.permissions.length;
+			const networkBefore = network.length;
+			const names = ["web_search", "web_fetch"];
+			const prompt = "/design Check for new external evidence using web tools.";
+			const summary = reuse
+				? "Retrieved new evidence using the thread grants."
+				: "No new external evidence: web access was declined.";
+			scripts.aggregator = journeyDone("Local recon complete.");
+			scripts.researcher = [
+				journeyCall("web_search", { query: "new evidence" }),
+				journeyCall("web_fetch", { urls: [url] }),
+				...journeyDone(summary),
+			];
+			if (!reuse) {
+				j.approval.decide = async () => false;
+				await expect(connection.prompt(id, prompt)).resolves.toEqual({
+					stopReason: "end_turn",
+				});
+				expect(j.requests).toHaveLength(before);
+				expect(network).toHaveLength(networkBefore);
+				expect(j.permissions.at(-1)?.toolCall.title).toMatch(
+					/^Trust workspace/,
+				);
+			}
+			j.approval.decide = async ({ toolCall }) =>
+				toolCall.title?.startsWith("Trust workspace") === true;
+			await expect(connection.prompt(id, prompt)).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			expect(
+				j.permissions
+					.slice(permissionsBefore)
+					.map(({ toolCall }) => toolCall.title),
+			).toEqual(
+				reuse
+					? []
+					: [
+							expect.stringMatching(/^Trust workspace/),
+							expect.stringMatching(/^Trust workspace/),
+							...names,
+						],
+			);
+			expect(network).toHaveLength(networkBefore + (reuse ? names.length : 0));
+			const { context } = j.requests.findLast(
+				({ role }) => role === "researcher",
+			)!;
+			for (const name of names) {
+				expect(journeyResult(context, name)).toMatchObject({ isError: !reuse });
+				expect(journeyResultText(context, name)).toMatch(
+					reuse ? /sources.example/ : /denied/i,
+				);
+			}
+			expect(
+				journeyTools(connection.updates).findLast(
+					(update) => update.title === "researcher",
+				),
+			).toMatchObject({ status: "completed", rawOutput: { summary } });
+			if (reuse) {
+				scripts.designer = journeyDone("Updated design based on new evidence.");
+				await expect(
+					connection.prompt(id, "Use the new evidence."),
+				).resolves.toEqual({ stopReason: "end_turn" });
+			}
+		};
+		await probeScopes(f, sessionId, true);
+		const fresh = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId: fresh.sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await probeScopes(f, fresh.sessionId);
+		const saved = await f.saved(sessionId);
+		await f.close();
+		const resumed = await j.connect();
+		const networkBeforeLoad = network.length;
+		const requestsBeforeLoad = j.requests.length;
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		expect(network).toHaveLength(networkBeforeLoad);
+		expect(j.requests).toHaveLength(requestsBeforeLoad);
+		await probeScopes(resumed, sessionId);
+		for (const state of [saved, await resumed.saved(sessionId)]) {
+			const text = JSON.stringify(state);
+			expect(text).not.toContain("allow_scope");
+			expect(text).not.toMatch(/exa:web_(search|fetch)/);
+			expect(text).not.toContain(key);
+			expect(text).not.toContain(encodeURIComponent(key));
+		}
+		expect(
+			JSON.stringify([j.requests, j.permissions, f.updates, resumed.updates]),
+		).not.toContain(key);
+		expect(
+			JSON.stringify(j.requests.flatMap(({ context }) => context.messages)),
+		).not.toContain('"name":"run_command"');
+		expect(
+			j.permissions.some(
+				({ toolCall }) =>
+					toolCall.kind === "execute" &&
+					!toolCall.title?.startsWith("Trust workspace"),
+			),
+		).toBe(false);
+		for (const { headers, body, url: endpoint } of network) {
+			expect(headers["x-api-key"]).toBe(key);
+			expect(headers["content-type"]).toBe("application/json");
+			expect(
+				JSON.stringify([
+					endpoint,
+					body,
+					Object.entries(headers).filter(([name]) => name !== "x-api-key"),
+				]),
+			).not.toContain(key);
+		}
+		expect(unhandled).toEqual([]);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	// oxlint-disable-next-line max-statements -- Independent held grants prove both retained-context completion and a real hard-cap stop.
+	it("extends a role at its last request through ACP without extending its sibling or passing the hard cap", async () => {
+		const extension = (reason: string) =>
+			journeyCall("d3r_request_extension", { reason });
+		const read = journeyCall("read_file", { path: "brief.txt" });
+		const summary =
+			"Research confirms the queue must retain acknowledged jobs.";
+		const scripts: JourneyScripts = {
+			researcher: [
+				read,
+				read,
+				extension("Save research evidence and synthesize the report"),
+				(context) =>
+					journeyCall("write_file", {
+						path: "research.md",
+						content: journeyResultText(context, "read_file"),
+					}),
+				...journeyDone(summary),
+				[{ type: "text", text: "Unbudgeted researcher request" }],
+			],
+			aggregator: [
+				read,
+				read,
+				extension("Inspect remaining local constraints"),
+				read,
+				read,
+				extension("Must not exceed the hard cap"),
+				[{ type: "text", text: "Unbudgeted aggregator request" }],
+			],
+		};
+		const j = await open(scripts, {
+			createRuntime: (options) =>
+				createEmbeddedRuntime({ ...options, ...JOURNEY_BUDGET }),
+		});
+		await writeFile(
+			resolve(j.cwd, "brief.txt"),
+			"The queue must retain acknowledged jobs.",
+		);
+		const grants = {
+			researcher: deferred<JourneyDecision>(),
+			aggregator: deferred<JourneyDecision>(),
+		};
+		j.approval.decide = async ({ toolCall }) => {
+			if (toolCall.title?.startsWith("Extend request budget (researcher)")) {
+				return grants.researcher.promise;
+			}
+			if (toolCall.title?.startsWith("Extend request budget (aggregator)")) {
+				return grants.aggregator.promise;
+			}
+			return true;
+		};
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const request =
+			"/design Research brief.txt; request any extra model allowance with d3r_request_extension, then save and report within the approved budget.";
+		const pending = f.prompt(sessionId, request);
+		const extensions = () =>
+			j.permissions.filter(({ toolCall }) =>
+				toolCall.title?.startsWith("Extend request budget"),
+			);
+		const contexts = (role: string) =>
+			j.requests
+				.filter((entry) => entry.role === role)
+				.map(({ context }) => context);
+		try {
+			await vi.waitFor(() =>
+				expect(extensions()).toHaveLength(Object.keys(grants).length),
+			);
+			for (const role of ["researcher", "aggregator"] as const) {
+				expect(contexts(role)).toHaveLength(JOURNEY_BUDGET.maxTurns);
+				const permission = extensions().find(({ toolCall }) =>
+					toolCall.title?.includes(`(${role})`),
+				)!;
+				expect(permission.toolCall).toMatchObject({
+					title: `Extend request budget (${role}): 3 -> 6 (hard cap 6)`,
+					rawInput: {
+						reason:
+							role === "researcher"
+								? "Save research evidence and synthesize the report"
+								: "Inspect remaining local constraints",
+						additionalRequests: 3,
+						currentLimit: 3,
+						requestedLimit: 6,
+						maxTotalTurns: 6,
+					},
+				});
+				expect(permission.options.map(({ kind }) => kind)).toEqual([
+					"allow_once",
+					"reject_once",
+				]);
+			}
+			await f.peer.agent.request("session/list", {});
+			expect(contexts("researcher")).toHaveLength(JOURNEY_BUDGET.maxTurns);
+			await expect(
+				readFile(resolve(j.cwd, "research.md")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			grants.researcher.resolve(true);
+			await vi.waitFor(() =>
+				expect(
+					journeyTools(f.updates).findLast(
+						(update) => update.title === "researcher",
+					)?.status,
+				).toBe("completed"),
+			);
+			expect(contexts("researcher")).toHaveLength(JOURNEY_BUDGET.maxTotalTurns);
+			expect(contexts("aggregator")).toHaveLength(JOURNEY_BUDGET.maxTurns);
+			grants.aggregator.resolve(true);
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+		} finally {
+			grants.researcher.resolve(false);
+			grants.aggregator.resolve(false);
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			await pending;
+		}
+		const researcher = contexts("researcher");
+		const firstExtended = researcher[JOURNEY_BUDGET.maxTurns];
+		expect(
+			firstExtended.messages.slice(
+				0,
+				researcher[JOURNEY_BUDGET.maxTurns - 1].messages.length,
+			),
+		).toEqual(researcher[JOURNEY_BUDGET.maxTurns - 1].messages);
+		expect(journeyResultText(firstExtended, "d3r_request_extension")).toMatch(
+			/approved.*invocation only/i,
+		);
+		expect(journeyResult(firstExtended, "d3r_request_extension")).toMatchObject(
+			{ isError: false },
+		);
+		await expect(
+			readFile(resolve(j.cwd, "research.md"), "utf8"),
+		).resolves.toContain("The queue must retain acknowledged jobs.");
+		expect(
+			journeyTools(f.updates).findLast(
+				(update) => update.title === "researcher",
+			),
+		).toMatchObject({
+			status: "completed",
+			rawOutput: { status: "completed", summary },
+		});
+		expect(
+			journeyTools(f.updates).findLast(
+				(update) => update.title === "aggregator",
+			),
+		).toMatchObject({
+			status: "failed",
+			rawOutput: { error: expect.stringContaining("request_limit") },
+		});
+		expect(extensions()).toHaveLength(Object.keys(grants).length);
+		for (const role of ["researcher", "aggregator"]) {
+			expect(contexts(role)).toHaveLength(JOURNEY_BUDGET.maxTotalTurns);
+			expect(scripts[role]).toHaveLength(1);
+			contexts(role).forEach((context, index) => {
+				const limit =
+					index < JOURNEY_BUDGET.maxTurns
+						? JOURNEY_BUDGET.maxTurns
+						: JOURNEY_BUDGET.maxTotalTurns;
+				expect(context.systemPrompt).toContain(
+					`Response ${index + 1} of ${limit}`,
+				);
+				expect(context.systemPrompt).toContain(
+					`Remaining model requests: ${limit - index}, including this response`,
+				);
+				expect(context.systemPrompt).toContain("Hard cap: 6");
+				expect(
+					context.systemPrompt?.match(/\[D3R request budget -/g),
+				).toHaveLength(1);
+				expect(
+					context.messages.filter((message) => message.role === "user"),
+				).toHaveLength(1);
+				expect(JSON.stringify(context.messages)).toContain(request);
+				expect(JSON.stringify(context.messages)).not.toContain(
+					"[D3R request budget",
+				);
+			});
+		}
+		expect(
+			researcher[0].tools?.find(({ name }) => name === "d3r_request_extension")
+				?.parameters,
+		).toMatchObject({
+			type: "object",
+			required: ["reason"],
+			properties: {
+				reason: { type: "string", minLength: 1 },
+				additionalRequests: {
+					type: "integer",
+					exclusiveMinimum: 0,
+					maximum: 50,
+				},
+			},
+		});
+		expect(JSON.stringify(await f.saved(sessionId))).not.toContain(
+			"[D3R request budget",
+		);
+		expect(
+			journeyTools(f.updates)
+				.filter((update) => update.title === "d3r_request_extension")
+				.map(journeyToolText)
+				.join("\n"),
+		).toContain("hard-cap headroom");
+	});
+
+	// oxlint-disable-next-line max-statements -- Denial and permission-dialog cancellation leave both recon roles enough initial budget to save partial findings.
+	it("finalizes partial reports after denied and cancelled extensions without repeated permission prompts", async () => {
+		const roles = ["researcher", "aggregator"] as const;
+		const scripts: JourneyScripts = Object.fromEntries(
+			roles.map((role) => [
+				role,
+				[
+					journeyCall("d3r_request_extension", {
+						reason: `Gather more evidence for ${role}`,
+						additionalRequests: 3,
+					}),
+					[
+						...journeyCall("d3r_request_extension", {
+							reason: "Retry must not prompt",
+							additionalRequests: 1,
+						}),
+						...journeyCall("write_file", {
+							path: `${role}-partial.md`,
+							content: `Partial ${role} findings: additional research was not authorized.\n`,
+						}),
+						...journeyReport(
+							`Partial ${role} findings; further evidence remains unverified.`,
+						),
+					],
+					[
+						{
+							type: "text",
+							text: `Saved partial ${role} findings within the original allowance.`,
+						},
+					],
+					[{ type: "text", text: "Unapproved extra request" }],
+				],
+			]),
+		);
+		const j = await open(scripts, {
+			createRuntime: (options) =>
+				createEmbeddedRuntime({ ...options, ...JOURNEY_BUDGET }),
+		});
+		j.approval.decide = async ({ toolCall }) => {
+			if (toolCall.title?.startsWith("Extend request budget (researcher)")) {
+				return false;
+			}
+			if (toolCall.title?.startsWith("Extend request budget (aggregator)")) {
+				return "cancelled";
+			}
+			return true;
+		};
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(
+			f.prompt(
+				sessionId,
+				"/design Gather evidence; use d3r_request_extension if needed, but save partial findings and report limitations if not approved.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const extensions = j.permissions.filter(({ toolCall }) =>
+			toolCall.title?.startsWith("Extend request budget"),
+		);
+		expect(extensions).toHaveLength(roles.length);
+		await Promise.all(
+			roles.map(async (role) => {
+				const contexts = j.requests
+					.filter((entry) => entry.role === role)
+					.map(({ context }) => context);
+				expect(contexts).toHaveLength(JOURNEY_BUDGET.maxTurns);
+				expect(scripts[role]).toHaveLength(1);
+				expect(
+					extensions.filter(({ toolCall }) =>
+						toolCall.title?.includes(`(${role})`),
+					),
+				).toHaveLength(1);
+				expect(
+					journeyResult(contexts[1], "d3r_request_extension"),
+				).toMatchObject({ isError: true });
+				expect(
+					journeyResultText(contexts[1], "d3r_request_extension"),
+				).toContain("Budget unchanged");
+				expect(
+					journeyResultText(contexts.at(-1)!, "d3r_request_extension"),
+				).toContain("already denied");
+				contexts.forEach((context, index) => {
+					expect(context.systemPrompt).toContain(`Response ${index + 1} of 3`);
+					expect(context.systemPrompt).toContain(
+						`Remaining model requests: ${JOURNEY_BUDGET.maxTurns - index}`,
+					);
+					if (index > 0) {
+						expect(context.systemPrompt).toContain("No extension is available");
+					}
+					expect(JSON.stringify(context.messages)).not.toContain(
+						"[D3R request budget",
+					);
+				});
+				await expect(
+					readFile(resolve(j.cwd, `${role}-partial.md`), "utf8"),
+				).resolves.toBe(
+					`Partial ${role} findings: additional research was not authorized.\n`,
+				);
+				const card = journeyTools(f.updates).findLast(
+					(update) => update.title === role,
+				)!;
+				expect(card).toMatchObject({
+					status: "completed",
+					rawOutput: {
+						status: "completed",
+						summary: `Partial ${role} findings; further evidence remains unverified.`,
+					},
+				});
+				expect(journeyToolText(card)).toContain(
+					`Saved partial ${role} findings within the original allowance.`,
+				);
+			}),
+		);
+		expect(
+			j.permissions.filter(({ toolCall }) => toolCall.title === "write_file"),
+		).toHaveLength(roles.length);
+		expect(
+			j.permissions.every(({ options }) =>
+				options.every(
+					({ kind }) => kind === "allow_once" || kind === "reject_once",
+				),
+			),
+		).toBe(true);
+		expect(journeyText(f.updates)).toContain(
+			"Discuss design questions before drafting",
+		);
+		expect(JSON.stringify(await f.saved(sessionId))).not.toContain(
+			"Request extension approved",
+		);
 	});
 
 	// oxlint-disable-next-line max-statements -- Prove live overlap, independent context, durable replay and continuation in one real-stack journey.
