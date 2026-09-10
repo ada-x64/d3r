@@ -33,6 +33,11 @@ import {
 import { type AgentDefinition } from "./resources.ts";
 import { PhaseAction, renderWorkflowBrief } from "./workflow-phase-tools.ts";
 import {
+	WorkflowTopicName,
+	createWorkflowTopicName,
+	renderWorkflowTopic,
+} from "./workflow-topic.ts";
+import {
 	standaloneWorkflow,
 	executionWorkflow,
 	STANDALONE_COMMAND,
@@ -61,6 +66,8 @@ export interface WorkflowRuntimeOptions {
 	readonly routing: RuntimeSession;
 	/** Keep the conversation in routing and expose phase execution only through tools. */
 	readonly orchestrated?: boolean;
+	/** Live host context is refreshed for routing, never mistaken for an operator message. */
+	readonly orchestratorContext?: (signal: AbortSignal) => Promise<string>;
 	readonly workflow: Workflow;
 	readonly agents: readonly AgentDefinition[];
 	readonly createAgent: (
@@ -133,6 +140,7 @@ const Checkpoint = z
 		summary: WorkflowSummary.optional(),
 		orchestrated: z.boolean().optional(),
 		standaloneRole: z.string().min(1).optional(),
+		topic: WorkflowTopicName.optional(),
 		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
@@ -145,6 +153,10 @@ const Checkpoint = z
 		(saved) =>
 			saved.summary === undefined || saved.engine?.status === "completed",
 		"A workflow summary requires a completed engine",
+	)
+	.refine(
+		(saved) => saved.topic === undefined || saved.orchestrated === true,
+		"A topic requires orchestrated workflow state",
 	);
 
 /** Ordered structured summaries, not arrival order or prose heuristics, feed later roles. */
@@ -282,6 +294,7 @@ export const createWorkflowRuntime = (
 	checkResources(workflow, options.agents);
 	let phase = "routing";
 	let standaloneRole: string | undefined = undefined;
+	let topic: string | undefined = undefined;
 	let engine: EngineState | null = null;
 	let history: RuntimeContent[] = [];
 	let input: RuntimeContent[] = [];
@@ -358,6 +371,9 @@ export const createWorkflowRuntime = (
 		...(orchestrated ? phaseHistory : history),
 		...input,
 		...outputs(engine),
+		...(topic === undefined
+			? []
+			: [{ type: "text" as const, text: renderWorkflowTopic(topic) }]),
 		{
 			type: "text",
 			text: standaloneRole
@@ -628,11 +644,21 @@ export const createWorkflowRuntime = (
 	};
 	const canResume = () => canResumeWorkflow(engine, continuations);
 	const phaseState = () =>
-		describeWorkflowState(engine, {
-			phase,
-			resumable: canResume(),
-			standaloneRole,
-		});
+		[
+			describeWorkflowState(engine, {
+				phase,
+				resumable: canResume(),
+				standaloneRole,
+			}),
+			...(topic === undefined
+				? []
+				: [
+						active()
+							? "Current task topic:"
+							: "Most recent topic; reuse only for follow-on work on the same subject:",
+						renderWorkflowTopic(topic),
+					]),
+		].join("\n\n");
 	// oxlint-disable-next-line max-statements -- A phase tool owns its transition and effect lifetime under one guard.
 	const runPhase = async (
 		value: PhaseAction,
@@ -698,6 +724,7 @@ export const createWorkflowRuntime = (
 				);
 				archiveWorkflow();
 				engine = started;
+				topic = action.topic ?? createWorkflowTopicName(action.brief.goal);
 				standaloneRole = action.role;
 				phase = "routing";
 				phaseHistory = structuredClone(history);
@@ -722,6 +749,7 @@ export const createWorkflowRuntime = (
 				);
 				archiveWorkflow();
 				engine = started;
+				topic = action.topic ?? createWorkflowTopicName(action.brief.goal);
 				phaseHistory = structuredClone(history);
 				({ phase } = action);
 				input = [
@@ -796,6 +824,10 @@ export const createWorkflowRuntime = (
 		phaseUsed = false;
 		const text = new Map<string, string>();
 		try {
+			const hostContext = orchestrated
+				? await options.orchestratorContext?.(request.signal)
+				: undefined;
+			request.signal.throwIfAborted();
 			const reason = await routing.prompt({
 				...request,
 				content: [
@@ -808,6 +840,9 @@ export const createWorkflowRuntime = (
 									text: `D3R runtime phase state (authoritative):\n${phaseState()}`,
 								},
 							]
+						: []),
+					...(hostContext
+						? [{ type: "text" as const, text: hostContext }]
 						: []),
 				],
 				emit: async (chunk) => {
@@ -1040,6 +1075,7 @@ export const createWorkflowRuntime = (
 				...(summary === null ? {} : { summary }),
 				...(orchestrated ? { orchestrated, continuations, phaseHistory } : {}),
 				...(standaloneRole === undefined ? {} : { standaloneRole }),
+				...(topic === undefined ? {} : { topic }),
 				routing: snapshotWorkflowJson(
 					routingBusy ? routingBefore : routing.snapshot(),
 				),
@@ -1111,7 +1147,7 @@ export const createWorkflowRuntime = (
 				routingHistory,
 			} = parsed);
 			engine = restored;
-			({ standaloneRole } = parsed);
+			({ standaloneRole, topic } = parsed);
 			continuations = structuredClone(parsed.continuations ?? []);
 			phaseHistory = structuredClone(parsed.phaseHistory ?? []);
 			summary = parsed.summary ?? null;

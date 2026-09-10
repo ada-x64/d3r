@@ -20,8 +20,8 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -179,6 +179,30 @@ const journeyResultText = (context: JourneyContext, id: string) => {
 				.join("\n")
 		: "";
 };
+/** Read the latest request, not earlier messages with superseded host state. */
+const journeyUserText = (context: JourneyContext): string => {
+	const message = context.messages.findLast(({ role }) => role === "user");
+	if (message?.role !== "user") {
+		return "";
+	}
+	return typeof message.content === "string"
+		? message.content
+		: message.content
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n");
+};
+/** Workers and follow-on routing copy the runtime's current topic rather than inventing slugs. */
+const journeyTopic = (context: JourneyContext): string => {
+	const topic = [
+		...journeyUserText(context).matchAll(
+			/^Topic name: ([a-z0-9]+(?:-[a-z0-9]+)*)$/gm,
+		),
+	].at(-1)?.[1];
+	if (!topic) {
+		throw new Error("Missing shared topic in the current provider request");
+	}
+	return topic;
+};
 /** Shortcut fixtures translate user intent only at provider IO, never at phase execution. */
 const journeyRouterShortcut = (
 	context: JourneyContext,
@@ -208,11 +232,17 @@ const journeyRouterShortcut = (
 			: last.content.flatMap((part) =>
 					part.type === "text" ? [part.text] : [],
 				);
-	const text = parts.join("\n");
 	const marker = "D3R runtime phase state (authoritative):\n";
-	const state = text.slice(text.lastIndexOf(marker) + marker.length);
+	const state =
+		parts.findLast((part) => part.startsWith(marker))?.slice(marker.length) ??
+		"";
 	const request =
-		parts.findLast((part) => !part.startsWith(marker))?.trim() ?? "";
+		parts
+			.findLast(
+				(part) =>
+					!part.startsWith(marker) && !part.startsWith("Native vault status:"),
+			)
+			?.trim() ?? "";
 	if (request === "status") {
 		return journeyCall("d3r_phase_status", {});
 	}
@@ -253,6 +283,8 @@ const journeyPhaseReply =
 			{ type: "text", text: `## ${heading}\n\n${evidence.join("\n\n")}` },
 		];
 	};
+/** Allow real CLI startup and seed Git operations on slower hosts without unbounded waits. */
+const JOURNEY_INIT_TIMEOUT = 20_000;
 /** Small real invocation limits make boundary journeys independent of production defaults. */
 const JOURNEY_BUDGET = { maxTurns: 3, maxTotalTurns: 6 };
 /** Shipped auditor/reviewer capabilities allow report writes, but not editing, web access or delegation. */
@@ -2012,6 +2044,7 @@ describe("native ACP shipped-workflow journeys", () => {
 					},
 					"skip",
 				),
+				journeyCall("d3r_phase_status", {}, "after-abandon"),
 				journeyCall(
 					"d3r_start_phase",
 					{ phase: "develop", brief, mode: "auto" },
@@ -2110,6 +2143,16 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(journeyResultText(final, "skip")).toContain(
 			"Existing effects remain",
 		);
+		expect(waiting.topic).toMatch(/^create-a-local-queue-marker-[a-z0-9]+$/);
+		expect(journeyResult(final, "after-abandon")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(final, "after-abandon")).toContain(
+			`Topic name: ${waiting.topic}`,
+		);
+		expect(journeyResultText(final, "after-abandon")).toContain(
+			"Most recent topic; reuse only for follow-on work on the same subject:",
+		);
 		expect(journeyResultText(final, "direct")).toContain(
 			"## Phase: develop\nStatus: completed\nMode: auto",
 		);
@@ -2132,9 +2175,13 @@ describe("native ACP shipped-workflow journeys", () => {
 			"reviewer",
 			"auditor",
 		]);
-		expect(
-			journeyCheckpoint(await f.checkpoint(sessionId)).inner!.engine,
-		).toMatchObject({ command: "develop", status: "completed" });
+		const completed = journeyCheckpoint(await f.checkpoint(sessionId)).inner!;
+		expect(completed.engine).toMatchObject({
+			command: "develop",
+			status: "completed",
+		});
+		expect(completed.topic).toMatch(/^create-a-local-queue-marker-[a-z0-9]+$/);
+		expect(completed.topic).not.toBe(waiting.topic);
 		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
 			true,
 		);
@@ -4659,6 +4706,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		]);
 		const checkpoint = await f.checkpoint(sessionId);
 		const completed = journeyCheckpoint(checkpoint).inner!;
+		expect(completed).not.toHaveProperty("topic");
 		expect(completed).toMatchObject({
 			summary: markdown,
 			phase: "routing",
@@ -4718,6 +4766,9 @@ describe("native ACP shipped-workflow journeys", () => {
 			"router",
 		]);
 		const next = j.requests.at(-1)!;
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+		).not.toHaveProperty("topic");
 		expect(next.model).toEqual(selected);
 		expect(JSON.stringify(next.context.messages)).toContain(
 			JSON.stringify(`Workflow summary (/design):\n${markdown}`).slice(1, -1),
@@ -5425,7 +5476,931 @@ describe("native ACP shipped-workflow journeys", () => {
 		await resumed.peer.agent.request("session/close", { sessionId });
 	});
 
-	// oxlint-disable-next-line max-statements -- Template discovery, held publication and a fresh role's read form one acceptance journey.
+	it(
+		"initializes a missing vault only after consent, then shares one generated /design topic across parallel writes and reload",
+		// oxlint-disable-next-line max-statements -- Consent, parallel publication and fresh-session continuation form one acceptance journey.
+		async () => {
+			const scripts: JourneyScripts = {};
+			const j = await open(scripts, { routerShortcuts: false });
+			const cli = fileURLToPath(
+				new URL("../../cli/dist/cli.js", import.meta.url),
+			);
+			await expect(
+				readFile(cli),
+				"Run pnpm -r build before the CLI initialization journey",
+			).resolves.toBeDefined();
+			// The real CLI creates its seed commit, but must never use the operator's Git configuration or home.
+			cleanup.push(async () => {
+				vi.unstubAllEnvs();
+			});
+			for (const [name, value] of Object.entries({
+				HOME: resolve(j.root, "home"),
+				USERPROFILE: resolve(j.root, "home"),
+				GIT_CONFIG_GLOBAL: resolve(j.root, "home/.gitconfig"),
+				GIT_CONFIG_NOSYSTEM: "1",
+				GIT_CONFIG_COUNT: "0",
+				GIT_AUTHOR_NAME: "D3R journey",
+				GIT_AUTHOR_EMAIL: "journey@d3r.invalid",
+				GIT_COMMITTER_NAME: "D3R journey",
+				GIT_COMMITTER_EMAIL: "journey@d3r.invalid",
+				GIT_EDITOR: "true",
+			})) {
+				vi.stubEnv(name, value);
+			}
+			const f = await j.connect();
+			const { sessionId } = await f.newSession(j.cwd);
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "model",
+				value: nativeModelKey(JOURNEY_MODEL),
+			});
+			const vault = journeyCheckpoint(await f.checkpoint(sessionId)).resources
+				.vaultRoot;
+			expect(vault).toBe(resolve(j.cwd, ".agents/vault"));
+			const goal = "Design an offline job queue";
+			const correction =
+				"Correction: call this durable dispatch, not a job queue; retain pending jobs across restarts. Draft the design now.";
+			const init = (context: JourneyContext) => {
+				const guidance = journeyUserText(context)
+					.split("\n")
+					.find((line) => line.startsWith("With user direction,"))!;
+				const literal = JSON.parse(guidance.slice(guidance.indexOf("{"))) as {
+					command: string;
+					args: string[];
+					cwd: string;
+				};
+				return journeyCall("run_command", literal, "init");
+			};
+			const writeDocument =
+				(kind: string, details: string) => (context: JourneyContext) => {
+					const topic = journeyTopic(context);
+					const heading = journeyPage(context, "template")
+						.text.match(/^# .+$/m)![0]
+						.replace(/<[^>]+>/g, topic);
+					return journeyCall("vault_write", {
+						mode: "doc",
+						path: `process/designs/${topic}/${kind}.md`,
+						kind,
+						frontmatter: { created: "2026-09-10", status: "draft" },
+						body: `${heading}\n\n${details}\n`,
+					});
+				};
+			scripts.router = [
+				[
+					{
+						type: "text",
+						text: "May I run d3r vault init for the pinned vault? This seeds templates and directories and creates a separate Git repository with an initial commit; it does not push.",
+					},
+				],
+				init,
+				[
+					{
+						type: "text",
+						text: "Command approval was denied. No vault was initialized and no document work started.",
+					},
+				],
+				init,
+				journeyCall(
+					"vault_ls",
+					{ path: ".misc/templates" },
+					"seeded-templates",
+				),
+				journeyCall("d3r_start_phase", {
+					phase: "design",
+					brief: {
+						goal,
+						context: "Jobs must survive restarts without a network service.",
+						acceptanceCriteria: [
+							"Write remember, research and design documents in the shared topic directory.",
+						],
+					},
+				}),
+				journeyPhaseReply("d3r_start_phase", "Recon complete"),
+				journeyCall("d3r_continue_phase", { instructions: correction }),
+				journeyPhaseReply("d3r_continue_phase", "Design complete"),
+			];
+			const recon = [
+				{
+					role: "aggregator",
+					kind: "remember",
+					evidence: "Jobs must survive restarts.",
+				},
+				{
+					role: "researcher",
+					kind: "research",
+					evidence:
+						"The supplied offline requirement rules out a network-only queue; external prior art was not consulted.",
+				},
+			];
+			for (const { role, kind, evidence } of recon) {
+				scripts[role] = [
+					journeyCall(
+						"vault_read",
+						{ path: `.misc/templates/${kind}.md` },
+						"template",
+					),
+					writeDocument(kind, evidence),
+					...journeyDone(evidence),
+				];
+			}
+			scripts.designer = [
+				(context) =>
+					journeyCall(
+						"vault_read",
+						{ path: `process/designs/${journeyTopic(context)}/remember.md` },
+						"remember",
+					),
+				(context) =>
+					journeyCall(
+						"vault_read",
+						{ path: `process/designs/${journeyTopic(context)}/research.md` },
+						"research",
+					),
+				journeyCall(
+					"vault_read",
+					{ path: ".misc/templates/design.md" },
+					"template",
+				),
+				(context) =>
+					writeDocument(
+						"design",
+						`## Decision\n\n${correction}\n\n## Evidence\n\n${journeyPage(context, "remember").text}\n${journeyPage(context, "research").text}`,
+					)(context),
+				...journeyDone(
+					"Designed durable dispatch from both shared recon documents.",
+				),
+			];
+			const files = await readdir(j.cwd, { recursive: true });
+			await expect(f.prompt(sessionId, `/design ${goal}`)).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			expect(j.requests.map(({ role }) => role)).toEqual(["router"]);
+			const first = j.requests[0].context;
+			expect(journeyUserText(first)).toContain("Native vault status: missing.");
+			expect(journeyUserText(first)).toContain(
+				`Pinned vault root: ${JSON.stringify(vault)}`,
+			);
+			const invocation = {
+				command: process.execPath,
+				args: [cli, "vault", "init", "--vault-root", vault],
+				cwd: j.cwd,
+			};
+			expect(isAbsolute(invocation.command)).toBe(true);
+			expect(isAbsolute(cli)).toBe(true);
+			expect(journeyUserText(first)).toContain(JSON.stringify(invocation));
+			expect(journeyUserText(first)).toContain(
+				"Do not auto-initialize, run mkdir, or use vault_write",
+			);
+			expect(journeyUserText(first)).toContain(
+				"If the user declines or requests no vault artifacts, continue inline",
+			);
+			expect(first.systemPrompt).toContain(
+				"Never ask the user to invent a topic name",
+			);
+			expect(journeyText(f.updates)).toMatch(
+				/May I run d3r vault init[\s\S]*seeds templates[\s\S]*initial commit/,
+			);
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+			]);
+			expect(
+				journeyTools(f.updates).filter(
+					({ title }) => !title?.startsWith("Trust workspace"),
+				),
+			).toEqual([]);
+			expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
+			expect(
+				journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+			).toMatchObject({ engine: null });
+
+			j.approval.decide = async () => false;
+			await expect(
+				f.prompt(
+					sessionId,
+					"Yes, initialize the pinned vault including its seed commit, then start /design.",
+				),
+			).resolves.toEqual({ stopReason: "end_turn" });
+			const denied = j.requests.at(-1)!.context;
+			expect(journeyResult(denied, "init")).toMatchObject({ isError: true });
+			expect(journeyResultText(denied, "init")).toMatch(/denied|not granted/i);
+			expect(j.requests.every(({ role }) => role === "router")).toBe(true);
+			expect(j.permissions.at(-1)!.toolCall.rawInput).toMatchObject(invocation);
+			expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
+			await expect(readdir(vault)).rejects.toMatchObject({ code: "ENOENT" });
+
+			const writes: RequestPermissionRequest[] = [];
+			const release = deferred<JourneyDecision>();
+			j.approval.decide = async (request) => {
+				if (request.toolCall.title === "vault_write") {
+					writes.push(request);
+					return release.promise;
+				}
+				return true;
+			};
+			const pending = f.prompt(
+				sessionId,
+				"Retry initialization; I will approve the command and the recon writes.",
+			);
+			try {
+				await vi.waitFor(() => expect(writes).toHaveLength(recon.length), {
+					timeout: 10_000,
+				});
+				const router = j.requests.findLast(
+					({ role }) => role === "router",
+				)!.context;
+				const commands = router.messages.flatMap((message) =>
+					message.role === "assistant"
+						? message.content.flatMap((part) =>
+								part.type === "toolCall" && part.name === "run_command"
+									? [part.arguments]
+									: [],
+							)
+						: [],
+				);
+				expect(commands).toEqual([invocation, invocation]);
+				expect(
+					j.permissions
+						.filter(
+							({ toolCall }) =>
+								toolCall.kind === "execute" &&
+								!toolCall.title?.startsWith("Trust workspace"),
+						)
+						.map(({ toolCall }) => toolCall.rawInput),
+				).toEqual([
+					expect.objectContaining(invocation),
+					expect.objectContaining(invocation),
+				]);
+				expect(journeyResult(router, "init")).toMatchObject({ isError: false });
+				expect(journeyResultText(router, "init")).toContain("Exit code: 0");
+				expect(journeyResult(router, "seeded-templates")).toMatchObject({
+					isError: false,
+				});
+				expect(journeyResultText(router, "seeded-templates")).toContain(
+					"remember.md",
+				);
+				const topic = journeyTopic(
+					j.requests.find(({ role }) => role === "aggregator")!.context,
+				);
+				expect(topic).toMatch(/^design-an-offline-job-queue-[a-z0-9]+$/);
+				expect(
+					writes
+						.map(({ toolCall }) => (toolCall.rawInput as { path: string }).path)
+						.toSorted(),
+				).toEqual([
+					`process/designs/${topic}/remember.md`,
+					`process/designs/${topic}/research.md`,
+				]);
+				// Both real writes are waiting for independent approval: neither role can finish first.
+				await expect(
+					readdir(resolve(vault, "process/designs", topic)),
+				).rejects.toMatchObject({ code: "ENOENT" });
+				const { stdout } = await promisify(execFile)(
+					"git",
+					["--no-pager", "-C", vault, "log", "--format=%s"],
+					{ timeout: 5000 },
+				);
+				expect(stdout.trim()).toBe("chore: initial vault seed");
+			} finally {
+				release.resolve(true);
+			}
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+			const checkpoint = await f.checkpoint(sessionId);
+			const waiting = journeyCheckpoint(checkpoint).inner!;
+			const topic = waiting.topic!;
+			expect(waiting.engine).toMatchObject({
+				status: "waiting",
+				pause: { kind: "human" },
+			});
+			expect(journeyText(f.updates)).toContain(
+				"Discuss design questions before drafting",
+			);
+			await Promise.all(
+				recon.map(async ({ role, kind }) => {
+					const contexts = j.requests
+						.filter((request) => request.role === role)
+						.map(({ context }) => context);
+					expect(journeyTopic(contexts[0])).toBe(topic);
+					expect(journeyPage(contexts.at(-1)!, "template").text).toBe(
+						await readFile(
+							resolve(SEED_ROOT, `.misc/templates/${kind}.md`),
+							"utf8",
+						),
+					);
+					expect(journeyResult(contexts.at(-1)!, "vault_write")).toMatchObject({
+						isError: false,
+					});
+					expect(JSON.stringify(contexts)).not.toContain(
+						"Native vault status:",
+					);
+				}),
+			);
+			expect(
+				JSON.stringify([waiting.input, waiting.routingInput]),
+			).not.toContain("Native vault status:");
+			expect(await readdir(resolve(vault, "process/designs", topic))).toEqual([
+				"remember.md",
+				"research.md",
+			]);
+			const effects = {
+				requests: j.requests.length,
+				permissions: j.permissions.length,
+			};
+			await f.peer.agent.request("session/close", { sessionId });
+			await f.close();
+			const resumed = await j.connect();
+			await resumed.peer.agent.request("session/load", {
+				sessionId,
+				cwd: j.cwd,
+				mcpServers: [],
+			});
+			await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+			expect(j.requests).toHaveLength(effects.requests);
+			expect(j.permissions).toHaveLength(effects.permissions);
+			await expect(resumed.prompt(sessionId, correction)).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			const continuation = j.requests.slice(effects.requests);
+			expect(new Set(continuation.map(({ role }) => role))).toEqual(
+				new Set(["router", "designer"]),
+			);
+			const router = continuation[0].context;
+			expect(journeyUserText(router)).toContain(
+				"Native vault status: available.",
+			);
+			expect(journeyUserText(router)).toContain("Current task topic:");
+			expect(journeyTopic(router)).toBe(topic);
+			const designer = continuation.findLast(
+				({ role }) => role === "designer",
+			)!.context;
+			expect(journeyTopic(designer)).toBe(topic);
+			expect(journeyUserText(designer)).toContain(correction);
+			await Promise.all(
+				recon.map(async ({ kind }) => {
+					expect(journeyPage(designer, kind)).toMatchObject({
+						path: `process/designs/${topic}/${kind}.md`,
+						text: await readFile(
+							resolve(vault, `process/designs/${topic}/${kind}.md`),
+							"utf8",
+						),
+					});
+				}),
+			);
+			expect(journeyPage(designer, "template").text).toBe(
+				await readFile(resolve(SEED_ROOT, ".misc/templates/design.md"), "utf8"),
+			);
+			expect(journeyResult(designer, "vault_write")).toMatchObject({
+				isError: false,
+			});
+			expect(
+				await readFile(
+					resolve(vault, `process/designs/${topic}/design.md`),
+					"utf8",
+				),
+			).toContain(correction);
+			const designs = await readdir(resolve(vault, "process/designs"), {
+				withFileTypes: true,
+			});
+			expect(
+				designs.filter((entry) => entry.isDirectory()).map(({ name }) => name),
+			).toEqual([topic]);
+			expect(await readdir(resolve(vault, "process/designs", topic))).toEqual([
+				"design.md",
+				"remember.md",
+				"research.md",
+			]);
+			expect(
+				journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+			).toMatchObject({ topic, engine: { status: "completed" } });
+			expect(
+				journeyResultText(continuation.at(-1)!.context, "d3r_continue_phase"),
+			).toContain(
+				"Most recent topic; reuse only for follow-on work on the same subject:",
+			);
+			expect(
+				j.permissions
+					.slice(effects.permissions)
+					.map(({ toolCall }) => toolCall.title),
+			).toEqual([expect.stringMatching(/^Trust workspace/), "vault_write"]);
+			expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+				true,
+			);
+			await resumed.peer.agent.request("session/close", { sessionId });
+		},
+		JOURNEY_INIT_TIMEOUT,
+	);
+
+	// oxlint-disable-next-line max-statements -- Scripted provider decisions test retained refusal and real effects, not live model judgment.
+	it("retains a conversational vault decline across reload and runs only an inline audit while the vault is missing", async () => {
+		const decline =
+			"No. Do not initialize a vault or create any documents. Keep subsequent work inline.";
+		const finding =
+			"AGENTS.md requires preserving the offline user's requirements; no changes are needed.";
+		const scripts: JourneyScripts = {
+			router: [
+				[
+					{
+						type: "text",
+						text: "May I run d3r vault init? It seeds templates and creates a separate Git repository with an initial commit.",
+					},
+				],
+				[
+					{
+						type: "text",
+						text: "Understood. I will keep work inline without initializing the vault or creating documents.",
+					},
+				],
+				journeyCall("d3r_run_role", {
+					role: "auditor",
+					brief: {
+						goal: "Audit workspace instructions",
+						context: `Read AGENTS.md only. ${decline}`,
+						acceptanceCriteria: [
+							"Return findings inline without any writes or commands.",
+						],
+					},
+				}),
+				journeyPhaseReply("d3r_run_role", "Inline audit"),
+			],
+			auditor: [
+				journeyCall("read_file", { path: "AGENTS.md" }),
+				...journeyDone(finding),
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const files = await readdir(j.cwd, { recursive: true });
+		await expect(
+			f.prompt(sessionId, "/design Prepare an offline dispatch design"),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(journeyUserText(j.requests[0].context)).toContain(
+			"Native vault status: missing.",
+		);
+		expect(journeyText(f.updates)).toContain("May I run d3r vault init?");
+		await expect(f.prompt(sessionId, decline)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(j.requests.map(({ role }) => role)).toEqual(["router", "router"]);
+		const checkpoint = await f.checkpoint(sessionId);
+		const pin = journeyCheckpoint(checkpoint);
+		expect(pin.inner).toMatchObject({ engine: null });
+		expect(JSON.stringify(pin.inner!.history)).toContain(decline);
+		await expect(readdir(pin.resources.vaultRoot)).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		const effects = {
+			requests: j.requests.length,
+			permissions: j.permissions.length,
+		};
+		await f.peer.agent.request("session/close", { sessionId });
+		await f.close();
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(j.requests).toHaveLength(effects.requests);
+		expect(j.permissions).toHaveLength(effects.permissions);
+		const start = resumed.updates.length;
+		await expect(
+			resumed.prompt(
+				sessionId,
+				"Now audit AGENTS.md and explain the findings.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const continuation = j.requests.slice(effects.requests);
+		const router = continuation[0].context;
+		expect(journeyUserText(router)).toContain("Native vault status: missing.");
+		expect(journeyUserText(router)).toContain(
+			`Pinned vault root: ${JSON.stringify(pin.resources.vaultRoot)}`,
+		);
+		expect(JSON.stringify(router.messages)).toContain(decline);
+		expect(journeyUserText(router)).toContain("do not repeatedly ask");
+		expect(new Set(continuation.map(({ role }) => role))).toEqual(
+			new Set(["router", "auditor"]),
+		);
+		const auditor = continuation.findLast(
+			({ role }) => role === "auditor",
+		)!.context;
+		expect(journeyResult(auditor, "read_file")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(auditor, "read_file")).toContain(
+			"Preserve the offline user's requirements.",
+		);
+		expect(journeyText(resumed.updates.slice(start))).toContain(finding);
+		expect(journeyText(resumed.updates.slice(start))).not.toContain(
+			"May I run d3r vault init?",
+		);
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+		).toMatchObject({
+			standaloneRole: "auditor",
+			engine: { status: "completed" },
+		});
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+			expect.stringMatching(/^Trust workspace/),
+		]);
+		expect(
+			journeyTools(resumed.updates.slice(start))
+				.filter((update) => update.sessionUpdate === "tool_call")
+				.map(({ title }) => title)
+				.toSorted(),
+		).toEqual(["auditor", "d3r_report", "d3r_run_role", "read_file"]);
+		expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
+		await expect(readdir(pin.resources.vaultRoot)).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+		await resumed.peer.agent.request("session/close", { sessionId });
+	});
+
+	// oxlint-disable-next-line max-statements -- Existing plans and explicit topic selection keep A -> B -> A document work isolated.
+	it("reuses the default plan for /delegate, writes a new topic's research, then returns to the original topic without moving artifacts", async () => {
+		const scripts: JourneyScripts = {};
+		const j = await open(scripts, { routerShortcuts: false });
+		const vault = resolve(j.cwd, ".agents/vault");
+		await cp(SEED_ROOT, vault, { recursive: true });
+		const goal = "Plan durable dispatch";
+		const child = "process/tasks/queue-storage/schema.md";
+		const plan = `# Plan: durable dispatch\n\nTask schema: ${child}\n\nPersist queued jobs and verify replay after restart.\n`;
+		const amendment =
+			"\n## Verification\n\nTest recovery from a truncated journal.\n";
+		const research =
+			"# Research: release notes\n\nThe supplied brief targets end users rather than API consumers. External prior art remains unverified.\n";
+		const brief = {
+			goal,
+			context: "Retain jobs offline across restarts.",
+			acceptanceCriteria: [
+				"Use the plan's explicit child-task name for its schema.",
+			],
+		};
+		scripts.router = [
+			journeyCall("d3r_run_role", { role: "planner", brief }),
+			journeyPhaseReply("d3r_run_role", "Plan ready"),
+			(context) =>
+				journeyCall("d3r_start_phase", {
+					phase: "delegate",
+					topic: journeyTopic(context),
+					brief,
+				}),
+			journeyPhaseReply("d3r_start_phase", "Delegation complete"),
+			journeyCall("d3r_run_role", {
+				role: "researcher",
+				brief: {
+					goal: "Research unrelated release notes",
+					context:
+						"Release notes target end users, not API consumers; record the supplied facts without external research.",
+					acceptanceCriteria: [
+						"Write research.md in the new topic's default directory.",
+					],
+				},
+			}),
+			journeyPhaseReply("d3r_run_role", "Release notes research complete"),
+			(context) =>
+				journeyCall("d3r_run_role", {
+					role: "planner",
+					topic: /^Return to topic ([a-z0-9]+(?:-[a-z0-9]+)*)\b/m.exec(
+						journeyUserText(context),
+					)![1],
+					brief: {
+						...brief,
+						context:
+							"Update the original plan with the requested truncated-journal recovery test; preserve all artifact paths.",
+					},
+				}),
+			journeyPhaseReply("d3r_run_role", "Original plan updated"),
+		];
+		scripts.planner = [
+			journeyCall(
+				"vault_read",
+				{ path: ".misc/templates/plan.md" },
+				"template",
+			),
+			(context) =>
+				journeyCall("vault_write", {
+					mode: "doc",
+					path: `process/designs/${journeyTopic(context)}/plan.md`,
+					kind: "plan",
+					frontmatter: { created: "2026-09-10", status: "draft" },
+					body: plan,
+				}),
+			...journeyDone(
+				"Planned durable dispatch with the explicit queue-storage child task.",
+			),
+			(context) =>
+				journeyCall(
+					"vault_read",
+					{ path: `process/designs/${journeyTopic(context)}/plan.md` },
+					"existing-plan",
+				),
+			...journeyDone(
+				"The existing plan already specifies the requested task slice; preserve it.",
+			),
+			journeyCall(
+				"vault_read",
+				{ path: ".misc/templates/plan.md" },
+				"template",
+			),
+			(context) =>
+				journeyCall(
+					"vault_read",
+					{ path: `process/designs/${journeyTopic(context)}/plan.md` },
+					"original-plan",
+				),
+			(context) =>
+				journeyCall("vault_write", {
+					mode: "raw",
+					path: `process/designs/${journeyTopic(context)}/plan.md`,
+					contents: `${journeyPage(context, "original-plan").text}${amendment}`,
+					snapshot: journeyPage(context, "original-plan").snapshot,
+				}),
+			...journeyDone(
+				"Added the recovery test to the original plan without moving artifacts.",
+			),
+		];
+		scripts.schemer = [
+			(context) =>
+				journeyCall(
+					"vault_read",
+					{ path: `process/designs/${journeyTopic(context)}/plan.md` },
+					"existing-plan",
+				),
+			journeyCall(
+				"vault_read",
+				{ path: ".misc/templates/schema.md" },
+				"template",
+			),
+			(context) =>
+				journeyCall("vault_write", {
+					mode: "raw",
+					path: /^Task schema: (.+)$/m.exec(
+						journeyPage(context, "existing-plan").text,
+					)![1],
+					contents:
+						"# Queue storage schema\n\nPersist jobs before acknowledging them. Test replay across restarts.\n",
+				}),
+			...journeyDone(
+				"Created the schema at the plan's explicit child-task path.",
+			),
+		];
+		scripts.researcher = [
+			journeyCall(
+				"vault_read",
+				{ path: ".misc/templates/research.md" },
+				"template",
+			),
+			(context) =>
+				journeyCall("vault_write", {
+					mode: "doc",
+					path: `process/designs/${journeyTopic(context)}/research.md`,
+					kind: "research",
+					frontmatter: { created: "2026-09-10", status: "draft" },
+					body: research,
+				}),
+			...journeyDone(
+				"Recorded release-note facts and the unverified external research gap.",
+			),
+		];
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(
+			f.prompt(
+				sessionId,
+				"Run only the planner for durable dispatch; write its plan with queue-storage as the explicit child task.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const checkpoint = await f.checkpoint(sessionId);
+		const planned = journeyCheckpoint(checkpoint).inner!;
+		const topic = planned.topic!;
+		expect(topic).toMatch(/^plan-durable-dispatch-[a-z0-9]+$/);
+		expect(planned).toMatchObject({
+			standaloneRole: "planner",
+			engine: { status: "completed" },
+		});
+		const originalPlan = await readFile(
+			resolve(vault, `process/designs/${topic}/plan.md`),
+			"utf8",
+		);
+		expect(originalPlan).toContain(plan);
+		const planner = j.requests.findLast(
+			({ role }) => role === "planner",
+		)!.context;
+		expect(journeyPage(planner, "template").text).toBe(
+			await readFile(resolve(SEED_ROOT, ".misc/templates/plan.md"), "utf8"),
+		);
+		expect(journeyResult(planner, "vault_write")).toMatchObject({
+			isError: false,
+		});
+		const beforeReload = j.requests.length;
+		await f.peer.agent.request("session/close", { sessionId });
+		await f.close();
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(j.requests).toHaveLength(beforeReload);
+		await expect(
+			resumed.prompt(
+				sessionId,
+				"/delegate Continue the same topic using its existing plan; preserve the plan's task names.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const delegated = j.requests.slice(beforeReload);
+		expect(journeyUserText(delegated[0].context)).toContain(
+			"Most recent topic; reuse only for follow-on work on the same subject:",
+		);
+		expect(journeyTopic(delegated[0].context)).toBe(topic);
+		const router = delegated.at(-1)!.context;
+		expect(
+			router.messages.flatMap((message) =>
+				message.role === "assistant" ? message.content : [],
+			),
+		).toContainEqual(
+			expect.objectContaining({
+				type: "toolCall",
+				name: "d3r_start_phase",
+				arguments: { phase: "delegate", topic, brief },
+			}),
+		);
+		expect(journeyResult(router, "d3r_start_phase")).toMatchObject({
+			isError: false,
+		});
+		for (const role of ["planner", "schemer"]) {
+			const { context } = delegated.findLast(
+				(request) => request.role === role,
+			)!;
+			expect(journeyTopic(context)).toBe(topic);
+			expect(journeyPage(context, "existing-plan")).toMatchObject({
+				path: `process/designs/${topic}/plan.md`,
+				text: originalPlan,
+			});
+			expect(journeyUserText(context)).toContain(
+				`taskDirectory: process/tasks/${topic}`,
+			);
+			expect(journeyUserText(context)).toContain(
+				"Follow the plan's explicit child-task names",
+			);
+			expect(journeyUserText(context)).toContain(
+				"Explicit user paths take precedence without moving existing artifacts.",
+			);
+			expect(journeyUserText(context)).toContain(
+				"do not authorize writes, vault initialization, or commits",
+			);
+		}
+		const schemer = delegated.findLast(
+			({ role }) => role === "schemer",
+		)!.context;
+		expect(journeyResult(schemer, "vault_write")).toMatchObject({
+			isError: false,
+		});
+		expect(await readFile(resolve(vault, child), "utf8")).toContain(
+			"Test replay across restarts.",
+		);
+		await expect(
+			readdir(resolve(vault, "process/tasks", topic)),
+		).rejects.toMatchObject({ code: "ENOENT" });
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+		).toMatchObject({
+			topic,
+			engine: { command: "delegate", status: "completed" },
+		});
+		const schema = await readFile(resolve(vault, child), "utf8");
+		const beforeResearch = j.requests.length;
+		await expect(
+			resumed.prompt(
+				sessionId,
+				"Unrelated task: record research for release notes targeting end users, not API consumers. No external research is needed.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const researched = journeyCheckpoint(
+			await resumed.checkpoint(sessionId),
+		).inner!;
+		expect(researched.topic).toMatch(
+			/^research-unrelated-release-notes-[a-z0-9]+$/,
+		);
+		expect(researched.topic).not.toBe(topic);
+		expect(researched).toMatchObject({
+			standaloneRole: "researcher",
+			engine: { status: "completed" },
+		});
+		const researchRequests = j.requests.slice(beforeResearch);
+		expect(new Set(researchRequests.map(({ role }) => role))).toEqual(
+			new Set(["router", "researcher"]),
+		);
+		const researcher = researchRequests.findLast(
+			({ role }) => role === "researcher",
+		)!.context;
+		expect(journeyTopic(researcher)).toBe(researched.topic);
+		expect(journeyPage(researcher, "template").text).toBe(
+			await readFile(resolve(SEED_ROOT, ".misc/templates/research.md"), "utf8"),
+		);
+		expect(journeyResult(researcher, "vault_write")).toMatchObject({
+			isError: false,
+		});
+		const researchPath = `process/designs/${researched.topic}/research.md`;
+		const savedResearch = await readFile(resolve(vault, researchPath), "utf8");
+		expect(savedResearch).toContain(research);
+		expect(
+			await readFile(
+				resolve(vault, `process/designs/${topic}/plan.md`),
+				"utf8",
+			),
+		).toBe(originalPlan);
+		const files = await readdir(vault, { recursive: true });
+		const beforeReturn = j.requests.length;
+		await expect(
+			resumed.prompt(
+				sessionId,
+				`Return to topic ${topic} and have the planner add a truncated-journal recovery test to its existing plan. Do not move any artifacts.`,
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const returned = j.requests.slice(beforeReturn);
+		expect(journeyTopic(returned[0].context)).toBe(researched.topic);
+		expect(journeyUserText(returned[0].context)).toContain(
+			`Return to topic ${topic}`,
+		);
+		expect(new Set(returned.map(({ role }) => role))).toEqual(
+			new Set(["router", "planner"]),
+		);
+		const returningRouter = returned.at(-1)!.context;
+		expect(
+			returningRouter.messages
+				.flatMap((message) =>
+					message.role === "assistant" ? message.content : [],
+				)
+				.findLast(
+					(part) => part.type === "toolCall" && part.name === "d3r_run_role",
+				),
+		).toMatchObject({ arguments: { role: "planner", topic } });
+		expect(journeyResult(returningRouter, "d3r_run_role")).toMatchObject({
+			isError: false,
+		});
+		const returningPlanner = returned.findLast(
+			({ role }) => role === "planner",
+		)!.context;
+		expect(journeyTopic(returningPlanner)).toBe(topic);
+		expect(journeyPage(returningPlanner, "original-plan")).toMatchObject({
+			path: `process/designs/${topic}/plan.md`,
+			text: originalPlan,
+		});
+		expect(journeyResult(returningPlanner, "vault_write")).toMatchObject({
+			isError: false,
+		});
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+		).toMatchObject({
+			topic,
+			standaloneRole: "planner",
+			engine: { status: "completed" },
+		});
+		expect(
+			await readFile(
+				resolve(vault, `process/designs/${topic}/plan.md`),
+				"utf8",
+			),
+		).toBe(`${originalPlan}${amendment}`);
+		expect(await readFile(resolve(vault, researchPath), "utf8")).toBe(
+			savedResearch,
+		);
+		expect(await readFile(resolve(vault, child), "utf8")).toBe(schema);
+		expect(await readdir(vault, { recursive: true })).toEqual(files);
+		expect(
+			j.permissions
+				.filter(({ toolCall }) => toolCall.title === "vault_write")
+				.map(({ toolCall }) => (toolCall.rawInput as { path: string }).path),
+		).toEqual([
+			`process/designs/${topic}/plan.md`,
+			child,
+			researchPath,
+			`process/designs/${topic}/plan.md`,
+		]);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+		await resumed.peer.agent.request("session/close", { sessionId });
+	});
+
+	// oxlint-disable-next-line max-statements -- Vault reads, permissions and reloading form one document journey.
 	it("writes remember.md from the real parent vault template and reads it after a fresh /design session load", async () => {
 		const scripts: JourneyScripts = {};
 		const j = await open(scripts, {

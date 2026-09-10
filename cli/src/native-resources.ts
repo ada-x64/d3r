@@ -14,6 +14,7 @@ import {
 } from "./workflow-phase-tools.ts";
 import { isWithinRoot } from "./resource-paths.ts";
 import { executionWorkflow } from "./workflow-role.ts";
+import { WorkflowTopicName } from "./workflow-topic.ts";
 import { isAncestorVaultRoot } from "./resource-vault.ts";
 import { type AgentDefinition, type AgentResources } from "./resources.ts";
 import { THOUGHT_LEVELS } from "./native-models.ts";
@@ -169,6 +170,7 @@ const Inner = z
 		summary: WorkflowSummary.optional(),
 		orchestrated: z.boolean().optional(),
 		standaloneRole: z.string().min(1).optional(),
+		topic: WorkflowTopicName.optional(),
 		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
@@ -181,6 +183,10 @@ const Inner = z
 		(saved) =>
 			saved.summary === undefined || saved.engine?.status === "completed",
 		"A workflow summary requires a completed engine",
+	)
+	.refine(
+		(saved) => saved.topic === undefined || saved.orchestrated === true,
+		"A topic requires orchestrated workflow state",
 	);
 /** Persist source text and locations, never model objects, credentials, MCP config, or trust grants. */
 const Resources = z

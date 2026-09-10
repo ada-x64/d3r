@@ -36,6 +36,7 @@ import { discoverVaultRoot } from "./resource-vault.ts";
 import { createVaultTools } from "./vault-tools.ts";
 import { createWebTools } from "./web-tools.ts";
 import { summarizeNativeWorkflow } from "./native-summary.ts";
+import { nativeVaultContext } from "./native-vault-status.ts";
 
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
@@ -445,6 +446,13 @@ export const createLazyNativeSession = ({
 			const phaseRuntime = deps.createWorkflowRuntime({
 				routing,
 				orchestrated,
+				orchestratorContext: (contextSignal: AbortSignal) =>
+					nativeVaultContext(vaultRoot, {
+						cwd: input.cwd,
+						roots: [input.cwd, ...(trustedInput.additionalDirectories ?? [])],
+						excludedDirectories: [stateDir],
+						signal: contextSignal,
+					}),
 				workflow: saved.resources.workflow,
 				agents: saved.resources.agents,
 				summarize: (summary, summarySignal) =>

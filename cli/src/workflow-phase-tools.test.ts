@@ -246,7 +246,12 @@ describe("workflow role tool", () => {
 		});
 		expect(tool.schema).toBeInstanceOf(z.ZodObject);
 		const schema = tool.schema as z.AnyZodObject;
-		expect(Object.keys(schema.shape)).toEqual(["role", "brief", "mode"]);
+		expect(Object.keys(schema.shape)).toEqual([
+			"role",
+			"brief",
+			"mode",
+			"topic",
+		]);
 		expect(schema.shape.role.options).toEqual([
 			"auditor",
 			"implementor",
@@ -550,6 +555,152 @@ describe("workflow phase tools", () => {
 	});
 });
 
+describe("workflow topic boundaries", () => {
+	it("forwards an exact safe topic name for phase starts and standalone roles", async () => {
+		const { tool, execute, result } = harness();
+		const context = toolContext();
+		const topic = "search-cancellation";
+		const requests = [
+			{
+				entry: tool("d3r_start_phase"),
+				action: "start",
+				phase: "develop",
+			},
+			{
+				entry: createWorkflowRoleTool(roles, execute)!,
+				action: "role",
+				role: "fact-finder",
+			},
+		];
+		await Promise.all(
+			requests.map(async ({ entry, action, ...selector }) => {
+				const input = { ...selector, brief: conversationBrief, topic };
+				const expected = {
+					...input,
+					action,
+					brief: { ...conversationBrief, constraints: [] },
+				};
+				expect(PhaseAction.parse({ ...input, action })).toEqual(expected);
+				expect(await entry.execute(input, context)).toBe(result);
+				expect(execute).toHaveBeenCalledWith(expected, context);
+				for (const requirement of [
+					/Omit topic for a new task; the runtime automatically generates it once/,
+					/same topic in a later phase or standalone invocation/,
+					/copy the topic name supplied in runtime state/,
+					/existing topic, use that exact safe slug, not a full path/,
+					/Never ask the user to invent a topic name/,
+				]) {
+					expect(entry.description).toMatch(requirement);
+				}
+			}),
+		);
+		expect(execute).toHaveBeenCalledTimes(requests.length);
+	});
+
+	it("keeps an omitted topic optional without generating one at the tool boundary", async () => {
+		const { tool, execute } = harness();
+		const context = toolContext();
+		const requests = [
+			{
+				entry: tool("d3r_start_phase"),
+				action: "start",
+				phase: "develop",
+			},
+			{
+				entry: createWorkflowRoleTool(roles, execute)!,
+				action: "role",
+				role: "fact-finder",
+			},
+		];
+		await Promise.all(
+			requests.map(async ({ entry, action, ...selector }) => {
+				const input = { ...selector, brief: conversationBrief };
+				expect((entry.schema as z.AnyZodObject).shape.topic.isOptional()).toBe(
+					true,
+				);
+				expect(entry.schema.parse(input)).not.toHaveProperty("topic");
+				expect(PhaseAction.parse({ ...input, action })).not.toHaveProperty(
+					"topic",
+				);
+				await entry.execute(input, context);
+			}),
+		);
+		expect(execute).toHaveBeenCalledTimes(requests.length);
+		for (const [action] of execute.mock.calls) {
+			expect(action).not.toHaveProperty("topic");
+		}
+	});
+
+	it("rejects traversal and full paths as topics before phase or role dispatch", async () => {
+		const { tool, execute } = harness();
+		const context = toolContext();
+		const requests = [
+			{
+				entry: tool("d3r_start_phase"),
+				action: "start",
+				phase: "develop",
+			},
+			{
+				entry: createWorkflowRoleTool(roles, execute)!,
+				action: "role",
+				role: "fact-finder",
+			},
+		];
+		await Promise.all(
+			requests.flatMap(({ entry, action, ...selector }) =>
+				[
+					"../other",
+					String.raw`..\other`,
+					"topic/../other",
+					"tasks/search-cancellation",
+					"/tmp/search-cancellation",
+					String.raw`C:\vault\search-cancellation`,
+				].map(async (topic) => {
+					const input = { ...selector, brief: conversationBrief, topic };
+					expect(PhaseAction.safeParse({ ...input, action }).success).toBe(
+						false,
+					);
+					await expect(entry.execute(input, context)).rejects.toBeInstanceOf(
+						z.ZodError,
+					);
+				}),
+			),
+		);
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it("rejects topic on continue, abandon, and status rather than renaming a retained task", async () => {
+		const { tool, execute } = harness();
+		const context = toolContext();
+		const requests = [
+			{
+				entry: tool("d3r_continue_phase"),
+				action: "continue",
+				instructions: "Resume the requested work",
+			},
+			{
+				entry: tool("d3r_abandon_phase"),
+				action: "abandon",
+				reason: "Stop this task",
+			},
+			{ entry: tool("d3r_phase_status"), action: "status" },
+		];
+		await Promise.all(
+			requests.map(async ({ entry, action, ...fields }) => {
+				const input = { ...fields, topic: "replacement-topic" };
+				expect((entry.schema as z.AnyZodObject).shape).not.toHaveProperty(
+					"topic",
+				);
+				expect(PhaseAction.safeParse({ ...input, action }).success).toBe(false);
+				await expect(entry.execute(input, context)).rejects.toBeInstanceOf(
+					z.ZodError,
+				);
+			}),
+		);
+		expect(execute).not.toHaveBeenCalled();
+	});
+});
+
 describe("native conversation contracts", () => {
 	it("renders a concise labeled Markdown brief with optional constraints and no invented provenance", () => {
 		const brief = WorkflowBrief.parse(conversationBrief);
@@ -579,6 +730,22 @@ describe("native conversation contracts", () => {
 		for (const requirement of [
 			/continuous conversation/,
 			/state is supplied every turn/,
+			/omit topic from d3r_start_phase or d3r_run_role/,
+			/runtime automatically generates one topic name shared across agents and the document folder/,
+			/generated topic and default artifact paths supplied by runtime state are authoritative and shared/,
+			/Make briefs refer to those paths when supplied/,
+			/do not task workers with choosing their own artifact folders/,
+			/Reuse the exact topic name from runtime state for follow-on phases or standalone invocations/,
+			/omit topic for an unrelated task/,
+			/existing topic, use that exact safe slug, never a full path/,
+			/Never ask the user to invent a topic name/,
+			/never rename an active task/,
+			/If it reports a missing vault, before vault document work ask whether to run d3r vault init with --vault-root set to that exact pinned root/,
+			/initialization seeds files, initializes a Git repository, and creates its initial commit/,
+			/require explicit user consent and normal tool approval/,
+			/Never initialize silently or bypass approval/,
+			/Do not require a vault for inline, docs-free tasks/,
+			/If the user declines, do not repeatedly ask/,
 			/Discuss and clarify normally unless the user intends/,
 			/\/design, \/delegate, \/develop, and \/summarize/,
 			/must call d3r_start_phase/,
@@ -654,6 +821,16 @@ describe("native conversation contracts", () => {
 	it("lets native roles substitute conversation context without weakening scope, testing, or review", () => {
 		for (const requirement of [
 			/intentionally substitutes for schema, design, and plan documents/,
+			/runtime supplies an explicit topic name and default artifact paths shared across agents and the document folder/,
+			/use the default paths unless the operator explicitly chose a path/,
+			/Do not independently name researcher notes or choose per-worker artifact folders/,
+			/paths are neither permission nor a requirement to write documents/,
+			/If live host context reports a missing vault, before vault document work ask using needs_human whether to run d3r vault init with --vault-root set to the exact pinned root/,
+			/initialization seeds files, initializes a Git repository, and creates its initial commit/,
+			/require explicit user consent and normal tool approval/,
+			/Never initialize silently or bypass approval/,
+			/Do not require a vault for inline, docs-free tasks/,
+			/If the user declines, do not repeatedly ask/,
 			/Do not fabricate documents, citations, branch names, commits, or prior approvals/,
 			/current approved workspace on the requested scope/,
 			/specific facts using needs_human/,

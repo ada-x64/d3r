@@ -175,6 +175,25 @@ remain restricted.
 commits, or pushes the vault. Directory archival still requires an explicitly
 approved command rather than `vault_mv`.
 
+The native orchestrator receives a fresh, read-only status check of the pinned
+vault root every turn. If the vault is **missing**, it is instructed to ask
+whether you want to run `d3r vault init --vault-root <pinned root>` before vault
+document work. Initialization creates seed files and directories plus the
+vault's own Git repository and initial commit; it does not push. It requires
+both your explicit direction and ordinary command approval, using the exact
+pinned root. The guidance forbids automatic initialization, `mkdir`, or
+`vault_write` to create a partial vault. After approved initialization succeeds,
+the orchestrator should recheck with `vault_ls` before document phases in that
+turn; the next turn refreshes the status.
+
+You can decline or request no vault artifacts and continue inline audits or code
+work without a vault. The orchestrator is instructed not to ask repeatedly
+unless you change that direction. Unsafe, unreadable, or symlinked paths are
+reported as **unavailable**, not missing: inspect access restrictions instead of
+initializing, overwriting, or switching vaults. These are model-facing
+instructions, not a hard lifecycle gate preventing phase or role invocation
+before initialization; ordinary tool permissions and path checks still apply.
+
 ## Workflow commands
 
 ### New native sessions
@@ -203,13 +222,13 @@ unfinished phase or role task.
 
 The router has these workflow tools:
 
-| Tool                 | Parameters and purpose                                                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `d3r_start_phase`    | A configured `phase`, structured `brief`, and optional `mode` (`semi` or `auto`); starts only when no unfinished task is retained.                                              |
-| `d3r_run_role`       | A `role` from the pinned loaded worker-role enum (excluding `orchestrator`), the same `brief`, and optional `mode`; runs exactly one role. Omitted if no workers are available. |
-| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch.           |
-| `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase or role task when execution is not running. Existing effects remain.                                           |
-| `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                           |
+| Tool                 | Parameters and purpose                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `d3r_start_phase`    | A configured `phase`, structured `brief`, optional `mode` (`semi` or `auto`), and optional `topic`; starts only when no unfinished task is retained.                                        |
+| `d3r_run_role`       | A `role` from the pinned loaded worker-role enum (excluding `orchestrator`), the same `brief`, and optional `mode` and `topic`; runs exactly one role. Omitted if no workers are available. |
+| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch.                       |
+| `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase or role task when execution is not running. Existing effects remain.                                                       |
+| `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                                       |
 
 The `brief` contains `goal`, `context`, nonempty `acceptanceCriteria`, and
 `constraints` (an empty list by default). The orchestrator builds it from known
@@ -231,6 +250,40 @@ tests, review gates, and approvals still apply; commits and pushes require
 explicit user authorization. The workflow tools themselves do not request
 separate permission: underlying worker tools authorize real effects. The router
 delegates implementation rather than doing the workers' implementation itself.
+
+### Shared topics and artifact paths
+
+Native orchestrated phase starts and standalone role calls accept an optional
+top-level `topic`: a safe lowercase ASCII kebab slug of at most 80 characters,
+not a full path. Whitespace, path separators, traversal, and Windows device
+names are rejected. When omitted, the runtime generates a readable goal-derived
+slug with a short random suffix once per newly accepted task, without another
+model request or asking you to invent a name. Omission always creates a fresh
+topic, even for the same goal; it does not reuse the most recent topic.
+
+For a later phase or role on the same subject, the orchestrator copies the exact
+topic from runtime state into the next call. If you reference an existing topic,
+it uses that exact safe slug instead. It omits `topic` for unrelated work.
+
+The runtime supplies one authoritative topic and vault-relative artifact map to
+the orchestrator and every worker, including parallel roles and roles restarted
+from saved checkpoints. Briefs should refer to these shared defaults rather than
+ask each worker to choose a folder or independently name researcher notes:
+
+| Artifact        | Default vault-relative path           |
+| --------------- | ------------------------------------- |
+| Aggregation     | `process/designs/<topic>/remember.md` |
+| Research        | `process/designs/<topic>/research.md` |
+| Design          | `process/designs/<topic>/design.md`   |
+| Plan            | `process/designs/<topic>/plan.md`     |
+| `taskDirectory` | `process/tasks/<topic>`               |
+
+Explicit operator paths take precedence; the plan's explicit child-task names
+also take precedence over the default `taskDirectory`. This is shared context,
+not filesystem path rewriting: it does not move existing artifacts, assert that
+files exist, or grant permission or require anyone to create documents. Inline,
+docs-free work remains supported, with unchanged core role definitions and
+approval requirements.
 
 ### Standalone role requests
 
@@ -610,6 +663,13 @@ retain eligible unfinished-role checkpoints for reported questions and clean
 cancellation. Snapshots restore state without executing historical tools;
 resuming work requires a new user-directed workflow action and all required
 child checkpoints.
+
+An accepted task's topic is immutable through continuation, corrections, and
+reload; continue, abandon, and status do not accept a replacement topic. After
+completion or abandonment, it remains in runtime state as the most recent topic
+for explicit reuse in follow-on work. Older active snapshots without a topic
+remain without one: their original artifact names and paths are preserved, with
+no automatic topic generation or migration on reload or continuation.
 
 An intent is persisted before a prompt or state mutation. An incomplete intent
 cannot silently fall back to an older checkpoint after a crash. Already-issued

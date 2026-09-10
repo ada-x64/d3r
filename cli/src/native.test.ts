@@ -499,7 +499,7 @@ describe("native dependency composition", () => {
 		const prompt = testPrompt("/design a thing");
 		await session.prompt(prompt);
 		expect(f.turns[1].runtime).toBe(router.runtime);
-		expect(f.turns[1].request.content.at(-1)).toEqual({
+		expect(f.turns[1].request.content).toContainEqual({
 			type: "text",
 			text: expect.stringMatching(
 				/^D3R runtime phase state \(authoritative\):\nNo active workflow/,
@@ -569,7 +569,7 @@ describe("native dependency composition", () => {
 			});
 			expect(f.disposals).toEqual([f.turns[1].runtime]);
 			await session.prompt(testPrompt("What needs attention?"));
-			expect(f.turns.at(-1)!.request.content.at(-1)).toEqual({
+			expect(f.turns.at(-1)!.request.content).toContainEqual({
 				type: "text",
 				text: expect.stringMatching(
 					/^D3R runtime phase state \(authoritative\):[\s\S]*Status: blocked/,

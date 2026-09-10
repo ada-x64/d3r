@@ -4,6 +4,7 @@ import {
 	type RuntimeToolResult,
 } from "@d3r/core/runtime";
 import { z } from "zod";
+import { WorkflowTopicName } from "./workflow-topic.ts";
 
 /** Bound conversation handoffs without requiring artifact references. */
 const BRIEF_LIMITS = {
@@ -36,6 +37,7 @@ const workflowRoleAction = z
 		role: z.string().trim().min(1).max(BRIEF_LIMITS.role),
 		brief: WorkflowBrief,
 		mode: z.enum(["semi", "auto"]).optional(),
+		topic: WorkflowTopicName.optional(),
 	})
 	.strict();
 
@@ -47,6 +49,7 @@ export const PhaseAction = z.discriminatedUnion("action", [
 			phase: z.string().trim().min(1).max(BRIEF_LIMITS.phase),
 			brief: WorkflowBrief,
 			mode: z.enum(["semi", "auto"]).optional(),
+			topic: WorkflowTopicName.optional(),
 		})
 		.strict(),
 	z
@@ -134,7 +137,7 @@ export const createWorkflowPhaseTools = (
 		tools.unshift({
 			name: "d3r_start_phase",
 			description:
-				"Start any configured phase independently, including develop directly: no prior phase or formal vault documents are required. Start only when no unfinished task (phase or direct role) is retained; never replace running, waiting, blocked, or interrupted work. Build the brief from conversation context, known facts, acceptance criteria, and constraints, not fabricated citations. For develop, ask the user to choose semi or auto explicitly; if mode is omitted, the engine asks. Never assume auto. Underlying worker tools authorize real effects.",
+				"Start any configured phase independently, including develop directly: no prior phase or formal vault documents are required. Start only when no unfinished task (phase or direct role) is retained; never replace running, waiting, blocked, or interrupted work. Build the brief from conversation context, known facts, acceptance criteria, and constraints, not fabricated citations. Omit topic for a new task; the runtime automatically generates it once. To continue the same topic in a later phase or standalone invocation, copy the topic name supplied in runtime state. When the operator references an existing topic, use that exact safe slug, not a full path. Never ask the user to invent a topic name. For develop, ask the user to choose semi or auto explicitly; if mode is omitted, the engine asks. Never assume auto. Underlying worker tools authorize real effects.",
 			kind: "other",
 			permission: "none",
 			schema: startSchema,
@@ -173,7 +176,7 @@ export const createWorkflowRoleTool = (
 	return {
 		name: "d3r_run_role",
 		description:
-			"Run only one selected worker role within its loaded role definition's scope, without starting a phase, requiring prerequisites, or implicitly following with review or audit. Use the same report and permission lifecycle as phase workers, and resume pending checkpoints or resumable cancellations via d3r_continue_phase. Role results do not approve or advance an existing workflow. Never replace an unfinished task (phase or role), including running, waiting, blocked, or interrupted work; the user must explicitly direct d3r_abandon_phase first when execution is not running. For implementor, require the user's explicit semi or auto mode; never assume auto. Mode enforcement belongs to the runtime. A standalone auditor worktree audit is read-only with inline findings by default; do not write report files unless the user requests them. Underlying worker tools authorize real effects.",
+			"Run only one selected worker role within its loaded role definition's scope, without starting a phase, requiring prerequisites, or implicitly following with review or audit. Use the same report and permission lifecycle as phase workers, and resume pending checkpoints or resumable cancellations via d3r_continue_phase. Role results do not approve or advance an existing workflow. Never replace an unfinished task (phase or role), including running, waiting, blocked, or interrupted work; the user must explicitly direct d3r_abandon_phase first when execution is not running. For implementor, require the user's explicit semi or auto mode; never assume auto. Mode enforcement belongs to the runtime. Omit topic for a new task; the runtime automatically generates it once. To continue the same topic in a later phase or standalone invocation, copy the topic name supplied in runtime state. When the operator references an existing topic, use that exact safe slug, not a full path. Never ask the user to invent a topic name. A standalone auditor worktree audit is read-only with inline findings by default; do not write report files unless the user requests them. Underlying worker tools authorize real effects.",
 		kind: "other",
 		permission: "none",
 		schema,
@@ -202,6 +205,8 @@ export const renderWorkflowBrief = (brief: WorkflowBrief): string =>
 export const ORCHESTRATOR_PROMPT = `You are D3R's native workflow orchestrator in Zed.
 Maintain a continuous conversation with the user across phases, questions, and results.
 The current workflow state is supplied every turn; use it as authoritative, not guesses from earlier conversation. Use d3r_phase_status when needed to inspect state without changing it.
+For a new task, omit topic from d3r_start_phase or d3r_run_role; the runtime automatically generates one topic name shared across agents and the document folder. The generated topic and default artifact paths supplied by runtime state are authoritative and shared by all workers. Make briefs refer to those paths when supplied; do not task workers with choosing their own artifact folders. Reuse the exact topic name from runtime state for follow-on phases or standalone invocations on the same topic; omit topic for an unrelated task. When the operator references an existing topic, use that exact safe slug, never a full path. Never ask the user to invent a topic name, and never rename an active task through continue, abandon, or status.
+Live host context supplies vault availability and the pinned vault root. If it reports a missing vault, before vault document work ask whether to run d3r vault init with --vault-root set to that exact pinned root. Disclose that initialization seeds files, initializes a Git repository, and creates its initial commit; require explicit user consent and normal tool approval. Never initialize silently or bypass approval. Do not require a vault for inline, docs-free tasks. If the user declines, do not repeatedly ask; continue inline where possible or explain the document-work blocker.
 Discuss and clarify normally unless the user intends a workflow action. /design, /delegate, /develop, and /summarize are shortcuts expressing user phase intent, not execution: you must call d3r_start_phase to start that phase. Printing a command does not start work.
 Any configured phase can start independently. No prior phase or formal vault documents are required. Jump straight to develop for a full implementation lifecycle when the conversation provides an adequate brief. Synthesize goal, context, acceptanceCriteria, and constraints from conversation facts and approved scope; never fabricate citations or claim documents exist. Ask only for missing factual context, not mandatory schema, design, or plan documents.
 For focused audit, review, research, or other single-role requests, choose d3r_run_role with the matching loaded worker role, not d3r_start_phase develop. Loaded role definitions determine scope; do not invent roles or expand their authority. Run only the selected worker, with no phase prerequisites or implicit follow-on review or audit. Role outputs are evidence, not completion of phases, and do not approve or advance an existing workflow. Standalone worktree audits are read-only with inline findings by default, without report file writes unless requested.
@@ -214,6 +219,8 @@ After tool results, synthesize one concise Markdown response for the user with t
 
 /** Native workers may use a conversation brief without weakening their role or approval gates. */
 export const NATIVE_BRIEF_CONTRACT = `The native conversation brief intentionally substitutes for schema, design, and plan documents when those documents are absent. No prior phase or formal vault documents are required; do not demand or create them merely to satisfy a legacy workflow convention.
+The runtime supplies an explicit topic name and default artifact paths shared across agents and the document folder. Treat them as authoritative; use the default paths unless the operator explicitly chose a path. Do not independently name researcher notes or choose per-worker artifact folders. These paths are neither permission nor a requirement to write documents; preserve role scope and use inline output for docs-free tasks.
+If live host context reports a missing vault, before vault document work ask using needs_human whether to run d3r vault init with --vault-root set to the exact pinned root supplied by that context. Disclose that initialization seeds files, initializes a Git repository, and creates its initial commit; require explicit user consent and normal tool approval. Never initialize silently or bypass approval. Do not require a vault for inline, docs-free tasks. If the user declines, do not repeatedly ask; continue inline where possible or explain the document-work blocker.
 These native handoff rules replace document-, branch-, commit-, and vault-filing prerequisites in the role text when the caller intentionally omits those artifacts. Use the supplied brief and verified workspace facts. Do not fabricate documents, citations, branch names, commits, or prior approvals. Operate in the current approved workspace on the requested scope; do not assume a new branch or expanded authority.
 When essential context is missing, ask for the specific facts using needs_human rather than inventing them. Preserve all project constraints, approval requirements, and your assigned role remit; a brief is not permission to bypass them.
 For a requested standalone worktree audit or review, use the current tracked, untracked, and uncommitted workspace state within the requested scope. No PR, commit range, or vault document is mandatory to audit the worktree. Reviewers and auditors retain their read-only remit; report findings inline by default and do not write report files unless requested. You may review working-tree changes and report findings inline without creating a vault artifact unless the user requested one. The runtime supplies execution-specific context separately; do not invent missing workflow history. Do not commit or push unless explicitly authorized by the user.

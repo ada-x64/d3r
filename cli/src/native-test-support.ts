@@ -154,7 +154,8 @@ export const nativeFixture = () => {
 			);
 			const text = request.content
 				.filter((item) => item.type === "text")
-				.map((item) => item.text);
+				.map((item) => item.text)
+				.filter((item) => !item.startsWith("Native vault status:"));
 			const [state, message] = text.toReversed();
 			// Only the latest user request drives this fake model, never slash commands in handed-off history.
 			const command = state?.startsWith(
@@ -175,7 +176,9 @@ export const nativeFixture = () => {
 							.map((item) => item.text)
 							.filter(
 								(item) =>
-									!item.startsWith("D3R runtime phase state (authoritative):"),
+									!item.startsWith(
+										"D3R runtime phase state (authoritative):",
+									) && !item.startsWith("Native vault status:"),
 							)
 							.join("\n\n"),
 						acceptanceCriteria: [

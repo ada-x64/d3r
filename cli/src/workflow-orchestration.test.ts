@@ -17,7 +17,9 @@ import { type PhaseAction } from "./workflow-phase-tools.ts";
 import {
 	createWorkflowRuntime,
 	type WorkflowReport,
+	type WorkflowRuntimeOptions,
 } from "./workflow-runtime.ts";
+import { WorkflowTopicName, renderWorkflowTopic } from "./workflow-topic.ts";
 
 /** Small real graphs expose human barriers, independent entry, and partial batches. */
 const workflow = Workflow.parse({
@@ -110,6 +112,9 @@ const checkpoint = (runtime: RuntimeSession) =>
 		continuations?: WorkflowContinuation[];
 		input: RuntimeContent[];
 		history: RuntimeContent[];
+		phaseHistory?: RuntimeContent[];
+		topic?: string;
+		routingInput: RuntimeContent[];
 		routingHistory: number;
 		routing: unknown;
 	};
@@ -135,7 +140,12 @@ const completeRole: RoleBehavior = async (report, _request, state) => {
 	return "completed";
 };
 /** Inject only IO; prompts, checkpoints, batch transitions, and recovery stay production-owned. */
-const harness = (options: { graph?: Workflow } = {}) => {
+const harness = (
+	options: {
+		graph?: Workflow;
+		orchestratorContext?: WorkflowRuntimeOptions["orchestratorContext"];
+	} = {},
+) => {
 	const control = {
 		route: async ({
 			request,
@@ -221,6 +231,7 @@ const harness = (options: { graph?: Workflow } = {}) => {
 		agents,
 		createAgent,
 		orchestrated: true,
+		orchestratorContext: options.orchestratorContext,
 	});
 	onTestFinished(() => runtime.dispose());
 	const prompt = (
@@ -306,6 +317,434 @@ const expectProse = (result: RuntimeToolResult): void => {
 		/"(?:records|continuations|activeBatch|outcome)"\s*:/,
 	);
 };
+
+describe("workflow topics and host context", () => {
+	it("assigns a generated topic before every agent factory and shares its map across parallel and later roles", async () => {
+		const actions: PhaseAction[] = [
+			start("audit"),
+			{ action: "role", role: "first", brief },
+		];
+		await Promise.all(
+			actions.map(async (action) => {
+				const h = harness();
+				const assigned: (string | undefined)[] = [];
+				const makeRole = h.createAgent.getMockImplementation()!;
+				h.createAgent.mockImplementation((name, report) => {
+					assigned.push(h.saved().topic);
+					return makeRole(name, report);
+				});
+				await h.prompt("Discuss cancellation without starting work");
+				expect(h.saved().topic).toBeUndefined();
+				await h.prompt("Inspect cancellation now", async ({ run }) => {
+					expect(await run(action)).not.toMatchObject({ isError: true });
+				});
+				const topic = WorkflowTopicName.parse(h.saved().topic);
+				expect(topic).toMatch(/^stop-cancelled-searches-[a-f0-9]{8}$/);
+				expect(h.children.map(({ name }) => name)).toEqual(
+					action.action === "start" ? ["first", "second", "last"] : ["first"],
+				);
+				expect(assigned).toEqual(h.children.map(() => topic));
+				const map = renderWorkflowTopic(topic);
+				for (const { session } of h.children) {
+					const [[request]] = session.prompt.mock.calls;
+					expect(request.content).toContainEqual({ type: "text", text: map });
+					expect(textOf(request.content)).toContain(
+						`process/designs/${topic}/research.md`,
+					);
+					expect(textOf(request.content)).toContain(`process/tasks/${topic}`);
+				}
+			}),
+		);
+	});
+
+	it("keeps the topic across a reworded correction, resumed roles, reload, and completion archival", async () => {
+		const h = harness();
+		h.control.role = async (report, request, state) => {
+			if (state.name === "second") {
+				report({
+					status: "needs_human",
+					summary: "Cancel queued searches too?",
+				});
+				return "completed";
+			}
+			return completeRole(report, request, state);
+		};
+		await h.prompt("Inspect search cancellation", async ({ run }) => {
+			await run(start("audit"));
+		});
+		const saved = h.saved();
+		const topic = WorkflowTopicName.parse(saved.topic);
+		expect(saved.engine).toMatchObject({ status: "waiting" });
+		const restored = harness();
+		restored.runtime.restore!(JSON.stringify(saved));
+		expect(restored.saved().topic).toBe(topic);
+		expect(restored.createAgent).not.toHaveBeenCalled();
+		const correction =
+			"Also stop queued requests, but preserve cached results.";
+		await restored.prompt(correction, async ({ run, request }) => {
+			expect(textOf(request.content)).toContain(renderWorkflowTopic(topic));
+			const result = await run({
+				action: "continue",
+				instructions: correction,
+			});
+			expect(result.text).toContain("Status: completed");
+			expect(restored.saved().topic).toBe(topic);
+		});
+		expect(restored.children.map(({ name }) => name)).toEqual([
+			"second",
+			"last",
+		]);
+		expect(
+			restored.children[0].session.restore,
+		).toHaveBeenCalledExactlyOnceWith(saved.continuations![0].checkpoint);
+		for (const { session } of [...h.children, ...restored.children]) {
+			expect(session.prompt.mock.calls[0][0].content).toContainEqual({
+				type: "text",
+				text: renderWorkflowTopic(topic),
+			});
+		}
+		for (const { state } of restored.children) {
+			expect(state.messages.at(-1)).toContain(correction);
+		}
+		const reloaded = harness();
+		reloaded.runtime.restore!(JSON.stringify(restored.saved()));
+		await reloaded.prompt(
+			"Discuss the completed inspection",
+			async ({ request }) => {
+				expect(textOf(request.content)).toContain("Most recent topic");
+				expect(textOf(request.content)).toContain(renderWorkflowTopic(topic));
+			},
+		);
+		expect(reloaded.saved()).toMatchObject({ topic, engine: null });
+		expect(reloaded.createAgent).not.toHaveBeenCalled();
+	});
+
+	it("retains an abandoned topic for explicit follow-on reuse but gives a new same-goal task a fresh suffix", async () => {
+		const h = harness();
+		await h.prompt("Design cancellation", async ({ run }) => {
+			await run(start("design"));
+		});
+		const topic = WorkflowTopicName.parse(h.saved().topic);
+		await h.prompt("Abandon this design", async ({ run }) => {
+			expect(
+				await run({
+					action: "abandon",
+					reason: "Inspect independently instead",
+				}),
+			).not.toMatchObject({ isError: true });
+			const status = await run({ action: "status" });
+			expect(status.text).toContain("Most recent topic");
+			expect(status.text).toContain(renderWorkflowTopic(topic));
+		});
+		expect(h.saved()).toMatchObject({ topic, engine: null });
+		await h.prompt(
+			"Inspect that same topic independently",
+			async ({ run, request }) => {
+				expect(textOf(request.content)).toContain("Most recent topic");
+				expect(textOf(request.content)).toContain(renderWorkflowTopic(topic));
+				await run({ action: "role", role: "last", brief, topic });
+			},
+		);
+		expect(h.saved().topic).toBe(topic);
+		await h.prompt(
+			"Start a new task with the same goal",
+			async ({ run, request }) => {
+				expect(textOf(request.content)).toContain("Most recent topic");
+				expect(h.saved()).toMatchObject({ topic, engine: null });
+				await run({ action: "role", role: "second", brief });
+			},
+		);
+		const fresh = WorkflowTopicName.parse(h.saved().topic);
+		expect(fresh).toMatch(/^stop-cancelled-searches-[a-f0-9]{8}$/);
+		expect(fresh).not.toBe(topic);
+		await h.prompt("Return to the original topic's design", async ({ run }) => {
+			await run({ action: "start", phase: "design", brief, topic });
+		});
+		expect(h.saved().topic).toBe(topic);
+		expect(h.children.map(({ name }) => name)).toEqual([
+			"first",
+			"last",
+			"second",
+			"first",
+		]);
+		for (const [index, child] of h.children.entries()) {
+			expect(child.session.prompt.mock.calls[0][0].content).toContainEqual({
+				type: "text",
+				text: renderWorkflowTopic(index === 2 ? fresh : topic),
+			});
+		}
+	});
+
+	it("reuses a supplied safe topic exactly and never assigns one to rejected or already-aborted starts", async () => {
+		const h = harness();
+		await h.prompt("Do not accept an invalid start", async ({ run }) => {
+			expect(await run(start("unknown"))).toMatchObject({ isError: true });
+			expect(
+				await run({ action: "role", role: "implementor", brief }),
+			).toMatchObject({ isError: true });
+		});
+		expect(h.saved().topic).toBeUndefined();
+		expect(h.createAgent).not.toHaveBeenCalled();
+		const controller = new AbortController();
+		await expect(
+			h.prompt(
+				"Cancel before accepting work",
+				async ({ run }) => {
+					controller.abort();
+					await expect(run(start("audit"))).rejects.toThrow();
+					await expect(
+						run({
+							action: "role",
+							role: "first",
+							brief,
+							topic: "not-accepted",
+						}),
+					).rejects.toThrow();
+				},
+				controller.signal,
+			),
+		).resolves.toBe("cancelled");
+		expect(h.saved().topic).toBeUndefined();
+		expect(h.createAgent).not.toHaveBeenCalled();
+		const topic = WorkflowTopicName.parse("existing-search-cancellation");
+		await h.prompt("Use the existing topic", async ({ run }) => {
+			await run({ action: "start", phase: "design", brief, topic });
+		});
+		const before = h.saved();
+		expect(before.topic).toBe(topic);
+		await h.prompt("Do not replace unfinished work", async ({ run }) => {
+			expect(await run(start("audit"))).toMatchObject({ isError: true });
+			expect(
+				await run({
+					action: "role",
+					role: "last",
+					brief,
+					topic: "replacement-topic",
+				}),
+			).toMatchObject({ isError: true });
+		});
+		expect(h.saved()).toMatchObject({
+			topic,
+			engine: before.engine,
+			input: before.input,
+		});
+		expect(h.children).toHaveLength(1);
+		expect(
+			h.children[0].session.prompt.mock.calls[0][0].content,
+		).toContainEqual({
+			type: "text",
+			text: renderWorkflowTopic(topic),
+		});
+	});
+
+	it("rejects malformed and non-orchestrated checkpoint topics atomically before routing restore", async () => {
+		const source = harness();
+		await source.prompt("Design the source task", async ({ run }) => {
+			await run(start("design"));
+		});
+		const saved = source.saved();
+		const target = harness();
+		await target.prompt("Retain the target task", async ({ run }) => {
+			await run({
+				action: "start",
+				phase: "design",
+				brief,
+				topic: "target-task",
+			});
+		});
+		const before = target.saved();
+		const malformed = [
+			"",
+			"../escape",
+			"/absolute",
+			"nested/topic",
+			String.raw`nested\topic`,
+			"Uppercase",
+			"has space",
+			"safe\n",
+			"aux",
+			"a".repeat(81),
+			null,
+			7,
+			{ name: "topic" },
+		];
+		for (const invalid of [
+			...malformed.map((topic) => ({ ...saved, topic })),
+			{ ...saved, orchestrated: false },
+			{ ...saved, orchestrated: undefined },
+		]) {
+			expect(() => target.runtime.restore!(JSON.stringify(invalid))).toThrow(
+				/topic/i,
+			);
+			expect(target.routing.restore).not.toHaveBeenCalled();
+			expect(target.saved()).toEqual(before);
+		}
+		expect(target.routing.prompt).toHaveBeenCalledOnce();
+		expect(target.children).toHaveLength(1);
+	});
+
+	it("resumes an old active checkpoint without inventing a topic or silently rerouting its task", async () => {
+		const source = harness();
+		await source.prompt("Design cancellation", async ({ run }) => {
+			await run(start("design"));
+		});
+		const legacy = source.saved();
+		delete legacy.topic;
+		const target = harness();
+		await target.prompt("Inspect a different topic", async ({ run }) => {
+			await run({
+				action: "role",
+				role: "first",
+				brief,
+				topic: "unrelated-topic",
+			});
+		});
+		target.runtime.restore!(JSON.stringify(legacy));
+		expect(target.saved().topic).toBeUndefined();
+		expect(target.saved().engine).toEqual(legacy.engine);
+		await target.prompt(
+			"Explain where the original task paused",
+			async ({ request, run }) => {
+				expect(textOf(request.content)).toContain("Approve the scope");
+				expect(textOf(request.content)).not.toMatch(
+					/Shared topic|Topic name:|unrelated-topic/,
+				);
+				expect(await run(start("audit"))).toMatchObject({ isError: true });
+			},
+		);
+		expect(target.saved().engine).toEqual(legacy.engine);
+		expect(target.children).toHaveLength(1);
+		await target.prompt(
+			"Approve the scope, retaining the original artifact locations",
+			async ({ run }) => {
+				const result = await run({
+					action: "continue",
+					instructions: "Approve the original scope",
+				});
+				expect(result.isError).not.toBe(true);
+				expect(result.text).toContain("Approve the plan");
+			},
+		);
+		expect(target.children.map(({ name }) => name)).toEqual([
+			"first",
+			"second",
+		]);
+		expect(target.children[1].state.messages[0]).not.toMatch(
+			/Shared topic|Topic name:|process\/designs\//,
+		);
+		expect(target.saved().topic).toBeUndefined();
+		const reloaded = harness();
+		reloaded.runtime.restore!(JSON.stringify(target.saved()));
+		expect(reloaded.saved().topic).toBeUndefined();
+		expect(reloaded.saved().engine).toEqual(target.saved().engine);
+		expect(reloaded.createAgent).not.toHaveBeenCalled();
+	});
+
+	it("refreshes cancellable host metadata before routing without promoting it to user history or worker constraints", async () => {
+		const metadata = [
+			"Host observation: vault absent; HOST_ONLY_INITIAL",
+			"Host observation: vault ready; HOST_ONLY_REFRESHED",
+			"Host observation: HOST_ONLY_CANCELLED",
+			"Host observation: vault changed again; HOST_ONLY_RECOVERED",
+		];
+		const orchestratorContext = vi.fn(
+			async (_signal: AbortSignal) => metadata[0],
+		);
+		const h = harness({ orchestratorContext });
+		await h.prompt("Discuss the cancellation fix", async ({ request }) => {
+			expect(request.content.at(-1)).toEqual({
+				type: "text",
+				text: metadata[0],
+			});
+			expect(orchestratorContext).toHaveBeenCalledExactlyOnceWith(
+				request.signal,
+			);
+		});
+		orchestratorContext.mockResolvedValueOnce(metadata[1]);
+		const content: RuntimeContent[] = [
+			{ type: "text", text: "Design cancellation; do not commit or push" },
+		];
+		const original = structuredClone(content);
+		h.control.route = async ({ request, run }) => {
+			expect(request.content.at(-1)).toEqual({
+				type: "text",
+				text: metadata[1],
+			});
+			expect(textOf(request.content)).not.toContain(metadata[0]);
+			expect(orchestratorContext).toHaveBeenCalledTimes(2);
+			expect(orchestratorContext).toHaveBeenLastCalledWith(request.signal);
+			await run(start("design"));
+		};
+		await h.runtime.prompt({
+			content,
+			signal: new AbortController().signal,
+			emit: async () => undefined,
+		});
+		expect(content).toEqual(original);
+		const before = h.saved();
+		const entered = gate();
+		orchestratorContext.mockImplementationOnce(async (signal) => {
+			entered.resolve();
+			await untilAborted(signal);
+			expect(signal.aborted).toBe(true);
+			return metadata[2];
+		});
+		const controller = new AbortController();
+		const turn = h.prompt(
+			"Discard this cancelled instruction",
+			async ({ run }) => {
+				await run({ action: "continue", instructions: "Approve the scope" });
+			},
+			controller.signal,
+		);
+		try {
+			await entered.promise;
+			expect(h.routing.prompt).toHaveBeenCalledTimes(2);
+		} finally {
+			controller.abort();
+			await expect(turn).resolves.toBe("cancelled");
+		}
+
+		expect(h.routing.prompt).toHaveBeenCalledTimes(2);
+		expect(h.saved()).toMatchObject({
+			topic: before.topic,
+			engine: before.engine,
+			input: before.input,
+			history: before.history,
+			routingHistory: before.routingHistory,
+		});
+		orchestratorContext.mockResolvedValueOnce(metadata[3]);
+		await h.prompt("Approve the original scope", async ({ request, run }) => {
+			expect(request.content.at(-1)).toEqual({
+				type: "text",
+				text: metadata[3],
+			});
+			expect(textOf(request.content)).not.toContain(metadata[2]);
+			expect(orchestratorContext).toHaveBeenCalledTimes(4);
+			expect(orchestratorContext).toHaveBeenLastCalledWith(request.signal);
+			await run({
+				action: "continue",
+				instructions: "Approve the original scope",
+			});
+		});
+		const saved = h.saved();
+		expect(
+			textOf([
+				...saved.input,
+				...saved.history,
+				...saved.routingInput,
+				...(saved.phaseHistory ?? []),
+			]),
+		).not.toMatch(/HOST_ONLY_|Discard this cancelled instruction/);
+		expect(h.children.map(({ name }) => name)).toEqual(["first", "second"]);
+		for (const { state } of h.children) {
+			expect(state.messages[0]).toContain(brief.constraints[0]);
+			expect(state.messages[0]).not.toMatch(
+				/HOST_ONLY_|Discard this cancelled instruction/,
+			);
+		}
+	});
+});
 
 describe("persistent workflow orchestration", () => {
 	it("keeps ordinary conversation and slash intent in the same routing session across restoration", async () => {
@@ -1341,13 +1780,14 @@ describe("persistent workflow orchestration", () => {
 			expect(result.text).not.toContain("Evidence item 4:");
 			expect(result.text).toContain("Evidence item 5:");
 			expect(result.text).toContain("truncated");
-			expect(result.text.length).toBeLessThan(67_000);
+			// Allow bounded topic/path metadata alongside the unchanged 64 KiB evidence cap.
+			expect(result.text.length).toBeLessThan(70_000);
 			expect(result.text.match(/^### /gm)!.length).toBeLessThanOrEqual(16);
 			expect(await run({ action: "status" })).toEqual(result);
 		});
 		const before = h.saved().engine;
 		await h.prompt("Show current status", async ({ run, request }) => {
-			expect(textOf(request.content).length).toBeLessThan(67_000);
+			expect(textOf(request.content).length).toBeLessThan(70_000);
 			const result = await run({ action: "status" });
 			expectProse(result);
 			expect(result.text).toContain("Status: waiting");
