@@ -8,6 +8,7 @@ import {
 	type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import { SEED_ROOT } from "@d3r/core/vault/seed-root";
+import { execFile } from "node:child_process";
 import {
 	cp,
 	mkdir,
@@ -21,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -253,6 +255,24 @@ const journeyPhaseReply =
 	};
 /** Small real invocation limits make boundary journeys independent of production defaults. */
 const JOURNEY_BUDGET = { maxTurns: 3, maxTotalTurns: 6 };
+/** Shipped auditor/reviewer capabilities allow report writes, but not editing, web access or delegation. */
+const JOURNEY_INSPECTION_TOOLS = [
+	"read_file",
+	"list_directory",
+	"search",
+	"write_file",
+	"run_command",
+	"read_skill",
+	"vault_read",
+	"vault_ls",
+	"vault_find",
+	"vault_lint",
+	"vault_write",
+	"vault_mv",
+	"vault_rm",
+	"d3r_report",
+	"d3r_request_extension",
+].toSorted();
 /** ACP grants must select an offered option; cancellation is not a rejection selection. */
 type JourneyDecision = boolean | "allow_scope" | "cancelled";
 /** Read the public JSON text envelope; fixtures must use actual read snapshots. */
@@ -556,6 +576,1081 @@ describe("native ACP shipped-workflow journeys", () => {
 					.map((path) => rm(path, { recursive: true, force: true })),
 			);
 		}
+	});
+
+	// oxlint-disable-next-line max-statements -- Real worktree evidence, role isolation, and subsequent discussion form one journey.
+	it("runs a standalone auditor read-only, reloads completed-role Phase picker changes and starts only the next requested phase", async () => {
+		const goal = "audit this worktree";
+		const scope =
+			"Inspect queue.mjs and scratch.txt, including uncommitted and untracked contents, not just a commit.";
+		const criterion =
+			"Return inline findings with severity and file locations.";
+		const constraint =
+			"Read-only inspection; do not fix, write reports, stage or commit.";
+		const source = "export const enqueue = (jobs, job) => jobs.push(job);\n";
+		const untracked =
+			"Untracked enqueue probe: callers expect an unchanged input array.\n";
+		const finding =
+			"**High - queue.mjs:1:** enqueue mutates the caller's array and returns a length, not a queue. The untracked scratch.txt:1 probe expects unchanged input.";
+		const command = {
+			command: process.execPath,
+			args: [
+				"--input-type=module",
+				"-e",
+				"import { readFileSync } from 'node:fs'; for (const path of ['queue.mjs', 'scratch.txt']) console.log(path + ': ' + readFileSync(path, 'utf8'));",
+			],
+		};
+		const scripts: JourneyScripts = {
+			router: [
+				journeyCall(
+					"d3r_run_role",
+					{
+						role: "auditor",
+						brief: {
+							goal,
+							context: scope,
+							acceptanceCriteria: [criterion],
+							constraints: [constraint],
+						},
+					},
+					"audit-worktree",
+				),
+				journeyPhaseReply("audit-worktree", "Worktree audit"),
+				(context) => [
+					{
+						type: "text",
+						text: journeyResultText(context, "audit-worktree").includes(finding)
+							? "## Audit discussion\n\nThe enqueue finding includes the untracked probe. No fixes or develop phase were started."
+							: "Missing prior audit evidence.",
+					},
+				],
+			],
+			auditor: [
+				journeyCall("read_file", { path: "AGENTS.md" }, "conventions"),
+				journeyCall("read_file", { path: "queue.mjs" }, "changed-source"),
+				journeyCall(
+					"search",
+					{ path: ".", query: "enqueue" },
+					"worktree-search",
+				),
+				journeyCall("run_command", command, "inspect-disk"),
+				journeyReport(finding),
+				[{ type: "text", text: "Worker-only audit response" }],
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		const git = (...args: string[]) =>
+			promisify(execFile)(
+				"git",
+				["--no-pager", "--no-optional-locks", ...args],
+				{ cwd: j.cwd, timeout: 5000 },
+			);
+		// An index baseline gives real dirty/untracked files without creating a fixture commit.
+		await git("init", "--quiet");
+		await writeFile(
+			resolve(j.cwd, "queue.mjs"),
+			"export const enqueue = (jobs, job) => [...jobs, job];\n",
+		);
+		await git("add", "--", "queue.mjs");
+		await Promise.all([
+			writeFile(resolve(j.cwd, "queue.mjs"), source),
+			writeFile(resolve(j.cwd, "scratch.txt"), untracked),
+		]);
+		const { stdout: beforeStatus } = await git("status", "--porcelain=v1");
+		expect(beforeStatus).toContain("AM queue.mjs");
+		expect(beforeStatus).toContain("?? scratch.txt");
+		const files = await readdir(j.cwd, { recursive: true });
+		const index = await readFile(resolve(j.cwd, ".git/index"));
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const pin = journeyCheckpoint(await f.checkpoint(sessionId));
+		expect(
+			pin.resources.agents.find(({ spec }) => spec.name === "auditor")?.spec
+				.capabilities,
+		).toEqual(["read", "bash", "write"]);
+		await expect(
+			readFile(resolve(pin.resources.vaultRoot, "AGENTS.md")),
+		).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(
+			f.prompt(sessionId, `${goal}\n${scope}\n${criterion}\n${constraint}`),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const completed = journeyCheckpoint(await f.checkpoint(sessionId));
+		expect(completed.resources).toEqual(pin.resources);
+		expect(completed.inner).toMatchObject({
+			orchestrated: true,
+			standaloneRole: "auditor",
+			phase: "routing",
+			workflow: pin.resources.workflow,
+			engine: {
+				command: "standalone",
+				status: "completed",
+				mode: null,
+				pause: null,
+			},
+		});
+		expect(completed.inner!.engine!.workflow).toEqual({
+			commands: {
+				standalone: {
+					description: "Run auditor independently",
+					chain: [{ kind: "agent", name: "auditor" }],
+				},
+			},
+			vault: pin.resources.workflow.vault,
+		});
+		expect(completed.inner!.engine!.records).toEqual([
+			expect.objectContaining({
+				kind: "agent",
+				role: "auditor",
+				loops: [],
+				status: "completed",
+				outcome: { status: "completed", summary: finding },
+			}),
+		]);
+		expect(completed.inner).not.toHaveProperty("summary");
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"auditor",
+		]);
+		expect(new Set(j.requests.map(({ role }) => role))).toEqual(
+			new Set(["router", "auditor"]),
+		);
+		const auditor = j.requests.filter(({ role }) => role === "auditor");
+		for (const fact of [
+			goal,
+			scope,
+			criterion,
+			constraint,
+			"Conversation-derived standalone role brief:",
+			"Execute only auditor as a standalone role",
+			"including uncommitted and untracked work",
+			"Keep inspection read-only",
+		]) {
+			expect(JSON.stringify(auditor[0].context.messages)).toContain(fact);
+		}
+		expect(auditor[0].context.systemPrompt).toMatch(
+			/no prior phase or formal vault documents are required/i,
+		);
+		for (const { context } of auditor) {
+			expect(context.tools?.map(({ name }) => name).toSorted()).toEqual(
+				JOURNEY_INSPECTION_TOOLS,
+			);
+		}
+		const evidence = auditor.at(-1)!.context;
+		for (const id of [
+			"conventions",
+			"changed-source",
+			"worktree-search",
+			"inspect-disk",
+			"d3r_report",
+		]) {
+			expect(journeyResult(evidence, id)).toMatchObject({ isError: false });
+		}
+		expect(journeyResultText(evidence, "conventions")).toContain(
+			"Preserve the offline user's requirements.",
+		);
+		expect(journeyResultText(evidence, "changed-source")).toContain(
+			source.trim(),
+		);
+		expect(journeyResultText(evidence, "worktree-search")).toContain(
+			`${resolve(j.cwd, "queue.mjs")}:1: ${source.trim()}`,
+		);
+		expect(journeyResultText(evidence, "worktree-search")).toContain(
+			`${resolve(j.cwd, "scratch.txt")}:1: ${untracked.trim()}`,
+		);
+		for (const text of [source.trim(), untracked.trim()]) {
+			expect(journeyResultText(evidence, "inspect-disk")).toContain(text);
+		}
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+			expect.stringContaining("--input-type=module"),
+		]);
+		expect(j.permissions.at(-1)!.toolCall.rawInput).toMatchObject(command);
+		expect(
+			journeyTools(f.updates).filter(
+				({ status, kind }) => status === "completed" && kind === "execute",
+			),
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ rawInput: expect.objectContaining(command) }),
+			]),
+		);
+		const final = j.requests.findLast(({ role }) => role === "router")!.context;
+		expect(journeyResult(final, "audit-worktree")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(final, "audit-worktree")).toContain(
+			"## Role: auditor\nStatus: completed\nMode: standalone\nThis is an independent role task, not completion or approval of a phase.",
+		);
+		expect(journeyText(f.updates)).toMatch(/^## Worktree audit/);
+		expect(journeyText(f.updates)).toContain(finding);
+		expect(journeyText(f.updates)).not.toMatch(
+			/Worker-only|"status"|```json|## Phase:|Workflow complete/,
+		);
+		expect(
+			f.updates.filter(
+				({ update }) => update.sessionUpdate === "agent_message_chunk",
+			),
+		).toHaveLength(1);
+		const beforePicker = {
+			requests: j.requests.length,
+			runtimes: j.runtimes.length,
+			permissions: j.permissions.length,
+		};
+		const selected = await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "phase",
+			value: "develop",
+		});
+		expect(selected.configOptions).toContainEqual(
+			expect.objectContaining({ id: "phase", currentValue: "develop" }),
+		);
+		const selectedCheckpoint = await f.checkpoint(sessionId);
+		expect(journeyCheckpoint(selectedCheckpoint)).toEqual({
+			...completed,
+			phase: "develop",
+			inner: { ...completed.inner, phase: "develop" },
+		});
+		await f.peer.agent.request("session/close", { sessionId });
+		await f.close();
+		const resumed = await j.connect();
+		const loaded = await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		expect(loaded.configOptions).toContainEqual(
+			expect.objectContaining({ id: "phase", currentValue: "develop" }),
+		);
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(
+			selectedCheckpoint,
+		);
+		expect(j.requests).toHaveLength(beforePicker.requests);
+		expect(j.runtimes).toHaveLength(beforePicker.runtimes);
+		expect(j.permissions).toHaveLength(beforePicker.permissions);
+		expect(journeyText(resumed.updates)).toContain(finding);
+		await expect(
+			resumed.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "phase",
+				value: "standalone",
+			}),
+		).rejects.toBeInstanceOf(RequestError);
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(
+			selectedCheckpoint,
+		);
+		const changed = await resumed.peer.agent.request(
+			"session/set_config_option",
+			{
+				sessionId,
+				configId: "phase",
+				value: "delegate",
+			},
+		);
+		expect(changed.configOptions).toContainEqual(
+			expect.objectContaining({ id: "phase", currentValue: "delegate" }),
+		);
+		expect(journeyCheckpoint(await resumed.checkpoint(sessionId))).toEqual({
+			...completed,
+			phase: "delegate",
+			inner: { ...completed.inner, phase: "delegate" },
+		});
+		expect(j.requests).toHaveLength(beforePicker.requests);
+		expect(j.runtimes).toHaveLength(beforePicker.runtimes);
+		expect(j.permissions).toHaveLength(beforePicker.permissions);
+		const beforeDiscussion = j.requests.length;
+		const permissions = j.permissions.length;
+		await expect(
+			resumed.prompt(
+				sessionId,
+				"Discuss the untracked probe finding; do not start any fixes.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(j.requests.slice(beforeDiscussion).map(({ role }) => role)).toEqual([
+			"router",
+		]);
+		expect(
+			j.permissions.slice(permissions).map(({ toolCall }) => toolCall.title),
+		).toEqual([expect.stringMatching(/^Trust workspace/)]);
+		expect(journeyText(resumed.updates)).toContain(
+			"No fixes or develop phase were started.",
+		);
+		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+			finding,
+		);
+		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+			"No active workflow. Selected phase: delegate.",
+		);
+		expect(
+			journeyCheckpoint(await resumed.checkpoint(sessionId)).inner,
+		).toMatchObject({
+			phase: "delegate",
+			engine: null,
+			workflow: pin.resources.workflow,
+		});
+		const nextGoal =
+			"Use the selected delegate phase to outline the enqueue fix inline, without implementation or files.";
+		const reports = {
+			planner:
+				"Scope the fix to queue.mjs: preserve the caller's array and return the extended queue.",
+			schemer:
+				"Acceptance: the scratch.txt probe must observe unchanged input and both jobs in the returned queue.",
+		};
+		scripts.router.push(
+			journeyCall(
+				"d3r_start_phase",
+				{
+					phase: "delegate",
+					brief: {
+						goal: nextGoal,
+						context: finding,
+						acceptanceCriteria: [criterion],
+						constraints: [constraint],
+					},
+				},
+				"delegate-after-audit",
+			),
+			journeyPhaseReply("delegate-after-audit", "Inline task ready"),
+		);
+		scripts.planner = [
+			journeyCall("read_file", { path: "queue.mjs" }),
+			...journeyDone(reports.planner),
+		];
+		scripts.schemer = [
+			journeyCall("read_file", { path: "scratch.txt" }),
+			...journeyDone(reports.schemer),
+		];
+		const nextStart = j.requests.length;
+		const nextUpdates = resumed.updates.length;
+		await expect(resumed.prompt(sessionId, nextGoal)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const delegated = journeyCheckpoint(await resumed.checkpoint(sessionId));
+		expect(delegated.resources).toEqual(pin.resources);
+		expect(delegated.inner).not.toHaveProperty("standaloneRole");
+		expect(delegated.inner).toMatchObject({
+			phase: "routing",
+			workflow: pin.resources.workflow,
+			engine: {
+				command: "delegate",
+				status: "completed",
+				workflow: pin.resources.workflow,
+			},
+		});
+		expect(
+			delegated.inner!.engine!.records.map(({ role, status, outcome }) => ({
+				role,
+				status,
+				summary: outcome?.summary,
+			})),
+		).toEqual(
+			Object.entries(reports).map(([role, summary]) => ({
+				role,
+				status: "completed",
+				summary,
+			})),
+		);
+		for (const [role, text] of [
+			["planner", source],
+			["schemer", untracked],
+		]) {
+			const { context } = j.requests.findLast((entry) => entry.role === role)!;
+			expect(journeyResult(context, "read_file")).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResultText(context, "read_file")).toContain(text.trim());
+		}
+		expect(
+			new Set(j.requests.slice(nextStart).map(({ role }) => role)),
+		).toEqual(new Set(["router", "planner", "schemer"]));
+		expect(j.requests.filter(({ role }) => role === "auditor")).toEqual(
+			auditor,
+		);
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"auditor",
+			"routing",
+			"planner",
+			"schemer",
+		]);
+		expect(
+			j.permissions.slice(permissions).map(({ toolCall }) => toolCall.title),
+		).toEqual([expect.stringMatching(/^Trust workspace/)]);
+		expect(
+			journeyResult(j.requests.at(-1)!.context, "delegate-after-audit"),
+		).toMatchObject({ isError: false });
+		expect(journeyText(resumed.updates.slice(nextUpdates))).toMatch(
+			/^## Inline task ready/,
+		);
+		for (const report of Object.values(reports)) {
+			expect(journeyText(resumed.updates.slice(nextUpdates))).toContain(report);
+		}
+		expect(
+			resumed.updates
+				.slice(nextUpdates)
+				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
+		).toHaveLength(1);
+		for (const { context } of j.requests.filter(
+			({ role }) => role === "router",
+		)) {
+			expect(context.tools?.map(({ name }) => name).toSorted()).toEqual(
+				[
+					...JOURNEY_INSPECTION_TOOLS.filter((name) => name !== "d3r_report"),
+					"edit_file",
+					"vault_edit",
+					"web_search",
+					"web_fetch",
+					"d3r_start_phase",
+					"d3r_run_role",
+					"d3r_continue_phase",
+					"d3r_abandon_phase",
+					"d3r_phase_status",
+				].toSorted(),
+			);
+			expect(
+				context.tools?.find(({ name }) => name === "d3r_run_role")?.parameters,
+			).toMatchObject({
+				type: "object",
+				required: ["role", "brief"],
+				additionalProperties: false,
+				properties: {
+					role: {
+						type: "string",
+						enum: pin.resources.agents
+							.filter(({ spec }) => spec.name !== "orchestrator")
+							.map(({ spec }) => spec.name),
+					},
+					brief: {
+						type: "object",
+						required: ["goal", "context", "acceptanceCriteria"],
+						additionalProperties: false,
+					},
+					mode: { type: "string", enum: ["semi", "auto"] },
+				},
+			});
+		}
+		expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
+		expect(await readFile(resolve(j.cwd, ".git/index"))).toEqual(index);
+		const { stdout: afterStatus } = await git("status", "--porcelain=v1");
+		expect(afterStatus).toBe(beforeStatus);
+		expect(await readFile(resolve(j.cwd, "queue.mjs"), "utf8")).toBe(source);
+		expect(await readFile(resolve(j.cwd, "scratch.txt"), "utf8")).toBe(
+			untracked,
+		);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	it.each(["needs_human", "cancelled"] as const)(
+		"reloads a standalone auditor %s checkpoint, rejects active-role picker changes and continues only that auditor",
+		// oxlint-disable-next-line max-statements -- Persistence, inert load, and retained worker evidence form one recovery journey.
+		async (pause) => {
+			const goal = "Audit local queue retention without starting develop.";
+			const scope =
+				"policy.txt leaves the retention period undecided; ask me rather than inventing a limit.";
+			const question = "How many hours may an offline queue job be retained?";
+			const answer =
+				"Retain jobs for 72 hours; continue this audit, not implementation.";
+			const finding =
+				"**High - queue.txt:1:** the worktree retains jobs for 96 hours, exceeding the user's 72-hour limit.";
+			const atRead = deferred<void>();
+			const scripts: JourneyScripts = {
+				router: [
+					journeyCall(
+						"d3r_run_role",
+						{
+							role: "auditor",
+							brief: {
+								goal,
+								context: scope,
+								acceptanceCriteria: [
+									"Report retention mismatches inline; do not edit files.",
+								],
+							},
+						},
+						"audit-question",
+					),
+					...(pause === "needs_human"
+						? [journeyPhaseReply("audit-question", "Retention decision needed")]
+						: []),
+					journeyCall(
+						"d3r_continue_phase",
+						{ instructions: answer },
+						"resume-audit",
+					),
+					journeyPhaseReply("resume-audit", "Retention audit complete"),
+				],
+				auditor: [
+					journeyCall("read_file", { path: "policy.txt" }, "policy-read"),
+					...(pause === "needs_human"
+						? [
+								journeyCall(
+									"d3r_report",
+									{ status: "needs_human", summary: question },
+									"missing-limit",
+								),
+								[
+									{
+										type: "text" as const,
+										text: "Worker-only waiting response",
+									},
+								],
+							]
+						: [[{ type: "text" as const, text: question }]]),
+					journeyCall("read_file", { path: "queue.txt" }, "queue-read"),
+					journeyReport(finding),
+					[{ type: "text", text: "Worker-only resumed response" }],
+				],
+			};
+			const j = await open(scripts, {
+				routerShortcuts: false,
+				readTextFile: async ({ path }) => ({
+					content: await readFile(path, "utf8"),
+				}),
+				streamResponse: (role, content, settings) =>
+					journeyStream(content, async (index) => {
+						if (
+							pause === "cancelled" &&
+							role === "auditor" &&
+							index === 0 &&
+							content.some(
+								(part) => part.type === "text" && part.text === question,
+							)
+						) {
+							atRead.resolve();
+							await waitForAbort(settings!.signal!);
+						}
+					}),
+			});
+			const policy =
+				"Retention period: undecided. Queue jobs are stored locally.\n";
+			const queue = "Queue retention: 96 hours.\n";
+			await Promise.all([
+				writeFile(resolve(j.cwd, "policy.txt"), policy),
+				writeFile(resolve(j.cwd, "queue.txt"), queue),
+			]);
+			const f = await j.connect();
+			const { sessionId } = await f.newSession(j.cwd);
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "model",
+				value: nativeModelKey(JOURNEY_MODEL),
+			});
+			const pin = journeyCheckpoint(await f.checkpoint(sessionId));
+			const pending = f.prompt(sessionId, `${goal}\n${scope}`);
+			if (pause === "cancelled") {
+				try {
+					await Promise.race([
+						atRead.promise,
+						pending.then(() => {
+							throw new Error(
+								"Turn ended before the auditor's settled-read cancellation boundary",
+							);
+						}),
+					]);
+					expect(
+						journeyResult(j.requests.at(-1)!.context, "policy-read"),
+					).toMatchObject({ isError: false });
+					await f.peer.agent.notify("session/cancel", { sessionId });
+					await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+				} finally {
+					await f.peer.agent.notify("session/cancel", { sessionId });
+					await pending;
+				}
+			} else {
+				await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+			}
+			const checkpoint = await f.checkpoint(sessionId);
+			const waiting = journeyCheckpoint(checkpoint).inner!;
+			expect(waiting).toMatchObject({
+				orchestrated: true,
+				standaloneRole: "auditor",
+				phase: "routing",
+				workflow: pin.resources.workflow,
+				engine: {
+					command: "standalone",
+					status: pause === "needs_human" ? "waiting" : "interrupted",
+					mode: null,
+					pause:
+						pause === "needs_human"
+							? { kind: "report", message: question }
+							: { kind: "interrupted" },
+				},
+			});
+			expect(waiting.engine!.workflow).toEqual({
+				commands: {
+					standalone: {
+						description: "Run auditor independently",
+						chain: [{ kind: "agent", name: "auditor" }],
+					},
+				},
+				vault: pin.resources.workflow.vault,
+			});
+			expect(waiting.engine!.records).toEqual([
+				expect.objectContaining({
+					kind: "agent",
+					role: "auditor",
+					loops: [],
+					status: pause === "needs_human" ? "waiting" : "interrupted",
+					...(pause === "needs_human"
+						? { outcome: { status: "needs_human", summary: question } }
+						: {}),
+				}),
+			]);
+			const [worker] = waiting.engine!.records;
+			expect(waiting.continuations?.map(({ recordId }) => recordId)).toEqual([
+				worker.id,
+			]);
+			if (pause === "needs_human") {
+				expect(
+					journeyResultText(j.requests.at(-1)!.context, "audit-question"),
+				).toContain(
+					"## Role: auditor\nStatus: waiting\nMode: standalone\nThis is an independent role task, not completion or approval of a phase.",
+				);
+				expect(journeyText(f.updates)).toContain(question);
+			} else {
+				expect(worker).not.toHaveProperty("outcome");
+				expect(JSON.stringify(waiting.continuations)).toContain("policy-read");
+			}
+			expect(journeyText(f.updates)).not.toContain("72");
+			expect(j.reads.map(({ path }) => path)).toEqual([
+				resolve(j.cwd, "policy.txt"),
+			]);
+			expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+				"routing",
+				"auditor",
+			]);
+			const beforeReload = {
+				requests: j.requests.length,
+				permissions: j.permissions.length,
+				runtimes: j.runtimes.length,
+			};
+			await expect(
+				f.peer.agent.request("session/set_config_option", {
+					sessionId,
+					configId: "phase",
+					value: "develop",
+				}),
+			).rejects.toBeInstanceOf(RequestError);
+			await expect(f.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+			await f.peer.agent.request("session/close", { sessionId });
+			await f.close();
+			const resumed = await j.connect();
+			await resumed.peer.agent.request("session/load", {
+				sessionId,
+				cwd: j.cwd,
+				mcpServers: [],
+			});
+			await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+			await expect(
+				resumed.peer.agent.request("session/set_config_option", {
+					sessionId,
+					configId: "phase",
+					value: "delegate",
+				}),
+			).rejects.toBeInstanceOf(RequestError);
+			await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+			expect(j.requests).toHaveLength(beforeReload.requests);
+			expect(j.permissions).toHaveLength(beforeReload.permissions);
+			expect(j.runtimes).toHaveLength(beforeReload.runtimes);
+			expect(j.reads.map(({ path }) => path)).toEqual([
+				resolve(j.cwd, "policy.txt"),
+			]);
+			if (pause === "needs_human") {
+				expect(journeyText(resumed.updates)).toContain(question);
+			}
+			const start = resumed.updates.length;
+			await expect(resumed.prompt(sessionId, answer)).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			const recovery = j.requests.slice(beforeReload.requests);
+			expect(new Set(recovery.map(({ role }) => role))).toEqual(
+				new Set(["router", "auditor"]),
+			);
+			const auditor = recovery.find(({ role }) => role === "auditor")!.context;
+			for (const fact of [
+				goal,
+				scope,
+				...(pause === "needs_human" ? [question] : []),
+				answer,
+				"Execute only auditor as a standalone role",
+			]) {
+				expect(JSON.stringify(auditor.messages)).toContain(fact);
+			}
+			expect(journeyResult(auditor, "policy-read")).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResultText(auditor, "policy-read")).toContain(
+				policy.trim(),
+			);
+			if (pause === "needs_human") {
+				expect(journeyResult(auditor, "missing-limit")).toMatchObject({
+					isError: false,
+				});
+			} else {
+				expect(journeyResult(auditor, "missing-limit")).toBeUndefined();
+			}
+			const reported = recovery.findLast(
+				({ role }) => role === "auditor",
+			)!.context;
+			expect(journeyResult(reported, "queue-read")).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResultText(reported, "queue-read")).toContain(queue.trim());
+			expect(journeyResult(reported, "d3r_report")).toMatchObject({
+				isError: false,
+			});
+			expect(j.reads.map(({ path }) => path)).toEqual([
+				resolve(j.cwd, "policy.txt"),
+				resolve(j.cwd, "queue.txt"),
+			]);
+			const completed = journeyCheckpoint(await resumed.checkpoint(sessionId));
+			expect(completed.resources).toEqual(pin.resources);
+			expect(completed.inner).toMatchObject({
+				standaloneRole: "auditor",
+				phase: "routing",
+				workflow: pin.resources.workflow,
+				engine: {
+					command: "standalone",
+					workflow: waiting.engine!.workflow,
+					status: "completed",
+					pause: null,
+				},
+			});
+			expect(completed.inner!.engine!.records).toEqual([
+				{
+					...worker,
+					status: "completed",
+					outcome: { status: "completed", summary: finding },
+				},
+			]);
+			expect(completed.inner!.continuations ?? []).toEqual([]);
+			expect(completed.inner).not.toHaveProperty("summary");
+			expect(
+				journeyResult(recovery.at(-1)!.context, "resume-audit"),
+			).toMatchObject({ isError: false });
+			expect(
+				journeyResultText(recovery.at(-1)!.context, "resume-audit"),
+			).toContain("## Role: auditor\nStatus: completed\nMode: standalone");
+			expect(journeyText(resumed.updates.slice(start))).toContain(finding);
+			expect(journeyText(resumed.updates.slice(start))).not.toMatch(
+				/Worker-only|"status"|## Phase:|Workflow complete/,
+			);
+			expect(
+				resumed.updates
+					.slice(start)
+					.filter(
+						({ update }) => update.sessionUpdate === "agent_message_chunk",
+					),
+			).toHaveLength(1);
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+				expect.stringMatching(/^Trust workspace/),
+			]);
+			expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+				"routing",
+				"auditor",
+				"routing",
+				"auditor",
+			]);
+			for (const { context } of j.requests.filter(
+				({ role }) => role === "auditor",
+			)) {
+				expect(context.tools?.map(({ name }) => name).toSorted()).toEqual(
+					JOURNEY_INSPECTION_TOOLS,
+				);
+			}
+			expect(await readdir(j.cwd)).toEqual([
+				"AGENTS.md",
+				"policy.txt",
+				"queue.txt",
+			]);
+			expect(await readFile(resolve(j.cwd, "policy.txt"), "utf8")).toBe(policy);
+			expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(queue);
+			expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+				true,
+			);
+		},
+	);
+
+	// oxlint-disable-next-line max-statements -- Standalone approval and a later explicit develop must remain separate lifecycles.
+	it("keeps standalone reviewer approval independent and starts the normal develop graph only when requested", async () => {
+		const original = "export const first = (jobs) => jobs[0];\n";
+		const source = "export const first = (jobs) => jobs.at(0) ?? null;\n";
+		const approval =
+			"Approved queue.mjs:1 for the existing nonempty-input contract; this is standalone review evidence, not develop approval.";
+		const goal = "Now develop an empty-queue fallback returning null.";
+		const scope = "Only queue.mjs; do not commit or create vault artifacts.";
+		const criterion =
+			"An empty queue returns null and a nonempty queue returns its first job.";
+		const reports = {
+			implementor: "Implemented the empty-queue fallback in queue.mjs.",
+			reviewer: "Approved the new null fallback after inspecting queue.mjs:1.",
+			auditor:
+				"Audited the null fallback independently of the earlier standalone approval.",
+		};
+		const scripts: JourneyScripts = {
+			router: [
+				journeyCall(
+					"d3r_run_role",
+					{
+						role: "reviewer",
+						brief: {
+							goal: "Review queue.mjs independently.",
+							context:
+								"The current contract accepts nonempty queues; do not implement or audit anything else.",
+							acceptanceCriteria: [
+								"Return an inline verdict, not a report file.",
+							],
+						},
+					},
+					"standalone-review",
+				),
+				journeyPhaseReply("standalone-review", "Independent review"),
+				journeyCall(
+					"d3r_start_phase",
+					{
+						phase: "develop",
+						brief: { goal, context: scope, acceptanceCriteria: [criterion] },
+					},
+					"choose-develop-mode",
+				),
+				journeyPhaseReply("choose-develop-mode", "Choose develop mode"),
+				journeyCall(
+					"d3r_continue_phase",
+					{ instructions: "auto" },
+					"develop-after-review",
+				),
+				journeyPhaseReply(
+					"develop-after-review",
+					"Fallback implemented, reviewed and audited",
+				),
+			],
+			reviewer: [
+				journeyCall("read_file", { path: "queue.mjs" }, "standalone-source"),
+				journeyReport(approval, { review: "approved" }),
+				[{ type: "text", text: "Worker-only standalone approval" }],
+				journeyCall(
+					"read_file",
+					{ path: "queue.mjs" },
+					"develop-review-source",
+				),
+				journeyReport(reports.reviewer, { review: "approved" }),
+				[{ type: "text", text: "Worker-only develop approval" }],
+			],
+			implementor: [
+				journeyCall("read_file", { path: "queue.mjs" }),
+				(context) =>
+					journeyCall("write_file", {
+						path: "queue.mjs",
+						content: source,
+						snapshot: /^Snapshot: ([a-f0-9]{64})/m.exec(
+							journeyResultText(context, "read_file"),
+						)?.[1],
+					}),
+				journeyReport(reports.implementor, { allDone: true }),
+				[{ type: "text", text: "Worker-only implementation" }],
+			],
+			auditor: [
+				journeyCall("read_file", { path: "queue.mjs" }, "develop-audit-source"),
+				...journeyDone(reports.auditor),
+			],
+		};
+		const j = await open(scripts, { routerShortcuts: false });
+		await writeFile(resolve(j.cwd, "queue.mjs"), original);
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const pin = journeyCheckpoint(await f.checkpoint(sessionId));
+		await expect(
+			f.prompt(
+				sessionId,
+				"Review queue.mjs against its nonempty-input contract only; give an inline verdict, without implementation or audit.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const reviewed = journeyCheckpoint(await f.checkpoint(sessionId));
+		expect(reviewed.resources).toEqual(pin.resources);
+		expect(reviewed.inner).toMatchObject({
+			standaloneRole: "reviewer",
+			phase: "routing",
+			workflow: pin.resources.workflow,
+			engine: { command: "standalone", status: "completed", pause: null },
+		});
+		expect(reviewed.inner!.engine!.workflow).toEqual({
+			commands: {
+				standalone: {
+					description: "Run reviewer independently",
+					chain: [{ kind: "agent", name: "reviewer" }],
+				},
+			},
+			vault: pin.resources.workflow.vault,
+		});
+		expect(reviewed.inner!.engine!.records).toEqual([
+			expect.objectContaining({
+				kind: "agent",
+				role: "reviewer",
+				loops: [],
+				status: "completed",
+				outcome: { status: "completed", summary: approval, review: "approved" },
+			}),
+		]);
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"reviewer",
+		]);
+		expect(new Set(j.requests.map(({ role }) => role))).toEqual(
+			new Set(["router", "reviewer"]),
+		);
+		expect(
+			journeyResultText(
+				j.requests.findLast(({ role }) => role === "reviewer")!.context,
+				"standalone-source",
+			),
+		).toContain(original.trim());
+		expect(
+			journeyResultText(j.requests.at(-1)!.context, "standalone-review"),
+		).toContain(
+			"## Role: reviewer\nStatus: completed\nMode: standalone\nThis is an independent role task, not completion or approval of a phase.",
+		);
+		expect(journeyText(f.updates)).toContain(approval);
+		expect(await readFile(resolve(j.cwd, "queue.mjs"), "utf8")).toBe(original);
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+		]);
+		const beforeDevelop = j.requests.length;
+		await expect(
+			f.prompt(sessionId, `${goal}\n${scope}\n${criterion}`),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const waiting = journeyCheckpoint(await f.checkpoint(sessionId));
+		expect(waiting.resources).toEqual(pin.resources);
+		expect(waiting.inner).not.toHaveProperty("standaloneRole");
+		expect(waiting.inner).toMatchObject({
+			phase: "develop",
+			workflow: pin.resources.workflow,
+			engine: {
+				command: "develop",
+				workflow: pin.resources.workflow,
+				status: "waiting",
+				mode: null,
+				pause: { kind: "mode" },
+			},
+		});
+		expect(
+			waiting.inner!.engine!.records.every(
+				({ status, outcome }) => status === "pending" && outcome === undefined,
+			),
+		).toBe(true);
+		expect(
+			waiting
+				.inner!.engine!.records.filter(({ kind }) => kind === "agent")
+				.map(({ role }) => role),
+		).toEqual([
+			"implementor",
+			"reviewer",
+			"implementor",
+			"reviewer",
+			"implementor",
+			"reviewer",
+			"auditor",
+		]);
+		expect(j.requests.slice(beforeDevelop).map(({ role }) => role)).toEqual([
+			"router",
+			"router",
+		]);
+		expect(journeyText(f.updates)).toContain("Choose develop mode");
+		const start = f.updates.length;
+		await expect(f.prompt(sessionId, "auto")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const completed = journeyCheckpoint(await f.checkpoint(sessionId));
+		expect(completed.resources).toEqual(pin.resources);
+		expect(completed.inner).not.toHaveProperty("standaloneRole");
+		expect(completed.inner).not.toHaveProperty("summary");
+		expect(completed.inner).toMatchObject({
+			phase: "routing",
+			workflow: pin.resources.workflow,
+			engine: {
+				command: "develop",
+				workflow: pin.resources.workflow,
+				status: "completed",
+				mode: "auto",
+				pause: null,
+			},
+		});
+		expect(
+			completed
+				.inner!.engine!.records.filter(
+					({ kind, status }) => kind === "agent" && status === "completed",
+				)
+				.map(({ role, outcome }) => ({ role, summary: outcome!.summary })),
+		).toEqual(
+			Object.entries(reports).map(([role, summary]) => ({ role, summary })),
+		);
+		expect(j.runtimes.map(({ options }) => options.budgetLabel)).toEqual([
+			"routing",
+			"reviewer",
+			"implementor",
+			"reviewer",
+			"auditor",
+		]);
+		for (const { role, context } of j.requests.filter(
+			(entry) => entry.role !== "router",
+		)) {
+			expect(context.tools?.map(({ name }) => name).toSorted()).toEqual(
+				role === "implementor"
+					? [...JOURNEY_INSPECTION_TOOLS, "edit_file", "vault_edit"].toSorted()
+					: JOURNEY_INSPECTION_TOOLS,
+			);
+		}
+		expect(
+			journeyResult(
+				j.requests.findLast(({ role }) => role === "implementor")!.context,
+				"write_file",
+			),
+		).toMatchObject({ isError: false });
+		for (const [role, id] of [
+			["reviewer", "develop-review-source"],
+			["auditor", "develop-audit-source"],
+		]) {
+			const { context } = j.requests.findLast((entry) => entry.role === role)!;
+			expect(journeyResult(context, id)).toMatchObject({ isError: false });
+			expect(journeyResultText(context, id)).toContain(source.trim());
+		}
+		expect(
+			journeyResult(j.requests.at(-1)!.context, "develop-after-review"),
+		).toMatchObject({ isError: false });
+		expect(
+			journeyResultText(j.requests.at(-1)!.context, "develop-after-review"),
+		).toContain("## Phase: develop\nStatus: completed\nMode: auto");
+		for (const summary of Object.values(reports)) {
+			expect(journeyText(f.updates.slice(start))).toContain(summary);
+		}
+		expect(journeyText(f.updates.slice(start))).not.toMatch(
+			/Worker-only|"status"|Workflow complete/,
+		);
+		expect(
+			f.updates
+				.slice(start)
+				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
+		).toHaveLength(1);
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+			"write_file",
+		]);
+		expect(await readdir(j.cwd)).toEqual(["AGENTS.md", "queue.mjs"]);
+		expect(await readFile(resolve(j.cwd, "queue.mjs"), "utf8")).toBe(source);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
 	});
 
 	// oxlint-disable-next-line max-statements -- Conversation, actual effects, and subsequent discussion form one acceptance journey.

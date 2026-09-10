@@ -103,7 +103,11 @@ const EVIDENCE_LIMITS = { records: 16, characters: 65_536 };
 /** Phase tool results and each orchestrator turn receive current state, not inferred state. */
 export const describeWorkflowState = (
 	engine: EngineState | null,
-	{ phase, resumable }: { phase: string; resumable: boolean },
+	{
+		phase,
+		resumable,
+		standaloneRole,
+	}: { phase: string; resumable: boolean; standaloneRole?: string },
 ): string => {
 	if (!engine) {
 		return `No active workflow. Selected phase: ${phase}. Any configured phase may start independently; no prior phase or vault documents are required.`;
@@ -117,7 +121,9 @@ export const describeWorkflowState = (
 		)
 		.join("\n\n");
 	return [
-		`## Phase: ${engine.command}\nStatus: ${engine.status}\nMode: ${engine.mode ?? "not selected"}`,
+		standaloneRole
+			? `## Role: ${standaloneRole}\nStatus: ${engine.status}\nMode: ${engine.mode ?? "standalone"}\nThis is an independent role task, not completion or approval of a phase.`
+			: `## Phase: ${engine.command}\nStatus: ${engine.status}\nMode: ${engine.mode ?? "not selected"}`,
 		engine.pause?.message ?? "",
 		evidence.slice(0, EVIDENCE_LIMITS.characters),
 		evidence.length > EVIDENCE_LIMITS.characters

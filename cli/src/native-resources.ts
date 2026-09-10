@@ -13,6 +13,7 @@ import {
 	NATIVE_BRIEF_CONTRACT,
 } from "./workflow-phase-tools.ts";
 import { isWithinRoot } from "./resource-paths.ts";
+import { executionWorkflow } from "./workflow-role.ts";
 import { isAncestorVaultRoot } from "./resource-vault.ts";
 import { type AgentDefinition, type AgentResources } from "./resources.ts";
 import { THOUGHT_LEVELS } from "./native-models.ts";
@@ -166,6 +167,7 @@ const Inner = z
 		phaseHistory: z.array(Content).optional(),
 		summary: WorkflowSummary.optional(),
 		orchestrated: z.boolean().optional(),
+		standaloneRole: z.string().min(1).optional(),
 		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
@@ -340,6 +342,11 @@ export const parseNativeCheckpoint = (value: unknown): NativeCheckpoint => {
 	const { inner } = parsed;
 	if (inner) {
 		const restored = inner.engine ? restoreEngine(inner.engine) : null;
+		const expectedWorkflow = executionWorkflow(
+			inner.workflow,
+			parsed.resources.agents,
+			{ ...inner, engine: restored },
+		);
 		validateContinuations(
 			restored,
 			inner.continuations ?? [],
@@ -354,9 +361,12 @@ export const parseNativeCheckpoint = (value: unknown): NativeCheckpoint => {
 			JSON.stringify(inner.workflow) !==
 				JSON.stringify(parsed.resources.workflow) ||
 			(restored &&
-				(JSON.stringify(restored.workflow) !== JSON.stringify(inner.workflow) ||
+				(JSON.stringify(restored.workflow) !==
+					JSON.stringify(expectedWorkflow) ||
 					(restored.status !== "completed" &&
-						(restored.command !== inner.phase || inner.routingInterrupted))))
+						((inner.standaloneRole === undefined &&
+							restored.command !== inner.phase) ||
+							inner.routingInterrupted))))
 		) {
 			throw new Error("Inconsistent native workflow checkpoint");
 		}

@@ -33,6 +33,11 @@ import {
 import { type AgentDefinition } from "./resources.ts";
 import { PhaseAction, renderWorkflowBrief } from "./workflow-phase-tools.ts";
 import {
+	standaloneWorkflow,
+	executionWorkflow,
+	STANDALONE_COMMAND,
+} from "./workflow-role.ts";
+import {
 	WorkflowContinuations,
 	WorkflowJsonValue as JsonValue,
 	type WorkflowJson as Json,
@@ -127,6 +132,7 @@ const Checkpoint = z
 		phaseHistory: z.array(Content).optional(),
 		summary: WorkflowSummary.optional(),
 		orchestrated: z.boolean().optional(),
+		standaloneRole: z.string().min(1).optional(),
 		continuations: WorkflowContinuations.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
@@ -275,6 +281,7 @@ export const createWorkflowRuntime = (
 	let workflow = Workflow.parse(options.workflow);
 	checkResources(workflow, options.agents);
 	let phase = "routing";
+	let standaloneRole: string | undefined = undefined;
 	let engine: EngineState | null = null;
 	let history: RuntimeContent[] = [];
 	let input: RuntimeContent[] = [];
@@ -353,7 +360,9 @@ export const createWorkflowRuntime = (
 		...outputs(engine),
 		{
 			type: "text",
-			text: `Execute only your assigned role for /${engine!.command}. Mode: ${engine!.mode ?? "declared workflow"}. Call d3r_report exactly once with your final structured outcome after all work. Prose alone never completes a workflow. Do not claim approval or allDone unless established.`,
+			text: standaloneRole
+				? `Execute only ${standaloneRole} as a standalone role, not a phase workflow. Mode: ${standaloneRole === "implementor" ? engine!.mode : "standalone"}. Use the conversation-derived brief; do not require prior phase artifacts. ${["auditor", "reviewer"].includes(standaloneRole) ? "Audit/review the current worktree, including uncommitted and untracked work when in scope. Keep inspection read-only; do not fix findings. Report findings inline with locations and severity; file a report only if explicitly requested. " : ""}No other roles will run automatically, and this task does not approve or complete a phase. Call d3r_report exactly once with your final structured outcome; prose alone does not complete the task.`
+				: `Execute only your assigned role for /${engine!.command}. Mode: ${engine!.mode ?? "declared workflow"}. Call d3r_report exactly once with your final structured outcome after all work. Prose alone never completes a workflow. Do not claim approval or allDone unless established.`,
 		},
 	];
 	// oxlint-disable-next-line max-statements -- Role ownership, failure reporting, and cleanup share one lifetime.
@@ -611,6 +620,7 @@ export const createWorkflowRuntime = (
 			});
 		}
 		engine = null;
+		standaloneRole = undefined;
 		input = [];
 		summary = null;
 		continuations = [];
@@ -618,7 +628,11 @@ export const createWorkflowRuntime = (
 	};
 	const canResume = () => canResumeWorkflow(engine, continuations);
 	const phaseState = () =>
-		describeWorkflowState(engine, { phase, resumable: canResume() });
+		describeWorkflowState(engine, {
+			phase,
+			resumable: canResume(),
+			standaloneRole,
+		});
 	// oxlint-disable-next-line max-statements -- A phase tool owns its transition and effect lifetime under one guard.
 	const runPhase = async (
 		value: PhaseAction,
@@ -663,7 +677,38 @@ export const createWorkflowRuntime = (
 					text: "Phase abandoned. Existing effects remain; no work was replayed or undone.",
 				};
 			}
-			if (action.action === "start") {
+			if (action.action === "role") {
+				if (active()) {
+					return {
+						text: `Cannot replace unfinished work with a standalone role.\n\n${phaseState()}`,
+						isError: true,
+					};
+				}
+				if (action.role === "implementor" && action.mode === undefined) {
+					return {
+						text: "Choose semi or auto explicitly before running the implementor. No role was started.",
+						isError: true,
+					};
+				}
+				const graph = standaloneWorkflow(workflow, options.agents, action.role);
+				const started = createEngine(
+					graph,
+					STANDALONE_COMMAND,
+					action.mode ?? null,
+				);
+				archiveWorkflow();
+				engine = started;
+				standaloneRole = action.role;
+				phase = "routing";
+				phaseHistory = structuredClone(history);
+				input = [
+					...structuredClone(routingInput),
+					{
+						type: "text",
+						text: `Conversation-derived standalone role brief:\n\n${renderWorkflowBrief(action.brief)}`,
+					},
+				];
+			} else if (action.action === "start") {
 				if (active() || !Object.hasOwn(workflow.commands, action.phase)) {
 					return {
 						text: `Cannot replace unfinished work or start an unknown phase.\n\n${phaseState()}`,
@@ -994,6 +1039,7 @@ export const createWorkflowRuntime = (
 				input,
 				...(summary === null ? {} : { summary }),
 				...(orchestrated ? { orchestrated, continuations, phaseHistory } : {}),
+				...(standaloneRole === undefined ? {} : { standaloneRole }),
 				routing: snapshotWorkflowJson(
 					routingBusy ? routingBefore : routing.snapshot(),
 				),
@@ -1014,9 +1060,14 @@ export const createWorkflowRuntime = (
 			);
 			const restored = parsed.engine ? restoreEngine(parsed.engine) : null;
 			checkResources(parsed.workflow, options.agents);
+			const expectedWorkflow = executionWorkflow(
+				parsed.workflow,
+				options.agents,
+				{ ...parsed, engine: restored },
+			);
 			if (
 				restored &&
-				JSON.stringify(restored.workflow) !== JSON.stringify(parsed.workflow)
+				JSON.stringify(restored.workflow) !== JSON.stringify(expectedWorkflow)
 			) {
 				throw new Error("Engine and session workflow pins differ");
 			}
@@ -1029,7 +1080,9 @@ export const createWorkflowRuntime = (
 			if (
 				restored &&
 				restored.status !== "completed" &&
-				(parsed.phase !== restored.command || parsed.routingInterrupted)
+				((parsed.standaloneRole === undefined &&
+					parsed.phase !== restored.command) ||
+					parsed.routingInterrupted)
 			) {
 				throw new Error("Saved phase does not match the active workflow");
 			}
@@ -1058,6 +1111,7 @@ export const createWorkflowRuntime = (
 				routingHistory,
 			} = parsed);
 			engine = restored;
+			({ standaloneRole } = parsed);
 			continuations = structuredClone(parsed.continuations ?? []);
 			phaseHistory = structuredClone(parsed.phaseHistory ?? []);
 			summary = parsed.summary ?? null;

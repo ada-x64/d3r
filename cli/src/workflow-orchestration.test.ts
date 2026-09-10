@@ -1363,3 +1363,300 @@ describe("persistent workflow orchestration", () => {
 		expect(h.children).toHaveLength(20);
 	});
 });
+
+describe("independent role orchestration", () => {
+	it("restores a paused role but rejects substituted roles and extra steps before routing restore", async () => {
+		const { createEngine } = await import("@d3r/core/engine");
+		const h = harness();
+		h.control.role = async (report, _request, state) => {
+			state.effects.push("Inspected cancellation");
+			report({ status: "needs_human", summary: "Which search should stop?" });
+			return "completed";
+		};
+		await h.prompt("Inspect cancellation independently", async ({ run }) => {
+			await run({ action: "role", role: "first", brief });
+		});
+		const saved = h.saved();
+		expect(saved).toMatchObject({
+			phase: "routing",
+			standaloneRole: "first",
+			engine: { command: "standalone", status: "waiting" },
+		});
+		const expanded = structuredClone(saved.engine!.workflow);
+		expanded.commands.standalone.chain.push({ kind: "agent", name: "last" });
+		const target = harness();
+		await target.prompt("Keep this design active", async ({ run }) => {
+			await run(start("design"));
+		});
+		const before = target.runtime.snapshot!();
+		for (const invalid of [
+			{ ...saved, standaloneRole: "second" },
+			{
+				...saved,
+				engine: createEngine(expanded, "standalone"),
+				continuations: [],
+			},
+		]) {
+			expect(() => target.runtime.restore!(invalid)).toThrow(
+				/engine and session workflow pins differ/i,
+			);
+			expect(target.routing.restore).not.toHaveBeenCalled();
+			expect(target.runtime.snapshot!()).toEqual(before);
+		}
+		expect(target.children.map(({ name }) => name)).toEqual(["first"]);
+
+		const restored = harness();
+		restored.runtime.restore!(JSON.stringify(saved));
+		expect(restored.routing.restore).toHaveBeenCalledOnce();
+		expect(restored.saved().engine).toEqual(saved.engine);
+		expect(restored.createAgent).not.toHaveBeenCalled();
+		await restored.prompt("Stop the cancelled search only", async ({ run }) => {
+			const result = await run({
+				action: "continue",
+				instructions: "Stop the cancelled search only",
+			});
+			expect(result.text).toContain("Role: first");
+			expect(result.text).toContain("Status: completed");
+		});
+		expect(restored.children.map(({ name }) => name)).toEqual(["first"]);
+		expect(restored.children[0].session.restore).toHaveBeenCalledOnce();
+		expect(restored.children[0].state.effects).toEqual([
+			"Inspected cancellation",
+			"first effect",
+		]);
+		expect(restored.children[0].state.messages.at(-1)).toContain(
+			"Stop the cancelled search only",
+		);
+	});
+
+	it("refuses a standalone review of an active phase and keeps its unapproved discussion out of resumed workers", async () => {
+		const h = harness();
+		const approved = "Only fix cancellation; keep search ranking unchanged.";
+		await h.prompt(approved);
+		await h.prompt("Design the cancellation fix", async ({ run }) => {
+			await run(start("design"));
+		});
+		const before = h.saved();
+		const proposal = "Run second independently to review sponsored ranking.";
+		const unapproved = "Unapproved review suggestion: prioritize paid results.";
+		await h.prompt(proposal, async ({ run, request }) => {
+			const result = await run({
+				action: "role",
+				role: "second",
+				brief: { ...brief, goal: proposal },
+			});
+			expect(result.isError).toBe(true);
+			expect(result.text).toContain("Phase: design");
+			expect(result.text).toContain("Approve the scope");
+			await request.emit({
+				kind: "text",
+				messageId: "unapproved-review",
+				text: unapproved,
+			});
+		});
+		expect(h.saved().engine).toEqual(before.engine);
+		expect(h.saved().input).toEqual(before.input);
+		expect(h.children.map(({ name }) => name)).toEqual(["first"]);
+		expect(h.children[0].state.effects).toEqual(["first effect"]);
+
+		const restored = harness();
+		restored.runtime.restore!(JSON.stringify(h.runtime.snapshot!()));
+		expect(restored.routing.snapshot().messages.join("\n")).toContain(proposal);
+		expect(textOf(restored.saved().history)).toContain(unapproved);
+		await restored.prompt(
+			"Approve the original scope only",
+			async ({ run }) => {
+				const result = await run({
+					action: "continue",
+					instructions: "Proceed with the cancellation-only design",
+				});
+				expect(result.text).toContain("Approve the plan");
+			},
+		);
+		expect(restored.children.map(({ name }) => name)).toEqual(["second"]);
+		const [worker] = restored.children;
+		expect(worker.state.messages[0]).toContain(approved);
+		expect(worker.state.messages[0]).toContain(
+			"Proceed with the cancellation-only design",
+		);
+		expect(worker.state.messages[0]).not.toContain(proposal);
+		expect(worker.state.messages[0]).not.toContain(unapproved);
+	});
+
+	it("shares busy and unfinished-work guards with phases while a standalone role runs and waits", async () => {
+		const h = harness();
+		const entered = gate();
+		const release = gate();
+		h.control.role = async (report, _request, state) => {
+			state.effects.push("Inspected once");
+			entered.resolve();
+			await release.promise;
+			report({ status: "needs_human", summary: "Confirm the search scope" });
+			return "completed";
+		};
+		await h.prompt("Inspect independently", async ({ run }) => {
+			const running = run({ action: "role", role: "first", brief });
+			await entered.promise;
+			try {
+				const before = h.runtime.snapshot!();
+				expect(await run(start("audit"))).toMatchObject({ isError: true });
+				expect(
+					await run({ action: "role", role: "second", brief }),
+				).toMatchObject({ isError: true });
+				expect(
+					await run({ action: "abandon", reason: "Replace the running role" }),
+				).toMatchObject({ isError: true });
+				expect(h.runtime.snapshot!()).toEqual(before);
+			} finally {
+				release.resolve();
+				await running;
+			}
+		});
+		const waiting = h.saved();
+		expect(waiting.engine).toMatchObject({
+			command: "standalone",
+			status: "waiting",
+			pause: { kind: "report" },
+		});
+		await h.prompt("Start other work without abandoning", async ({ run }) => {
+			const phase = await run(start("audit"));
+			const role = await run({ action: "role", role: "second", brief });
+			expect(phase.isError).toBe(true);
+			expect(role.isError).toBe(true);
+			expect(phase.text).toContain("Confirm the search scope");
+			expect(role.text).toContain("Confirm the search scope");
+		});
+		expect(h.saved().engine).toEqual(waiting.engine);
+		expect(h.saved().input).toEqual(waiting.input);
+		expect(h.saved().continuations).toEqual(waiting.continuations);
+		expect(h.children.map(({ name }) => name)).toEqual(["first"]);
+		expect(h.children[0].state.effects).toEqual(["Inspected once"]);
+	});
+
+	it("cannot chain a completed role into a phase or answer a role checkpoint in the same user turn", async () => {
+		const h = harness();
+		await h.prompt("Run only first", async ({ run }) => {
+			await run({ action: "role", role: "first", brief });
+			expect(h.saved().engine?.status).toBe("completed");
+			const before = h.runtime.snapshot!();
+			const phase = await run(start("audit"));
+			const continued = await run({
+				action: "continue",
+				instructions: "The router wants more work",
+			});
+			expect(phase.isError).toBe(true);
+			expect(continued.isError).toBe(true);
+			expect(phase.text).toMatch(/already ran in this turn/i);
+			expect(continued.text).toMatch(/already ran in this turn/i);
+			expect(h.runtime.snapshot!()).toEqual(before);
+		});
+		h.control.role = async (report) => {
+			report({
+				status: "needs_human",
+				summary: "May I inspect archived data?",
+			});
+			return "completed";
+		};
+		await h.prompt("Run only second", async ({ run }) => {
+			await run({ action: "role", role: "second", brief });
+			const before = h.runtime.snapshot!();
+			const result = await run({
+				action: "continue",
+				instructions: "The router approves archived data",
+			});
+			expect(result.isError).toBe(true);
+			expect(result.text).toMatch(/already ran in this turn/i);
+			expect(h.runtime.snapshot!()).toEqual(before);
+			const status = await run({ action: "status" });
+			expect(status.text).toContain("May I inspect archived data?");
+		});
+		expect(h.children.map(({ name }) => name)).toEqual(["first", "second"]);
+		expect(h.children[1].session.prompt).toHaveBeenCalledOnce();
+		expect(h.saved().engine?.status).toBe("waiting");
+	});
+
+	it("completes only the selected role without claiming phase completion or changing the phase picker", async () => {
+		const h = harness();
+		const commands = h.runtime.getCommands!();
+		const config = h.runtime.getConfig!();
+		await h.prompt("Run last without any prior phase", async ({ run }) => {
+			const result = await run({ action: "role", role: "last", brief });
+			expect(result.isError).not.toBe(true);
+			expect(result.text).toContain("Role: last");
+			expect(result.text).toContain("Status: completed");
+			expect(result.text).toContain("not completion or approval of a phase");
+			expect(result.text).not.toContain("Phase:");
+		});
+		expect(h.children.map(({ name }) => name)).toEqual(["last"]);
+		expect(h.saved()).toMatchObject({
+			phase: "routing",
+			standaloneRole: "last",
+			engine: { command: "standalone", status: "completed" },
+		});
+		expect(h.runtime.getCommands!()).toEqual(commands);
+		expect(h.runtime.getConfig!()).toEqual(config);
+		expect(h.children[0].state.messages[0]).toContain(brief.goal);
+		expect(h.children[0].state.messages[0]).toContain(
+			"this task does not approve or complete a phase",
+		);
+		await h.prompt("Now start design explicitly", async ({ run }) => {
+			const result = await run(start("design"));
+			expect(result.text).toContain("Phase: design");
+			expect(result.text).toContain("Approve the scope");
+		});
+		expect(h.saved()).not.toHaveProperty("standaloneRole");
+		expect(h.saved().engine).toMatchObject({
+			command: "design",
+			status: "waiting",
+			pause: { kind: "human" },
+		});
+		expect(h.children.map(({ name }) => name)).toEqual(["last", "first"]);
+	});
+
+	it("restores a phase selected after standalone completion without replaying the role or starting the phase", async () => {
+		const h = harness();
+		await h.prompt("Run only first", async ({ run }) => {
+			await run({ action: "role", role: "first", brief });
+		});
+		const completed = h.saved().engine;
+		expect(completed).toMatchObject({
+			command: "standalone",
+			status: "completed",
+		});
+		const config = await h.runtime.setConfig!("phase", "design");
+		expect(config).toContainEqual(
+			expect.objectContaining({ id: "phase", value: "design" }),
+		);
+		expect(h.saved()).toMatchObject({
+			phase: "design",
+			standaloneRole: "first",
+			engine: completed,
+		});
+		const saved = h.runtime.snapshot!();
+		await h.runtime.dispose();
+
+		const restored = harness();
+		restored.runtime.restore!(JSON.stringify(saved));
+		expect(restored.routing.restore).toHaveBeenCalledOnce();
+		expect(restored.routing.prompt).not.toHaveBeenCalled();
+		expect(restored.runtime.getConfig!()).toEqual(config);
+		expect(restored.saved()).toMatchObject({
+			phase: "design",
+			standaloneRole: "first",
+			engine: completed,
+		});
+		expect(restored.createAgent).not.toHaveBeenCalled();
+		await restored.prompt("What is selected?", async ({ run }) => {
+			const status = await run({ action: "status" });
+			expect(status.text).toContain("No active workflow");
+			expect(status.text).toContain("Selected phase: design");
+		});
+		expect(restored.runtime.getConfig!()).toEqual(config);
+		expect(restored.saved()).toMatchObject({ phase: "design", engine: null });
+		expect(restored.saved()).not.toHaveProperty("standaloneRole");
+		expect(restored.createAgent).not.toHaveBeenCalled();
+		expect(h.children.map(({ name }) => name)).toEqual(["first"]);
+		expect(h.children[0].session.prompt).toHaveBeenCalledOnce();
+		expect(h.children[0].state.effects).toEqual(["first effect"]);
+	});
+});

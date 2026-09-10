@@ -26,7 +26,10 @@ import {
 	type NativeCheckpoint,
 } from "./native-resources.ts";
 import { createWorkflowReportTool } from "./workflow-runtime.ts";
-import { createWorkflowPhaseTools } from "./workflow-phase-tools.ts";
+import {
+	createWorkflowPhaseTools,
+	createWorkflowRoleTool,
+} from "./workflow-phase-tools.ts";
 import { createNativeMcpSecurity } from "./native-mcp.ts";
 import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
@@ -412,6 +415,18 @@ export const createLazyNativeSession = ({
 						phaseRuntime.runPhase(action, context),
 					)
 				: [];
+			const roleTool = orchestrated
+				? createWorkflowRoleTool(
+						saved.resources.agents.map(({ spec }) => ({
+							name: spec.name,
+							description: spec.description,
+						})),
+						(action, context) => phaseRuntime.runPhase(action, context),
+					)
+				: undefined;
+			if (roleTool) {
+				phaseTools.push(roleTool);
+			}
 			if (
 				tools.some((tool) => phaseTools.some(({ name }) => name === tool.name))
 			) {

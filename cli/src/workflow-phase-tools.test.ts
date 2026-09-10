@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
 	createWorkflowPhaseTools,
+	createWorkflowRoleTool,
 	NATIVE_BRIEF_CONTRACT,
 	ORCHESTRATOR_PROMPT,
 	PhaseAction,
@@ -28,6 +29,13 @@ const conversationBrief = {
 const commands = [
 	{ name: "develop", description: "Implement and review the requested change" },
 	{ name: "audit", description: "Inspect the current working tree" },
+] as const;
+/** Include a custom worker to keep direct roles driven by loaded definitions. */
+const roles = [
+	{ name: "orchestrator", description: "Route user requests" },
+	{ name: "auditor", description: "Audit the current worktree read-only" },
+	{ name: "implementor", description: "Implement the requested change" },
+	{ name: "fact-finder", description: "Research the requested topic" },
 ] as const;
 /** Fresh turn context keeps cancellation local to each test. */
 const toolContext = (): RuntimeToolContext => ({
@@ -194,6 +202,160 @@ describe("workflow brief and phase action boundaries", () => {
 		]) {
 			expect(PhaseAction.safeParse(action).success).toBe(false);
 		}
+	});
+});
+
+describe("workflow role tool", () => {
+	it("appends the strict role action without moving existing options or defaulting mode", () => {
+		expect(
+			PhaseAction.options.map((option) => option.shape.action.value),
+		).toEqual(["start", "continue", "abandon", "status", "role"]);
+		const action = {
+			action: "role",
+			role: "auditor",
+			brief: conversationBrief,
+		};
+		expect(PhaseAction.parse({ ...action, role: " auditor \n" })).toEqual({
+			...action,
+			brief: { ...conversationBrief, constraints: [] },
+		});
+		expect(
+			PhaseAction.safeParse({ ...action, role: "r".repeat(128) }).success,
+		).toBe(true);
+		for (const fields of [
+			{ role: undefined },
+			{ role: " \n" },
+			{ role: "r".repeat(129) },
+			{ brief: undefined },
+			{ phase: "develop" },
+			{ mode: "default" },
+		]) {
+			expect(PhaseAction.safeParse({ ...action, ...fields }).success).toBe(
+				false,
+			);
+		}
+	});
+
+	it("exposes only loaded worker roles in a strict parameter-only schema without effect permissions", () => {
+		const { execute } = harness();
+		const tool = createWorkflowRoleTool(roles, execute)!;
+		expect(tool).toMatchObject({
+			name: "d3r_run_role",
+			kind: "other",
+			permission: "none",
+		});
+		expect(tool.schema).toBeInstanceOf(z.ZodObject);
+		const schema = tool.schema as z.AnyZodObject;
+		expect(Object.keys(schema.shape)).toEqual(["role", "brief", "mode"]);
+		expect(schema.shape.role.options).toEqual([
+			"auditor",
+			"implementor",
+			"fact-finder",
+		]);
+		expect(schema.shape.role.description).toBe(
+			roles
+				.filter(({ name }) => name !== "orchestrator")
+				.map(({ name, description }) => `${name}: ${description}`)
+				.join("\n"),
+		);
+	});
+
+	it("omits the tool when no worker roles are available", () => {
+		const { execute } = harness();
+		expect(createWorkflowRoleTool([], execute)).toBeUndefined();
+		expect(createWorkflowRoleTool([roles[0]], execute)).toBeUndefined();
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it("dispatches one selected role with normalized facts and preserves explicit or omitted mode for the runtime", async () => {
+		const { execute, result } = harness();
+		const tool = createWorkflowRoleTool(roles, execute)!;
+		const context = toolContext();
+		const inputs = [
+			{ role: "auditor", brief: conversationBrief },
+			{ role: "fact-finder", brief: conversationBrief },
+			{ role: "implementor", brief: conversationBrief },
+			{ role: "implementor", brief: conversationBrief, mode: "semi" },
+			{ role: "implementor", brief: conversationBrief, mode: "auto" },
+		];
+		const results = await Promise.all(
+			inputs.map((input) =>
+				tool.execute(
+					{
+						...input,
+						brief: { ...input.brief, goal: ` ${input.brief.goal}\n` },
+					},
+					context,
+				),
+			),
+		);
+		for (const output of results) {
+			expect(output).toBe(result);
+		}
+		expect(execute.mock.calls).toEqual(
+			inputs.map((input) => [
+				{
+					...input,
+					action: "role",
+					brief: { ...conversationBrief, constraints: [] },
+				},
+				context,
+			]),
+		);
+	});
+
+	it("rejects invalid raw arguments, unconfigured roles, and action spoofing before dispatch", async () => {
+		const { execute } = harness();
+		const tool = createWorkflowRoleTool(roles, execute)!;
+		const context = toolContext();
+		const valid = { role: "auditor", brief: conversationBrief };
+		const invalid = [
+			null,
+			{},
+			{ ...valid, role: "orchestrator" },
+			{ ...valid, role: "reviewer" },
+			{ ...valid, role: " " },
+			{ ...valid, role: "r".repeat(129) },
+			{ ...valid, brief: undefined },
+			{ ...valid, brief: { ...conversationBrief, goal: " " } },
+			{ ...valid, brief: { ...conversationBrief, artifact: "invented.md" } },
+			{ ...valid, mode: "default" },
+			{ ...valid, action: "role" },
+			{ ...valid, action: "start" },
+			{ ...valid, phase: "develop" },
+			{ ...valid, unexpected: true },
+		];
+		await Promise.all(
+			invalid.map((args) =>
+				expect(tool.execute(args, context)).rejects.toBeInstanceOf(z.ZodError),
+			),
+		);
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it("honors turn cancellation and propagates engine blockers and failures without retry", async () => {
+		const { execute } = harness();
+		const tool = createWorkflowRoleTool(roles, execute)!;
+		const args = { role: "auditor", brief: conversationBrief };
+		const context = toolContext();
+		const controller = new AbortController();
+		const cancelled = new Error("Turn cancelled");
+		controller.abort(cancelled);
+		await expect(
+			tool.execute(args, { ...context, signal: controller.signal }),
+		).rejects.toBe(cancelled);
+		expect(execute).not.toHaveBeenCalled();
+
+		const blocked: RuntimeToolResult = {
+			text: "An unfinished task is retained; explicitly abandon it first.",
+			isError: true,
+		};
+		execute.mockResolvedValueOnce(blocked);
+		expect(await tool.execute(args, context)).toBe(blocked);
+		const failure = new Error("Role execution failed");
+		execute.mockRejectedValueOnce(failure);
+		await expect(tool.execute(args, context)).rejects.toBe(failure);
+		expect(execute).toHaveBeenCalledTimes(2);
 	});
 });
 
@@ -427,7 +589,7 @@ describe("native conversation contracts", () => {
 			/ask the user to choose semi or auto/,
 			/never assume auto/,
 			/omitted mode makes the engine ask/,
-			/only one mutating phase tool per model response/,
+			/only one mutating workflow tool per model response/,
 			/After a waiting, blocked, or interrupted result, return the question/,
 			/never answer a human checkpoint on your own/,
 			/without user direction/,
@@ -439,6 +601,53 @@ describe("native conversation contracts", () => {
 			/Do not output JSON/,
 		]) {
 			expect(ORCHESTRATOR_PROMPT).toMatch(requirement);
+		}
+	});
+
+	it("routes focused work to one role without phase advancement or worktree audit prerequisites", () => {
+		const { execute } = harness();
+		const tool = createWorkflowRoleTool(roles, execute)!;
+		for (const requirement of [
+			/only one selected worker role/,
+			/loaded role definition's scope/,
+			/without starting a phase, requiring prerequisites, or implicitly following with review or audit/,
+			/same report and permission lifecycle/,
+			/resume.*via d3r_continue_phase/,
+			/do not approve or advance an existing workflow/,
+			/Never replace an unfinished task/,
+			/user must explicitly direct d3r_abandon_phase first/,
+			/implementor, require the user's explicit semi or auto mode/,
+			/Mode enforcement belongs to the runtime/,
+			/read-only with inline findings by default/,
+			/do not write report files unless the user requests them/,
+		]) {
+			expect(tool.description).toMatch(requirement);
+		}
+		for (const requirement of [
+			/focused audit, review, research, or other single-role requests, choose d3r_run_role/,
+			/not d3r_start_phase develop/,
+			/Loaded role definitions determine scope/,
+			/Role outputs are evidence, not completion of phases/,
+			/do not approve or advance an existing workflow/,
+			/For develop or a direct implementor role, ask the user to choose semi or auto/,
+			/Start a phase or role only when no unfinished task is retained/,
+			/Direct roles share the report and permission lifecycle and resume via d3r_continue_phase/,
+			/At most one start, role, or continue may run per user turn/,
+			/Explicit user-directed abandonment may precede the next requested operation in that turn/,
+		]) {
+			expect(ORCHESTRATOR_PROMPT).toMatch(requirement);
+		}
+		for (const requirement of [
+			/requested standalone worktree audit or review/,
+			/current tracked, untracked, and uncommitted workspace state within the requested scope/,
+			/No PR, commit range, or vault document is mandatory to audit the worktree/,
+			/Reviewers and auditors retain their read-only remit/,
+			/report findings inline by default/,
+			/do not write report files unless requested/,
+			/runtime supplies execution-specific context separately/,
+			/do not invent missing workflow history/,
+		]) {
+			expect(NATIVE_BRIEF_CONTRACT).toMatch(requirement);
 		}
 	});
 

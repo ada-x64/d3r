@@ -182,8 +182,9 @@ approved command rather than `vault_mv`.
 Newly initialized native sessions use one persistent orchestrator (the router)
 for the continuous conversation. Ordinary messages and slash commands both go to
 that router, which receives authoritative workflow state every turn. Discuss or
-clarify normally; when you intend an action, the router calls a structured phase
-tool to run the chosen engine phase. Printing a command is not execution.
+clarify normally; when you intend an action, the router calls a structured
+workflow tool to run the chosen phase or worker role. Printing a command is not
+execution.
 
 The built-in phase shortcuts express intent:
 
@@ -197,26 +198,28 @@ The built-in phase shortcuts express intent:
 `develop` with an adequate conversation brief; no earlier phase or formal vault
 schema, design, or plan documents are prerequisites. The Phase picker selects
 intent while idle, not a launch: your next message still goes through the
-router, and only a phase-tool call starts work. It cannot replace an unfinished
-phase.
+router, and only a phase-tool call starts the phase. It cannot replace an
+unfinished phase or role task.
 
-The router has four phase tools:
+The router has these workflow tools:
 
-| Tool                 | Parameters and purpose                                                                                                                                                |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `d3r_start_phase`    | A configured `phase`, structured `brief`, and optional `mode` (`semi` or `auto`); starts only when no unfinished phase is retained.                                   |
-| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch. |
-| `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase when execution is not running. Existing effects remain.                                              |
-| `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                 |
+| Tool                 | Parameters and purpose                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `d3r_start_phase`    | A configured `phase`, structured `brief`, and optional `mode` (`semi` or `auto`); starts only when no unfinished task is retained.                                              |
+| `d3r_run_role`       | A `role` from the pinned loaded worker-role enum (excluding `orchestrator`), the same `brief`, and optional `mode`; runs exactly one role. Omitted if no workers are available. |
+| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch.           |
+| `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase or role task when execution is not running. Existing effects remain.                                           |
+| `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                           |
 
 The `brief` contains `goal`, `context`, nonempty `acceptanceCriteria`, and
 `constraints` (an empty list by default). The orchestrator builds it from known
 conversation facts and approved scope, not invented citations. If facts are
-missing, it asks for those facts rather than demanding documents. For `develop`,
-choose `semi` or `auto` explicitly. If the start tool omits `mode`, the engine
-asks; D3R must not silently assume `auto`. `semi` pauses between agent batches;
-`auto` can run the whole phase without those pauses, while still respecting
-required human checkpoints, reviews, and tool approvals.
+missing, it asks for those facts rather than demanding documents. For `develop`
+or a direct `implementor` run, choose `semi` or `auto` explicitly. If `mode` is
+omitted, the engine asks; D3R must not silently assume `auto`. Other direct
+roles do not require a mode. `semi` pauses between agent batches; `auto` can run
+the whole phase without those pauses, while still respecting required human
+checkpoints, reviews, and tool approvals.
 
 Core role files are unchanged. The native handoff contract substitutes the
 conversation brief for document-specific schema/design/plan requirements when
@@ -225,14 +228,45 @@ requested scope, without inventing documents, branches, commits, or approvals.
 They can review working-tree changes and report findings inline without a vault
 artifact unless one was requested. Project constraints, role remit, mandatory
 tests, review gates, and approvals still apply; commits and pushes require
-explicit user authorization. The phase tools themselves do not request separate
-permission: underlying worker tools authorize real effects. The router delegates
-implementation rather than doing the workers' implementation itself.
+explicit user authorization. The workflow tools themselves do not request
+separate permission: underlying worker tools authorize real effects. The router
+delegates implementation rather than doing the workers' implementation itself.
+
+### Standalone role requests
+
+For focused audit, review, research, or other single-role work, ask naturally;
+the router chooses `d3r_run_role` rather than starting the full `develop` chain.
+For example:
+
+> Audit this worktree. Include uncommitted and untracked changes. Report
+> findings here; don't change code or create vault documents.
+
+A direct run uses a synthetic single-role graph, not a configured phase, with no
+phase prerequisites or automatic follow-on roles. Loaded role definitions set
+its scope. Results are evidence, not phase completion or approval, and do not
+advance an existing workflow. Once the role task completes, you can select a
+future phase. Direct roles are not added to workflow commands or the Phase
+picker.
+
+For standalone audits/reviews, the native handoff lets auditors and reviewers
+inspect the current worktree, including dirty tracked and untracked changes in
+the requested scope. No PR, commit range, or vault documents are mandatory.
+Their remit is read-only inspection and inline findings unless you request a
+report file. Existing role capability and permission policies still apply: this
+is not sandbox-enforced read-only execution, and approved commands can mutate
+the workspace or host.
+
+Role tasks share the report, permission, and checkpoint lifecycle, including
+`d3r_continue_phase`, `d3r_phase_status`, and `d3r_abandon_phase` for
+clarification, safely resumable cancellation, and abandonment. After rebuilding,
+restart the actual `d3r acp` server used by Zed to load the new code. Reloading
+an initialized orchestrated session then exposes the direct-role tool; retained
+legacy native sessions need a new session instead.
 
 ### Checkpoints and corrections
 
-The runtime permits only **one start or continue per user turn**. A phase may
-run to its next pause or completion, but the router cannot start it and then
+The runtime permits only **one start, role, or continue per user turn**. A task
+may run to its next pause or completion, but the router cannot start it and then
 answer its new human checkpoint in that same turn. Waiting, blocked, or
 interrupted results must return a question or recovery guidance to you, not
 trigger an automatic answer, retry, or abandonment.
@@ -251,12 +285,14 @@ D3R cannot safely resume by recreating a role without its retained evidence.
 Inspect the workspace and discuss recovery instead of assuming every blocked or
 interrupted run supports continuation.
 
-To skip a retained phase, explicitly ask to abandon it and then start the
-desired phase. A user-directed abandon can precede a start in the same turn; it
-does not consume the start/continue allowance. It cannot follow a start/continue
-to bypass a new pause. **Abandoning retains all existing effects; it is not
-rollback.** Starting again is a fresh run and can repeat effects, not a
-continuation or a safe automatic recovery procedure.
+Running or unresolved phase/role tasks cannot be replaced. To switch away from a
+retained unfinished task, explicitly ask to abandon it when execution is not
+running, then start the desired phase or role. A user-directed abandon can
+precede the next operation in the same turn; it does not consume the
+start/role/continue allowance. It cannot follow that operation to bypass a new
+pause. **Abandoning retains all existing effects; it is not rollback.** Starting
+again is a fresh run and can repeat effects, not a continuation or a safe
+automatic recovery procedure.
 
 For example:
 
@@ -290,27 +326,28 @@ do not truncate structured outcomes or model context. Cancellation/disconnect
 stops further snapshot sends and retains accepted buffered text in the settled
 checkpoint when checkpointing succeeds.
 
-The engine executes the declared sequence and parallel batches, requires a
-validated `d3r_report` from every role, and never treats ordinary success prose
-as a completed step. It governs role progression, reviews, and checkpoints;
-implementor `allDone` is not a shortcut around required review. Loop exhaustion
-blocks rather than silently skipping to audit. A failed or malformed report
-pauses the workflow.
+Every role, including a standalone run, must submit a validated `d3r_report`;
+ordinary success prose is not a completed step. For configured phases, the
+engine executes the declared sequence and parallel batches and governs role
+progression, reviews, and checkpoints; implementor `allDone` is not a shortcut
+around required review. Loop exhaustion blocks rather than silently skipping to
+audit. A failed or malformed report pauses the workflow.
 
-For new native sessions, the **same persistent router** synthesizes phase-tool
-results into one concise Markdown response: the outcome, relevant evidence, and
-any question or next step. There is no separate summary worker/request path.
-Structured reports remain internal handoff/checkpoint data, not JSON to dump
-into chat. The router also handles discussion between phases without launching
-implementation or another phase implicitly.
+For new native sessions, the **same persistent router** synthesizes
+workflow-tool results into one concise Markdown response: the outcome, relevant
+evidence, and any question or next step. There is no separate summary
+worker/request path. Structured reports remain internal handoff/checkpoint data,
+not JSON to dump into chat. The router also handles discussion between phases
+without launching implementation or another phase implicitly.
 
 ### Legacy initialized native sessions
 
 An older, already-initialized native checkpoint without the `orchestrated` flag
 keeps the legacy deterministic/slash-command workflow dispatch and separate
 summary behavior below. Reloading or upgrading does not convert that initialized
-session; start a new session for persistent orchestration. This compatibility
-path is distinct from the Pi proxy selected by `d3r acp --legacy`.
+session; start a new session for persistent orchestration and `d3r_run_role`.
+This compatibility path is distinct from the Pi proxy selected by
+`d3r acp --legacy`.
 
 In these legacy native sessions, ordinary routing conversation clarifies work
 separately from phase execution. A recognized slash command starts its phase, or
@@ -565,8 +602,8 @@ includes pinned instructions/workflows and conversation checkpoints, not MCP
 launch configuration or saved permission grants. New orchestrated sessions also
 retain eligible unfinished-role checkpoints for reported questions and clean
 cancellation. Snapshots restore state without executing historical tools;
-resuming work requires a new user-directed phase action and all required child
-checkpoints.
+resuming work requires a new user-directed workflow action and all required
+child checkpoints.
 
 An intent is persisted before a prompt or state mutation. An incomplete intent
 cannot silently fall back to an older checkpoint after a crash. Already-issued
