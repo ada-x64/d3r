@@ -529,13 +529,19 @@ emitted as bulk follow-agent locations. Search therefore does not include
 unsaved editor changes; explicitly reading a chosen file still uses its editor
 buffer and provides a deliberate follow location.
 
-Direct filesystem tools are limited to the session roots and reject sensitive
-paths and symlink escapes. Additional roots must be supplied again on
-load/resume. These checks are **not an OS sandbox**. An approved command or MCP
-process can access the host with the agent's privileges. Connection prompts
-identify the executable, nonsecret arguments/environment, and provenance. POSIX
-process-group cleanup stops ordinary descendants, not intentionally daemonized
-processes.
+Direct filesystem tools are limited to the session roots. Auth, credential,
+secret, token, and key implementation code is ordinary source: these words in
+file or directory names do not exclude it from reads, listings, searches, or
+approved edits. Known private storage paths (including `.agents/d3r/private` and
+the configured native state directory), environment/key files, repository
+metadata, and symlink escapes remain excluded. Do not store live credentials in
+ordinary source or configuration files. Additional roots must be supplied again
+on load/resume. These checks are **not an OS sandbox**. POSIX `700` directories
+and `600` credential files protect against other users, not an agent running
+under the same user account. An approved command or MCP process can access the
+host with the agent's privileges. Connection prompts identify the executable,
+nonsecret arguments/environment, and provenance. POSIX process-group cleanup
+stops ordinary descendants, not intentionally daemonized processes.
 
 ## MCP
 

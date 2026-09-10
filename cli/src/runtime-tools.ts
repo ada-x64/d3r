@@ -320,7 +320,7 @@ const walkFiles = async (
 			const next = join(canonical, entry.name);
 			if (
 				entry.isSymbolicLink() ||
-				isSensitivePath(next) ||
+				isSensitivePath(next, access.excludedDirectories) ||
 				["node_modules", "dist", "build", ".cache"].includes(entry.name)
 			) {
 				continue;
@@ -386,10 +386,13 @@ const readMutationText = async (
 export const createWorkspaceTools = ({
 	cwd,
 	additionalDirectories = [],
+	excludedDirectories = [],
 }: {
 	cwd: string;
 	additionalDirectories?: readonly string[];
+	excludedDirectories?: readonly string[];
 }): RuntimeTool[] => {
+	const excluded = excludedDirectories.map((path) => resolve(cwd, path));
 	const roots = [
 		resolve(cwd),
 		...additionalDirectories.map((path) => resolve(cwd, path)),
@@ -404,6 +407,7 @@ export const createWorkspaceTools = ({
 	const accessFor = (context: RuntimeToolContext): WorkspaceAccess => ({
 		cwd: context.cwd,
 		roots,
+		excludedDirectories: excluded,
 		signal: context.signal,
 		client: context.client,
 	});
@@ -482,7 +486,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "read_file",
 			description:
-				"Read UTF-8 text within workspace roots, preferring unsaved editor buffers. Returns a snapshot token that must be explicitly passed in every edit or overwrite. Sensitive files and symlinks are denied.",
+				"Read UTF-8 text within workspace roots, preferring unsaved editor buffers. Returns a snapshot token that must be explicitly passed in every edit or overwrite. Auth, credential, secret, token, and key implementation files are ordinary source code and may be read. Explicit private stores, environment/key files, and symlinks are excluded.",
 			kind: "read",
 			schema: readSchema,
 			permission: "none",
@@ -547,7 +551,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "list_directory",
 			description:
-				"List one workspace directory, excluding sensitive stores and symlinks. Output and entry counts are bounded.",
+				"List one workspace directory, including source directories named auth, credentials, secrets, tokens, or keys. Explicit private stores and symlinks are excluded. Output and entry counts are bounded.",
 			kind: "read",
 			schema: z.object({ path: pathSchema.default(".") }).strict(),
 			permission: "none",
@@ -568,7 +572,7 @@ export const createWorkspaceTools = ({
 					}
 					if (
 						entry.isSymbolicLink() ||
-						isSensitivePath(join(path, entry.name))
+						isSensitivePath(join(path, entry.name), excluded)
 					) {
 						continue;
 					}
@@ -580,7 +584,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "search",
 			description:
-				"Bounded literal UTF-8 search of saved files on disk within workspace roots; does not search unsaved editor buffers. Returns path:line matches as text without opening editor files or emitting follow locations. Skips private paths, symlinks, binary/oversized files and generated directories; reports truncation.",
+				"Bounded literal UTF-8 search of saved files on disk within workspace roots; does not search unsaved editor buffers. Returns path:line matches as text without opening editor files or emitting follow locations. Includes auth/credential/secret/token/key implementation files. Skips explicit private stores, environment/key files, symlinks, binary/oversized files and generated directories; reports truncation.",
 			kind: "search",
 			schema: searchSchema,
 			permission: "none",

@@ -40,6 +40,7 @@ import { summarizeNativeWorkflow } from "./native-summary.ts";
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
 	readonly input: RuntimeSessionInput;
+	readonly stateDir: string;
 	readonly models: Awaited<
 		ReturnType<NativeDependencies["createModelRuntime"]>
 	>;
@@ -111,6 +112,7 @@ const scopeTools = (
 // oxlint-disable-next-line max-statements -- One closure owns lazy setup, cancellation, and rollback.
 export const createLazyNativeSession = ({
 	input,
+	stateDir,
 	models,
 	available,
 	checkpoint,
@@ -341,12 +343,13 @@ export const createLazyNativeSession = ({
 					deps.createWorkspaceTools({
 						cwd: input.cwd,
 						additionalDirectories: trustedInput.additionalDirectories,
+						excludedDirectories: [stateDir],
 					}),
 					trustedInput,
 					vaultRoot,
 				),
 				createNativeSkillTool(saved.resources),
-				...createVaultTools({ vaultRoot }),
+				...createVaultTools({ vaultRoot, excludedDirectories: [stateDir] }),
 				...createWebTools({
 					config: deps.getWebProviderConfig(),
 					client: input.client,
@@ -396,6 +399,7 @@ export const createLazyNativeSession = ({
 						const resolved = await deps.resolveWorkspaceResource(resource, {
 							cwd: input.cwd,
 							roots: [input.cwd, ...(trustedInput.additionalDirectories ?? [])],
+							excludedDirectories: [stateDir],
 							signal: context.signal,
 							client: vaultReadClient(input, vaultRoot),
 						});

@@ -1014,6 +1014,10 @@ describe("native ACP full surface", () => {
 			.mockImplementation(() =>
 				response([{ type: "text", text: "Finished." }]),
 			);
+		await mkdir(resolve(home, ".agents", "d3r", "private"), {
+			recursive: true,
+			mode: 0o700,
+		});
 		const deps = await native.server(
 			{ home },
 			{

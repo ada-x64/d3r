@@ -11,6 +11,8 @@ export const MAX_TEXT_BYTES = 1_048_576;
 export interface WorkspaceAccess {
 	readonly cwd: string;
 	readonly roots: readonly string[];
+	/** Host-owned private stores, excluded even inside an approved workspace or vault. */
+	readonly excludedDirectories?: readonly string[];
 	readonly signal: AbortSignal;
 	readonly client?: RuntimeClientServices;
 }
@@ -29,9 +31,20 @@ export const isWithinRoot = (root: string, path: string): boolean => {
 	);
 };
 
-/** Private stores are excluded even when an overly broad root is supplied. */
-export const isSensitivePath = (path: string): boolean => {
-	const parts = resolve(path)
+/** Exclude private storage paths, not source files or directories named for security concepts. */
+export const isSensitivePath = (
+	path: string,
+	excludedDirectories: readonly string[] = [],
+): boolean => {
+	const absolute = resolve(path);
+	if (
+		excludedDirectories.some((directory) =>
+			isWithinRoot(resolve(directory), absolute),
+		)
+	) {
+		return true;
+	}
+	const parts = absolute
 		.split(/[\\/]+/)
 		.map((part) => part.toLowerCase().replace(/[ .]+$/, ""));
 	const stores = new Set([
@@ -59,7 +72,9 @@ export const isSensitivePath = (path: string): boolean => {
 			/^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|authorized_keys|known_hosts)$/.test(
 				part,
 			) ||
-			/^(?:auth|credentials?|secrets?|tokens?|keys?)(?:[._-].*)?$/.test(part) ||
+			(part === "d3r" &&
+				parts[index - 1] === ".agents" &&
+				parts[index + 1] === "private") ||
 			(parts[index - 1] === ".agents" &&
 				/^(?:sessions?|history|state|cache|private|auth|credentials|keys)$/.test(
 					part,
@@ -126,7 +141,7 @@ export const workspacePath = async (
 			"Windows stream, wildcard, or ambiguous path denied",
 		);
 	}
-	if (isSensitivePath(absolute)) {
+	if (isSensitivePath(absolute, access.excludedDirectories)) {
 		throw new ResourceAccessError(`Sensitive path denied: ${absolute}`);
 	}
 	const roots = await Promise.all(
@@ -142,7 +157,7 @@ export const workspacePath = async (
 	}
 	const suffix = relative(root.path, absolute);
 	const canonical = resolve(root.path, suffix);
-	if (isSensitivePath(canonical)) {
+	if (isSensitivePath(canonical, access.excludedDirectories)) {
 		throw new ResourceAccessError(`Sensitive path denied: ${canonical}`);
 	}
 	let cursor = root.path;

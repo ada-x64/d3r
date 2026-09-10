@@ -20,7 +20,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { http, HttpResponse } from "msw";
@@ -443,12 +443,15 @@ describe("native ACP shipped-workflow journeys", () => {
 						runtimes.push({ options, input });
 						return createRuntime(options)(input);
 					},
-					createModelRuntime: async () => ({
-						getAvailable: async () => models,
-						getProviders: () => [],
-						logout: async () => {},
-						streamSimple,
-					}),
+					createModelRuntime: async ({ stateDir }) => {
+						await mkdir(stateDir, { recursive: true, mode: 0o700 });
+						return {
+							getAvailable: async () => models,
+							getProviders: () => [],
+							logout: async () => {},
+							streamSimple,
+						};
+					},
 				},
 			);
 
@@ -580,9 +583,26 @@ describe("native ACP shipped-workflow journeys", () => {
 
 	// oxlint-disable-next-line max-statements -- Real worktree evidence, role isolation, and subsequent discussion form one journey.
 	it("runs a standalone auditor read-only, reloads completed-role Phase picker changes and starts only the next requested phase", async () => {
+		const ordinarySources = [
+			"cli/src/verbs/auth.ts",
+			"adapters/pi/auth.ts",
+			"adapters/pi/auth-store.ts",
+			"adapters/acp/secrets.ts",
+			"src/auth/secrets/policy.ts",
+			"auth.json",
+		].map((path) => ({
+			path,
+			text: path.endsWith(".json")
+				? `${JSON.stringify({ purpose: `enqueue source fixture ${path}` })}\n`
+				: `export const purpose = "enqueue source fixture ${path}";\n`,
+		}));
+		const sourceDirectories = [
+			...new Set(ordinarySources.map(({ path }) => dirname(path))),
+		];
+		const privatePath = ".agents/d3r/private/credentials.json";
+		const privateCanary = "enqueue-private-credential-canary";
 		const goal = "audit this worktree";
-		const scope =
-			"Inspect queue.mjs and scratch.txt, including uncommitted and untracked contents, not just a commit.";
+		const scope = `Inspect queue.mjs, scratch.txt and ${ordinarySources.map(({ path }) => path).join(", ")}, including uncommitted and untracked contents, not just a commit.`;
 		const criterion =
 			"Return inline findings with severity and file locations.";
 		const constraint =
@@ -591,7 +611,8 @@ describe("native ACP shipped-workflow journeys", () => {
 		const untracked =
 			"Untracked enqueue probe: callers expect an unchanged input array.\n";
 		const finding =
-			"**High - queue.mjs:1:** enqueue mutates the caller's array and returns a length, not a queue. The untracked scratch.txt:1 probe expects unchanged input.";
+			"**High - queue.mjs:1:** enqueue mutates the caller's array and returns a length, not a queue. The untracked scratch.txt:1 probe expects unchanged input." +
+			`\n\n## Source coverage\n\n${ordinarySources.map(({ path, text }) => `- ${path}:1: inspected ${text.trim()}`).join("\n")}\n\nNo source coverage omitted. Stored private credential values excluded.`;
 		const command = {
 			command: process.execPath,
 			args: [
@@ -628,17 +649,68 @@ describe("native ACP shipped-workflow journeys", () => {
 			auditor: [
 				journeyCall("read_file", { path: "AGENTS.md" }, "conventions"),
 				journeyCall("read_file", { path: "queue.mjs" }, "changed-source"),
+				[...sourceDirectories, "src", "src/auth", ".agents/d3r"].flatMap(
+					(path) => journeyCall("list_directory", { path }, `list:${path}`),
+				),
 				journeyCall(
 					"search",
 					{ path: ".", query: "enqueue" },
 					"worktree-search",
 				),
+				ordinarySources.flatMap(({ path }) =>
+					journeyCall("read_file", { path }, `read:${path}`),
+				),
+				journeyCall("read_file", { path: privatePath }, "private-read"),
 				journeyCall("run_command", command, "inspect-disk"),
-				journeyReport(finding),
+				(context) =>
+					journeyReport(
+						ordinarySources.every(
+							({ path, text }) =>
+								journeyResultText(context, `read:${path}`).includes(
+									text.trim(),
+								) &&
+								journeyResultText(context, "worktree-search").includes(
+									text.trim(),
+								) &&
+								journeyResultText(context, `list:${dirname(path)}`).includes(
+									basename(path),
+								),
+						)
+							? finding
+							: "Source audit coverage incomplete.",
+					),
 				[{ type: "text", text: "Worker-only audit response" }],
 			],
 		};
-		const j = await open(scripts, { routerShortcuts: false });
+		const j = await open(scripts, {
+			routerShortcuts: false,
+			readTextFile: async ({ path }) => {
+				if (
+					![
+						"AGENTS.md",
+						"queue.mjs",
+						"scratch.txt",
+						privatePath,
+						...ordinarySources.map((file) => file.path),
+					].some((file) => resolve(j.cwd, file) === path)
+				) {
+					throw new Error("Editor read outside audit fixtures");
+				}
+				return { content: await readFile(path, "utf8") };
+			},
+		});
+		await Promise.all(
+			[
+				...ordinarySources,
+				{
+					path: privatePath,
+					text: JSON.stringify({ token: privateCanary }),
+				},
+			].map(async ({ path, text }) => {
+				await mkdir(dirname(resolve(j.cwd, path)), { recursive: true });
+				await writeFile(resolve(j.cwd, path), text);
+			}),
+		);
 		const git = (...args: string[]) =>
 			promisify(execFile)(
 				"git",
@@ -741,6 +813,52 @@ describe("native ACP shipped-workflow journeys", () => {
 			);
 		}
 		const evidence = auditor.at(-1)!.context;
+		for (const { path, text } of ordinarySources) {
+			expect(journeyResult(evidence, `read:${path}`)).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResultText(evidence, `read:${path}`)).toContain(
+				`1: ${text.trim()}`,
+			);
+			expect(journeyResultText(evidence, "worktree-search")).toContain(
+				`${resolve(j.cwd, path)}:1: ${text.trim()}`,
+			);
+			expect(journeyResult(evidence, `list:${dirname(path)}`)).toMatchObject({
+				isError: false,
+			});
+			expect(
+				journeyResultText(evidence, `list:${dirname(path)}`).split("\n"),
+			).toContain(basename(path));
+			expect(j.reads.map((read) => read.path)).toContain(resolve(j.cwd, path));
+		}
+		for (const [path, entry] of [
+			["src", "auth/"],
+			["src/auth", "secrets/"],
+		]) {
+			expect(journeyResult(evidence, `list:${path}`)).toMatchObject({
+				isError: false,
+			});
+			expect(journeyResultText(evidence, `list:${path}`)).toContain(entry);
+		}
+		expect(journeyResult(evidence, "list:.agents/d3r")).toMatchObject({
+			isError: false,
+		});
+		expect(journeyResultText(evidence, "list:.agents/d3r")).not.toContain(
+			"private",
+		);
+		expect(journeyResult(evidence, "private-read")).toMatchObject({
+			isError: true,
+		});
+
+		expect(journeyResultText(evidence, "worktree-search")).not.toContain(
+			privatePath,
+		);
+		for (const surface of [j.requests, f.updates, await f.saved(sessionId)]) {
+			expect(JSON.stringify(surface)).not.toContain(privateCanary);
+		}
+		expect(j.reads.map(({ path }) => path)).not.toContain(
+			resolve(j.cwd, privatePath),
+		);
 		for (const id of [
 			"conventions",
 			"changed-source",
@@ -879,9 +997,9 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(journeyText(resumed.updates)).toContain(
 			"No fixes or develop phase were started.",
 		);
-		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
-			finding,
-		);
+		expect(
+			journeyResultText(j.requests.at(-1)!.context, "audit-worktree"),
+		).toContain(finding);
 		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
 			"No active workflow. Selected phase: delegate.",
 		);
@@ -1033,6 +1151,17 @@ describe("native ACP shipped-workflow journeys", () => {
 				},
 			});
 		}
+		for (const surface of [
+			j.requests,
+			f.updates,
+			resumed.updates,
+			await resumed.saved(sessionId),
+		]) {
+			expect(JSON.stringify(surface)).not.toContain(privateCanary);
+		}
+		expect(j.reads.map(({ path }) => path)).not.toContain(
+			resolve(j.cwd, privatePath),
+		);
 		expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
 		expect(await readFile(resolve(j.cwd, ".git/index"))).toEqual(index);
 		const { stdout: afterStatus } = await git("status", "--porcelain=v1");

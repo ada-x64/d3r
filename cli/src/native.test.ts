@@ -334,6 +334,7 @@ describe("native dependency composition", () => {
 		expect(f.deps.createWorkspaceTools).toHaveBeenCalledWith({
 			cwd,
 			additionalDirectories: [extra],
+			excludedDirectories: [join(HOME, ".agents", "d3r", "private")],
 		});
 		const [{ options }] = f.turns;
 		const { signal } = new AbortController();

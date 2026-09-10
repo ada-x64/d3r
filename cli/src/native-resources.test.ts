@@ -28,6 +28,10 @@ describe("native resource composition", () => {
 			await Promise.all([
 				mkdir(join(globalAgents, "skills", "inert"), { recursive: true }),
 				mkdir(localAgents, { recursive: true }),
+				mkdir(join(globalAgents, "d3r", "private"), {
+					recursive: true,
+					mode: 0o700,
+				}),
 			]);
 			await Promise.all([
 				writeFile(

@@ -246,8 +246,10 @@ const listVault = async (
 // oxlint-disable-next-line max-statements -- Tool composition keeps its pinned access context private to this factory.
 export const createVaultTools = ({
 	vaultRoot,
+	excludedDirectories = [],
 }: {
 	vaultRoot: string;
+	excludedDirectories?: readonly string[];
 }): RuntimeTool[] => {
 	if (
 		!isAbsolute(vaultRoot) ||
@@ -258,12 +260,17 @@ export const createVaultTools = ({
 			"Vault root must be an absolute canonical directory path",
 		);
 	}
-	const workspace = createWorkspaceTools({ cwd: vaultRoot });
+	const excluded = excludedDirectories.map((path) => resolve(vaultRoot, path));
+	const workspace = createWorkspaceTools({
+		cwd: vaultRoot,
+		excludedDirectories: excluded,
+	});
 	const write = workspace.find((tool) => tool.name === "write_file")!;
 	const edit = workspace.find((tool) => tool.name === "edit_file")!;
 	const accessFor = (context: RuntimeToolContext): WorkspaceAccess => ({
 		cwd: vaultRoot,
 		roots: [vaultRoot],
+		excludedDirectories: excluded,
 		signal: context.signal,
 	});
 	// Approval belongs to the outer bridge. Never give vault IO the ACP editor fs,

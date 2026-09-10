@@ -1,8 +1,10 @@
 /* oxlint-disable init-declarations, no-magic-numbers -- Real filesystem fixtures and lifecycle assertions. */
+import { createHash } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	readdir,
 	realpath,
 	rm,
 	symlink,
@@ -58,7 +60,10 @@ describe("native ancestor vault access", () => {
 		cwd = join(base, "repo", "worktrees", "topic");
 		vault = join(base, "repo", ".agents", "vault");
 		await Promise.all([
-			mkdir(home),
+			mkdir(join(home, ".agents", "d3r", "private"), {
+				recursive: true,
+				mode: 0o700,
+			}),
 			mkdir(cwd, { recursive: true }),
 			mkdir(vault, { recursive: true }),
 		]);
@@ -119,6 +124,7 @@ describe("native ancestor vault access", () => {
 		expect(f.deps.createWorkspaceTools).toHaveBeenCalledWith({
 			cwd,
 			additionalDirectories: [vault],
+			excludedDirectories: [join(home, ".agents", "d3r", "private")],
 		});
 		expect(f.turns[0].options.systemPrompt).toContain(vault);
 		const read = await tool("read_file").execute({ path }, context());
@@ -189,6 +195,7 @@ describe("native ancestor vault access", () => {
 		expect(f.deps.createWorkspaceTools).toHaveBeenCalledWith({
 			cwd,
 			additionalDirectories: [],
+			excludedDirectories: [join(home, ".agents", "d3r", "private")],
 		});
 		await expect(
 			tool("read_file").execute({ path }, context()),
@@ -246,6 +253,244 @@ describe("native ancestor vault access", () => {
 			tool("search").execute({ path: vault, query: "private" }, context()),
 		).resolves.toMatchObject({ text: "" });
 	});
+
+	it.each(["workspace-local", "ancestor", "case-folded workspace-local"])(
+		"excludes configured native state from tools and attachments in the %s vault without hiding auth sources",
+		// oxlint-disable-next-line max-statements -- One native composition regression covers every store access surface and both editor ownership modes.
+		async (location) => {
+			const localVault = location !== "ancestor";
+			if (localVault) {
+				vault = join(cwd, ".agents", "vault");
+				await mkdir(vault, { recursive: true });
+			}
+			const stateName =
+				location === "case-folded workspace-local"
+					? "Native-State"
+					: "native-state";
+			const stateDir = join(vault, stateName);
+			const configuredStateDir = join(vault, "native-state");
+			const query = "NATIVE_PATH_FIXTURE";
+			const canary = `${query}_PRIVATE_CANARY`;
+			const privateText = JSON.stringify({
+				version: 1,
+				credentials: { offline: { type: "api_key", key: canary } },
+			});
+			const privatePaths = [
+				`${stateName}/credentials.json`,
+				`${stateName}/nested/renamed.data`,
+				".agents/d3r/private/credentials.json",
+				".agents/d3r/private/sessions/renamed.data",
+			];
+			const publicFiles = [
+				{
+					path: "auth.json",
+					text: JSON.stringify({ purpose: `${query}_PUBLIC` }),
+				},
+				{ path: "auth.ts", text: `export const purpose = "${query}_PUBLIC";` },
+				{ path: "native-state.md", text: `${query}_PUBLIC documentation` },
+			];
+			const files = [
+				...publicFiles,
+				...privatePaths.map((path) => ({ path, text: privateText })),
+			];
+			await Promise.all(
+				files.map(async ({ path, text }) => {
+					const absolute = join(vault, path);
+					await mkdir(dirname(absolute), { recursive: true, mode: 0o700 });
+					await writeFile(absolute, text, { mode: 0o600 });
+				}),
+			);
+			const before = await readdir(vault, { recursive: true });
+			const readTextFile = vi.fn(async (path: string) => {
+				const file = files.find((entry) => join(vault, entry.path) === path);
+				if (!file) {
+					throw new Error("Editor read outside synthetic fixtures");
+				}
+				return file.text;
+			});
+			const writeTextFile = vi.fn(async () => {});
+			deps = await f.server(
+				{ home, stateDir: configuredStateDir },
+				{
+					// Simulate case-insensitive POSIX resolution without changing the host filesystem.
+					realpath: (path) =>
+						realpath(path === configuredStateDir ? stateDir : path),
+					loadAgentResources,
+					resolveWorkspaceResource,
+				},
+			);
+			const session = await open({
+				client: {
+					requestPermission: f.requestPermission,
+					readTextFile,
+					writeTextFile,
+				},
+			});
+			await session.prompt(testPrompt());
+			expect(f.deps.createModelRuntime).toHaveBeenLastCalledWith({
+				stateDir: configuredStateDir,
+			});
+			expect(f.deps.createWorkspaceTools).toHaveBeenLastCalledWith({
+				cwd,
+				additionalDirectories: localVault ? [] : [vault],
+				excludedDirectories: [stateDir],
+			});
+			expect(f.turns[0].options.systemPrompt).not.toContain(stateDir);
+			const execute = (name: string, args: unknown) =>
+				tool(name).execute(args, context());
+			const snapshot = createHash("sha256").update(privateText).digest("hex");
+			await Promise.all(
+				privatePaths.map(async (relative) => {
+					const path = join(vault, relative);
+					await Promise.all([
+						expect(execute("read_file", { path })).rejects.toThrow(
+							/Sensitive.*path/,
+						),
+						expect(execute("vault_read", { path: relative })).rejects.toThrow(
+							/Sensitive.*path/,
+						),
+						expect(
+							execute("write_file", { path, snapshot, content: "overwrite" }),
+						).rejects.toThrow(/Sensitive.*path/),
+						expect(
+							execute("edit_file", {
+								path,
+								snapshot,
+								oldText: canary,
+								newText: "overwrite",
+							}),
+						).rejects.toThrow(/Sensitive.*path/),
+						expect(
+							execute("vault_write", {
+								mode: "raw",
+								path: relative,
+								snapshot,
+								contents: "overwrite",
+							}),
+						).rejects.toThrow(/Sensitive.*path/),
+						expect(
+							execute("vault_edit", {
+								path: relative,
+								snapshot,
+								find: canary,
+								replace: "overwrite",
+							}),
+						).rejects.toThrow(/Sensitive.*path/),
+						expect(resource(path)).rejects.toThrow(/Sensitive.*path/),
+					]);
+				}),
+			);
+			await Promise.all([
+				expect(execute("list_directory", { path: stateDir })).rejects.toThrow(
+					/Sensitive.*path/,
+				),
+				expect(execute("search", { path: stateDir, query })).rejects.toThrow(
+					/Sensitive.*path/,
+				),
+				expect(execute("vault_ls", { path: stateName })).rejects.toThrow(
+					/Sensitive.*path/,
+				),
+				expect(execute("vault_read", { path: stateName })).rejects.toThrow(
+					/Sensitive.*path/,
+				),
+				expect(
+					execute("write_file", {
+						path: join(stateDir, "new.data"),
+						content: "create",
+					}),
+				).rejects.toThrow(/Sensitive.*path/),
+				expect(
+					execute("vault_write", {
+						mode: "raw",
+						path: `${stateName}/new.data`,
+						contents: "create",
+					}),
+				).rejects.toThrow(/Sensitive.*path/),
+			]);
+			expect(readTextFile).not.toHaveBeenCalled();
+			expect(writeTextFile).not.toHaveBeenCalled();
+			const [
+				listing,
+				search,
+				vaultListing,
+				vaultDirectory,
+				found,
+				privateFound,
+				defaultListing,
+			] = await Promise.all([
+				execute("list_directory", { path: vault }),
+				execute("search", { path: vault, query }),
+				execute("vault_ls", { path: "." }),
+				execute("vault_read", { path: "." }),
+				execute("vault_find", { query }),
+				execute("vault_find", { glob: `${stateName}/**` }),
+				execute("list_directory", { path: join(vault, ".agents", "d3r") }),
+			]);
+			const visible = [
+				".agents",
+				...publicFiles.map(({ path }) => path),
+			].toSorted();
+			expect(listing.text.split("\n")).toEqual([
+				".agents/",
+				...visible.slice(1),
+			]);
+			for (const result of [vaultListing, vaultDirectory]) {
+				expect(
+					JSON.parse(result.text)
+						.entries.map((entry: { path: string }) => entry.path)
+						.toSorted(),
+				).toEqual(visible);
+			}
+			expect(
+				JSON.parse(found.text)
+					.matches.map((entry: { path: string }) => entry.path)
+					.toSorted(),
+			).toEqual(publicFiles.map(({ path }) => path).toSorted());
+			expect(JSON.parse(privateFound.text).matches).toEqual([]);
+			expect(defaultListing.text).toBe("");
+			for (const result of [
+				listing,
+				search,
+				vaultListing,
+				vaultDirectory,
+				found,
+				privateFound,
+			]) {
+				expect(JSON.stringify(result)).not.toContain(canary);
+				for (const path of privatePaths) {
+					expect(JSON.stringify(result)).not.toContain(path);
+				}
+			}
+			await Promise.all(
+				publicFiles.map(async ({ path, text }) => {
+					const absolute = join(vault, path);
+					expect(search.text).toContain(`${absolute}:1: ${text}`);
+					const [read, vaultRead] = await Promise.all([
+						execute("read_file", { path: absolute }),
+						execute("vault_read", { path }),
+					]);
+					expect(read.text).toContain(text);
+					expect(JSON.parse(vaultRead.text).text).toBe(text);
+					expect(await resource(absolute)).toBe(text);
+				}),
+			);
+			expect(readTextFile.mock.calls.map(([path]) => path).toSorted()).toEqual(
+				localVault
+					? publicFiles
+							.flatMap(({ path }) => [join(vault, path), join(vault, path)])
+							.toSorted()
+					: [],
+			);
+			expect(writeTextFile).not.toHaveBeenCalled();
+			const after = await readdir(vault, { recursive: true });
+			expect(after.toSorted()).toEqual(before.toSorted());
+			await Promise.all(
+				files.map(async ({ path, text }) => {
+					expect(await readFile(join(vault, path), "utf8")).toBe(text);
+				}),
+			);
+		},
+	);
 
 	it("keeps vault resource links disk-owned alongside explicit additional editor workspace roots", async () => {
 		const repo = join(base, "repo");

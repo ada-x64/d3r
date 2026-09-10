@@ -390,6 +390,31 @@ describe("native agent resources", () => {
 		expect(readTextFile).toHaveBeenCalledWith(path, expect.any(AbortSignal));
 	});
 
+	it("resolves auth source attachments while excluding the actual private store before editor IO", async () => {
+		const path = join(cwd, "auth", "secrets.ts");
+		await put(path, "saved implementation");
+		const readTextFile = vi.fn(async () => "unsaved implementation");
+		const access = {
+			cwd,
+			roots: [cwd],
+			signal: new AbortController().signal,
+			client: { requestPermission: vi.fn(), readTextFile },
+		};
+		await expect(
+			resolveWorkspaceResource(pathToFileURL(path).href, access),
+		).resolves.toEqual({ type: "text", text: "unsaved implementation" });
+		expect(readTextFile).toHaveBeenCalledOnce();
+		await expect(
+			resolveWorkspaceResource(
+				pathToFileURL(
+					join(cwd, ".agents", "d3r", "private", "credentials.json"),
+				).href,
+				access,
+			),
+		).rejects.toThrow(/Sensitive path/);
+		expect(readTextFile).toHaveBeenCalledOnce();
+	});
+
 	it("rejects network URIs, authority, traversal, private and binary resources", async () => {
 		const access = { cwd, roots: [cwd], signal: new AbortController().signal };
 		await writeFile(join(cwd, "binary"), Buffer.from([0, 1]));

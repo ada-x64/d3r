@@ -101,6 +101,8 @@ export const createNativeDeps = async (
 		options.stateDir ?? join(home, ".agents", "d3r", "private"),
 	);
 	const models = await deps.createModelRuntime({ stateDir });
+	// Credential initialization validates and creates the store; protect its canonical spelling too.
+	const privateDirectory = requireAbsolute(await deps.realpath(stateDir));
 	let loggedOut = false;
 	let loggingOut: Promise<void> | null = null;
 	const requireAuthentication = (): void => {
@@ -196,6 +198,7 @@ export const createNativeDeps = async (
 			});
 			return createLazyNativeSession({
 				input: { ...input, cwd, additionalDirectories },
+				stateDir: privateDirectory,
 				models,
 				available,
 				checkpoint,

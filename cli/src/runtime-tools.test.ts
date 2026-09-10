@@ -11,7 +11,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	type RuntimeClientServices,
 	type RuntimeToolContext,
@@ -325,17 +325,19 @@ describe("workspace runtime tools", () => {
 		".env",
 		".envrc",
 		".git-credentials",
-		"auth-store.json",
+
 		".env.local",
 		"service.env",
-		"auth.json",
-		"credentials.json",
+
 		"private.key",
 		"certificate.pem",
 		".git/config",
 		".ssh/id_ed25519",
 		".agents/sessions/turn.json",
 		".agents/private/data",
+		".agents/d3r/private/credentials.json",
+		".agents/d3r/private/sessions/turn.json",
+		".agents/d3r/private/renamed.data",
 	])("denies sensitive reads, writes and searches: %s", async (path) => {
 		await expect(execute("read_file", { path })).rejects.toThrow(
 			/Sensitive path/,
@@ -346,6 +348,73 @@ describe("workspace runtime tools", () => {
 		await expect(execute("search", { path, query: "secret" })).rejects.toThrow(
 			/Sensitive path/,
 		);
+	});
+
+	it("reads, lists, searches, and edits security implementation names without treating them as secret stores", async () => {
+		const paths = [
+			"cli/src/verbs/auth.ts",
+			"adapters/pi/auth.ts",
+			"adapters/pi/auth-store.ts",
+			"adapters/acp/secrets.ts",
+			"src/auth/credentials/secrets/tokens/keys/index.ts",
+			"docs/secrets.md",
+			"auth.json",
+			"auth-store.json",
+			"credentials.json",
+		];
+		const source =
+			"PUBLIC_SOURCE: security implementation or documented schema, not a live credential";
+		await Promise.all(
+			paths.map(async (path) => {
+				await mkdir(dirname(join(cwd, path)), { recursive: true });
+				await writeFile(join(cwd, path), source);
+			}),
+		);
+		await Promise.all(
+			paths.map(async (path) => {
+				const read = await execute("read_file", { path });
+				expect(read.text).toContain(source);
+			}),
+		);
+		const listing = await execute("list_directory", { path: "adapters/pi" });
+		expect(listing.text.split("\n")).toEqual(["auth-store.ts", "auth.ts"]);
+		const directory = await execute("list_directory", { path: "src" });
+		expect(directory.text).toBe("auth/");
+		const search = await execute("search", { query: "PUBLIC_SOURCE" });
+		for (const path of paths) {
+			expect(search.text).toContain(`${join(cwd, path)}:1: ${source}`);
+		}
+		await execute("edit_file", {
+			path: paths[0],
+			snapshot: token(source),
+			oldText: "PUBLIC_SOURCE",
+			newText: "UPDATED_SOURCE",
+		});
+		expect(await readFile(join(cwd, paths[0]), "utf8")).toContain(
+			"UPDATED_SOURCE",
+		);
+	});
+
+	it("protects the actual D3R private store before consulting editor buffers", async () => {
+		const directory = join(cwd, ".agents", "d3r", "private");
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		const path = join(directory, "credentials.json");
+		await writeFile(path, "PRIVATE_STORE_CANARY", { mode: 0o600 });
+		const readTextFile = vi.fn(async () => "PRIVATE_STORE_CANARY");
+		const ctx = {
+			...context,
+			client: { requestPermission: vi.fn(), readTextFile },
+		};
+		await expect(execute("read_file", { path }, ctx)).rejects.toThrow(
+			/Sensitive path/,
+		);
+		expect(readTextFile).not.toHaveBeenCalled();
+		const [search, listing] = await Promise.all([
+			execute("search", { query: "PRIVATE_STORE_CANARY" }),
+			execute("list_directory", { path: ".agents/d3r" }),
+		]);
+		expect(search.text).toBe("");
+		expect(listing.text).not.toContain("private");
 	});
 
 	it("refuses symlink escapes and links replaced after a read", async () => {

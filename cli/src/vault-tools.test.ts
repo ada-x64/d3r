@@ -554,7 +554,7 @@ describe("native vault tools", () => {
 		".env",
 		".ssh/id_rsa",
 		".agents/sessions/log",
-		"credentials.json",
+		".agents/d3r/private/credentials.json",
 		".d3r-write-test.tmp",
 		"note.txt:stream",
 		"folder./note",
@@ -592,6 +592,25 @@ describe("native vault tools", () => {
 			expect(await readdir(vaultRoot)).toEqual([]);
 		},
 	);
+
+	it("allows security documentation names in vault reads, listings, searches, and writes", async () => {
+		const path = "notes/auth/secrets.md";
+		const contents =
+			"Public documentation about credential handling, not stored credential values.";
+		await execute("vault_write", { mode: "raw", path, contents });
+		expect(data(await execute("vault_read", { path })).text).toBe(contents);
+		expect(data(await execute("vault_ls", { path: "notes" })).entries).toEqual([
+			{ name: "auth", path: "notes/auth", kind: "dir" },
+		]);
+		expect(
+			data(
+				await execute("vault_find", {
+					glob: "notes/auth/**",
+					query: "credential handling",
+				}),
+			).matches,
+		).toEqual([{ path, matchedGlob: true, matchedQuery: true }]);
+	});
 
 	it("refuses unsafe move destinations and glob/root overrides", async () => {
 		await writeFile(join(vaultRoot, "note.txt"), "original");
