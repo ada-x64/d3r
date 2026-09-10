@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { type Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
 import { type AssistantMessage } from "@earendil-works/pi-ai";
 import {
+	createRuntimeFailure,
+	type RuntimeFailure,
 	type RuntimeActivity,
 	type RuntimePrompt,
 	type RuntimeSessionInput,
@@ -14,6 +16,10 @@ import {
 import { closeToolBatches } from "./embedded-checkpoint.ts";
 import { prepareContent, type ResolveResource } from "./embedded-content.ts";
 import {
+	classifyPiFailure,
+	type PiFailureClassification,
+} from "./embedded-errors.ts";
+import {
 	compileTools,
 	createToolBridge,
 	type EmbeddedTool,
@@ -24,6 +30,8 @@ interface TurnState {
 	messageId: string;
 	finalMessage: AssistantMessage | null;
 	outputFailed: boolean;
+	requestFailure?: PiFailureClassification;
+	httpStatus?: number;
 }
 
 /** Await delivery without throwing into Pi's parallel tool executor and losing siblings. */
@@ -83,16 +91,23 @@ const observeMessages = async (
 const turnOutcome = (
 	state: TurnState,
 	hasTools: boolean,
+	failure: RuntimeFailure,
 ): RuntimeStopReason => {
 	if (state.outputFailed) {
-		throw new Error("Runtime output delivery failed");
+		throw createRuntimeFailure({
+			stage: "output",
+			category: "unknown",
+			provider: failure.provider,
+			model: failure.model,
+			toolsStarted: failure.toolsStarted,
+		});
 	}
 	const message = state.finalMessage;
 	if (!message) {
-		throw new Error("Model response did not complete");
+		throw createRuntimeFailure(failure);
 	}
 	if (message.stopReason === "error") {
-		throw new Error("Model request failed");
+		throw createRuntimeFailure(failure);
 	}
 	if (message.stopReason === "aborted") {
 		return "cancelled";
@@ -114,6 +129,7 @@ const turnOutcome = (
 };
 
 /** A prompt owns all hooks until Pi and every started tool/output callback have settled. */
+// oxlint-disable-next-line max-statements -- Keep invocation hook ownership and history cleanup in one try/finally.
 export const runEmbeddedTurn = async (
 	agent: Agent,
 	request: RuntimePrompt,
@@ -173,6 +189,41 @@ export const runEmbeddedTurn = async (
 	const abort = (): void => agent.abort();
 	request.signal.addEventListener("abort", abort, { once: true });
 	let keepHistory = false;
+	const previousStream = agent.streamFunction;
+	// Pi stringifies throws before emitting message_end. Capture safe metadata first,
+	// scoped to this invocation and reset for every request (including after tools).
+	agent.streamFunction = async (model, context, settings) => {
+		state.requestFailure = undefined;
+		state.httpStatus = undefined;
+		try {
+			return await previousStream(model, context, {
+				...settings,
+				onResponse: async (response, responseModel) => {
+					state.httpStatus = classifyPiFailure(response).httpStatus;
+					await settings?.onResponse?.(response, responseModel);
+				},
+			});
+		} catch (error) {
+			state.requestFailure = classifyPiFailure(error);
+			// oxlint-disable-next-line preserve-caught-error -- Pi must never stringify an untrusted cause or getter.
+			throw new Error("Model request failed");
+		}
+	};
+	const failureData = (error: unknown): RuntimeFailure => {
+		const classified = state.requestFailure ?? classifyPiFailure(error);
+		return {
+			stage: "model_request",
+			...classified,
+			category:
+				classified.category === "unknown"
+					? classifyPiFailure({ status: state.httpStatus }).category
+					: classified.category,
+			httpStatus: classified.httpStatus ?? state.httpStatus,
+			provider: agent.state.model.provider,
+			model: agent.state.model.id,
+			toolsStarted: bridge.hasStartedTools(),
+		};
+	};
 	try {
 		const content = await prepareContent(request, agent.state.model, {
 			cwd: input.cwd,
@@ -181,11 +232,19 @@ export const runEmbeddedTurn = async (
 		if (request.signal.aborted) {
 			return "cancelled";
 		}
-		await agent.prompt({ role: "user", content, timestamp: Date.now() });
+		try {
+			await agent.prompt({ role: "user", content, timestamp: Date.now() });
+		} catch (error) {
+			throw createRuntimeFailure(failureData(error));
+		}
 		if (request.signal.aborted) {
 			return "cancelled";
 		}
-		const result = turnOutcome(state, definitions.length > 0);
+		const result = turnOutcome(
+			state,
+			definitions.length > 0,
+			failureData(state.finalMessage),
+		);
 		keepHistory = result !== "cancelled";
 		return result;
 	} catch (error) {
@@ -196,6 +255,7 @@ export const runEmbeddedTurn = async (
 	} finally {
 		request.signal.removeEventListener("abort", abort);
 		unsubscribe();
+		agent.streamFunction = previousStream;
 		// Execution is conservatively an effect even if it throws or observes abort.
 		// Never roll it back: resume receives results, not a queue of calls to replay.
 		agent.state.messages =

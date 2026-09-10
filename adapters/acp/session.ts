@@ -6,7 +6,11 @@ import {
 	type SessionUpdate,
 	type StopReason,
 } from "@agentclientprotocol/sdk";
-import { type RuntimeSession, type RuntimeStopReason } from "@d3r/core/runtime";
+import {
+	readRuntimeFailure,
+	type RuntimeSession,
+	type RuntimeStopReason,
+} from "@d3r/core/runtime";
 import { type ClientServices } from "./client.ts";
 import { configOptions, readRuntimeConfig } from "./config.ts";
 
@@ -56,12 +60,30 @@ export const sessionMetadata = (session: Session) => {
 };
 /** Append a detached checkpoint only after runtime mutation and callbacks have settled. */
 export const checkpointSession = async (session: Session): Promise<void> => {
-	await session.services.settleWrites();
-	if (session.services.hasUnknownWrites()) {
+	let unknownWrites = true;
+	try {
+		await session.services.settleWrites();
+		unknownWrites = session.services.hasUnknownWrites();
+	} catch {
+		session.failed = true;
+		throw RequestError.internalError(
+			undefined,
+			"Could not settle client writes; session needs recovery",
+		);
+	}
+	if (unknownWrites) {
 		session.failed = true;
 		throw RequestError.internalError(
 			undefined,
 			"Cannot checkpoint an unknown client write outcome",
+		);
+	}
+	// A failed finishTurn may have left other client work unsettled. Join writes above,
+	// but never replace its durable intent with a misleading complete checkpoint.
+	if (session.failed) {
+		throw RequestError.internalError(
+			undefined,
+			"Could not finalize client services; session needs recovery",
 		);
 	}
 	if (!session.store) {
@@ -161,6 +183,35 @@ const publishConfig = async (
 	}
 };
 
+/** Durability failures outrank the turn; metadata failures cannot replace its primary error. */
+const finalizePrompt = async (
+	session: Session,
+	{ client, signal }: { client: AgentContext; signal: AbortSignal },
+	primary: unknown,
+): Promise<boolean> => {
+	try {
+		await session.services.finishTurn();
+	} catch {
+		session.failed = true;
+	}
+	let metadataFailed = false;
+	try {
+		await publishConfig(session, client, signal);
+	} catch {
+		metadataFailed = true;
+	}
+	try {
+		await checkpointSession(session);
+	} catch {
+		const failure = readRuntimeFailure(primary);
+		throw RequestError.internalError(
+			failure ? { failure } : undefined,
+			"Could not finalize session; session needs recovery",
+		);
+	}
+	return metadataFailed;
+};
+
 /** Reserve mutation synchronously so overlapping prompt/config/close requests cannot race. */
 export const exclusiveSession = <T>(
 	session: Session,
@@ -210,6 +261,7 @@ export const promptSession = (
 		let outcome: { reason: RuntimeStopReason } | { error: unknown } = {
 			reason: "cancelled",
 		};
+		let metadataFailed = false;
 		try {
 			if (!signal.aborted) {
 				outcome = {
@@ -220,18 +272,23 @@ export const promptSession = (
 		} catch (error) {
 			outcome = { error };
 		} finally {
-			await session.services.finishTurn();
-			try {
-				await publishConfig(session, client, signal);
-			} finally {
-				await checkpointSession(session);
-			}
+			metadataFailed = await finalizePrompt(
+				session,
+				{ client, signal },
+				"error" in outcome ? outcome.error : undefined,
+			);
 		}
 		if (signal.aborted) {
 			return { stopReason: "cancelled" };
 		}
 		if ("error" in outcome) {
 			throw runtimeError(outcome.error, "Agent runtime failed");
+		}
+		if (metadataFailed) {
+			throw RequestError.internalError(
+				undefined,
+				"Could not publish session configuration",
+			);
 		}
 		return { stopReason: STOP_REASONS[outcome.reason] };
 	});

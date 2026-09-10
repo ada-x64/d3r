@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Workflow } from "@d3r/core";
 import {
+	formatRuntimeFailure,
+	readRuntimeFailure,
+	type RuntimeFailure,
 	type RuntimeContent,
 	type RuntimeConfigOption,
 	type RuntimePrompt,
@@ -331,6 +334,7 @@ export const createWorkflowRuntime = (
 			text: `Execute only your assigned role for /${engine!.command}. Mode: ${engine!.mode ?? "declared workflow"}. Call d3r_report exactly once with your final structured outcome after all work. Prose alone never completes a workflow. Do not claim approval or allDone unless established.`,
 		},
 	];
+	// oxlint-disable-next-line max-statements -- Role ownership, failure reporting, and cleanup share one lifetime.
 	const runRole = async (
 		record: ExecutionRecord,
 		request: RuntimePrompt,
@@ -340,6 +344,7 @@ export const createWorkflowRuntime = (
 		const result: {
 			outcome?: WorkflowOutcome;
 			error?: string;
+			failure?: RuntimeFailure;
 			accepting: boolean;
 		} = { accepting: false };
 		const report: WorkflowReport = (value) => {
@@ -409,9 +414,11 @@ export const createWorkflowRuntime = (
 					? `Role ${record.role} stopped with ${reason}; completion was not established.`
 					: "Role returned an invalid completion reason; workflow paused.";
 			}
-		} catch {
-			result.error ??=
-				"Role setup or execution failed; effects may have occurred. Workflow paused.";
+		} catch (error) {
+			result.failure = readRuntimeFailure(error);
+			result.error ??= result.failure
+				? `Role ${record.role}: ${formatRuntimeFailure(result.failure)}`
+				: "Role setup or execution failed; effects may have occurred. Workflow paused.";
 		} finally {
 			result.accepting = false;
 			if (child) {
@@ -437,7 +444,11 @@ export const createWorkflowRuntime = (
 					? "completed"
 					: "failed",
 			rawOutput: result.error
-				? { error: result.error, outcome: result.outcome }
+				? {
+						error: result.error,
+						...(result.failure ? { failure: result.failure } : {}),
+						outcome: result.outcome,
+					}
 				: (result.outcome ?? { error: "Missing d3r_report" }),
 		});
 	};

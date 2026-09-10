@@ -391,6 +391,33 @@ credential values are registered for transcript/checkpoint redaction. Redaction
 is a backstop, not permission to deliberately send secrets through prompts or
 tools.
 
+## Failure reports
+
+Model failures retain a safe explanation through the runtime and workflow layers
+instead of becoming only "Role setup or execution failed". Reports identify the
+failing role, configured provider/model, and an HTTP status or recognized error
+code when available. They distinguish authentication, access, rate limits,
+quota, invalid request settings, unavailable models, context limits,
+network/timeouts, and provider service errors. Specific tool-schema or thinking
+option advice is included only when supported by the diagnostic evidence.
+
+Raw provider messages, response bodies, headers, stack traces, credentials, and
+private paths are not copied into the report. Unknown failures explicitly say
+safe details are unavailable rather than guessing at a cause. Previously
+discarded diagnostics cannot be recovered from old threads.
+
+"No tool execution started in this invocation" refers only to the failing
+runtime invocation, not all earlier workflow work. If tools already started, the
+report warns that their effects may remain; it does not automatically retry,
+roll back, switch models, or change permissions. Safe reports remain in role
+history after reload. For ordinary routing failures, ACP error data also
+contains the validated failure classification, while the message is prose.
+
+Finalization errors are sanitized too. A metadata-publication failure cannot
+replace a useful primary failure when checkpointing succeeds. Failed or
+uncertain effect settlement/checkpointing takes precedence and requires
+recovery; it cannot be hidden by a normal cancellation result.
+
 ## Persistence and cancellation
 
 Session history supports list, load (replay), resume (without replay), close,

@@ -1,5 +1,16 @@
 import { type z } from "zod";
 
+export {
+	createRuntimeFailure,
+	readRuntimeFailure,
+	formatRuntimeFailure,
+	type RuntimeFailure,
+	type RuntimeFailureStage,
+	type RuntimeFailureCategory,
+	type RuntimeFailureCode,
+	type RuntimeFailureDetail,
+} from "./runtime-failure.ts";
+
 /** Prompt content independent of any editor protocol or model provider. */
 export type RuntimeContent =
 	| { readonly type: "text"; readonly text: string }

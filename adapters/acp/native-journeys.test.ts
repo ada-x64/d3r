@@ -1,5 +1,6 @@
 import {
 	client,
+	RequestError,
 	type ReadTextFileRequest,
 	type ReadTextFileResponse,
 	type RequestPermissionRequest,
@@ -120,6 +121,40 @@ const journeyStream = (
 		result: async () => message,
 	} as JourneyStream;
 };
+/** A terminal provider rejection carries no deltas or usage, only untrusted diagnostics. */
+const journeyFailureStream = (errorMessage: string): JourneyStream => {
+	const message = journeyStream([])
+		.result()
+		.then((initial) => ({
+			...initial,
+			stopReason: "error" as const,
+			errorMessage,
+			provider: "diagnostic-provider",
+			model: "diagnostic-model",
+		}));
+	let delivered = false;
+	return {
+		[Symbol.asyncIterator]: () => ({
+			next: async () => {
+				if (delivered) {
+					return { value: undefined, done: true };
+				}
+				delivered = true;
+				return {
+					value: { type: "error", reason: "error", error: await message },
+					done: false,
+				};
+			},
+		}),
+		result: () => message,
+	} as JourneyStream;
+};
+/** Synthetic diagnostic-only canaries must not enter output, storage or later model context. */
+const JOURNEY_PRIVATE_DIAGNOSTIC =
+	"Authorization: Bearer journey-secret-canary; x-api-key: journey-header-canary; https://diagnostic.invalid/private?token=journey-url-canary\nprompt: journey-prompt-canary\n at journey-stack-canary (/private/provider.ts:19:4)";
+/** Match individual fields too, so partial diagnostic leaks cannot pass a whole-string check. */
+const JOURNEY_DIAGNOSTIC_LEAK =
+	/journey-(?:secret|header|url|prompt|stack)-canary|diagnostic\.invalid|Authorization|x-api-key|diagnostic-provider|diagnostic-model|\/private\/provider\.ts/;
 /** Raw provider IDs may be reused across isolated roles and subsequent turns. */
 const journeyCall = (
 	name: string,
@@ -387,6 +422,507 @@ describe("native ACP shipped-workflow journeys", () => {
 					.map((path) => rm(path, { recursive: true, force: true })),
 			);
 		}
+	});
+
+	it.each([
+		{
+			provider: "openai",
+			category: "invalid_request",
+			httpStatus: 400,
+			code: "invalid_function_parameters",
+			detail: "invalid_tool_schema",
+			error: {
+				code: "invalid_function_parameters",
+				message: `Invalid schema for function 'write_file': ${JOURNEY_PRIVATE_DIAGNOSTIC}`,
+			},
+			advice:
+				"The provider rejected a tool schema. Check tool definitions against the configured model's supported schema format.",
+		},
+		{
+			provider: "anthropic",
+			category: "auth",
+			httpStatus: 401,
+			code: "authentication_error",
+			error: {
+				type: "authentication_error",
+				message: JOURNEY_PRIVATE_DIAGNOSTIC,
+			},
+			advice:
+				"Provider authentication failed. Check the configured provider credentials or sign in again.",
+		},
+	] as const)(
+		"reports a $provider planner rejection before tools and replays only its safe cause",
+		// oxlint-disable-next-line max-statements -- Rejection, durable replay and safe routing handoff form one acceptance journey.
+		async (rejection) => {
+			const selected: NativeModel = {
+				...JOURNEY_MODEL,
+				provider: rejection.provider,
+				id: "configured-planner",
+			};
+			const failure = {
+				stage: "model_request",
+				category: rejection.category,
+				httpStatus: rejection.httpStatus,
+				code: rejection.code,
+				...("detail" in rejection ? { detail: rejection.detail } : {}),
+				provider: rejection.provider,
+				model: "configured-planner",
+				toolsStarted: false,
+			};
+			const safeError = `Role planner: Model request failed (provider \`${rejection.provider}\`; model \`configured-planner\`; HTTP ${rejection.httpStatus}; code \`${rejection.code}\`). ${rejection.advice} No tool execution started in this invocation.`;
+			const answer =
+				"Review the provider configuration before delegating again.";
+			const scripts: JourneyScripts = {
+				planner: [[]],
+				router: [[{ type: "text", text: answer }]],
+			};
+			const j = await open(scripts, {
+				models: [JOURNEY_MODEL, selected],
+				streamResponse: (role, content) =>
+					role === "planner"
+						? journeyFailureStream(
+								`${rejection.httpStatus} ${JSON.stringify({ error: rejection.error })}`,
+							)
+						: journeyStream(content),
+			});
+			const f = await j.connect();
+			const { sessionId } = await f.newSession(j.cwd);
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "model",
+				value: nativeModelKey(selected),
+			});
+			const files = await readdir(j.cwd, { recursive: true });
+			const request = "/delegate Plan the durable queue";
+			await expect(f.prompt(sessionId, request)).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			const text = journeyText(f.updates);
+			expect(text).toContain(safeError);
+			expect(text).toMatch(/abandon[\s\S]*restart/);
+			expect(text).not.toMatch(
+				/effects may have occurred|may have had effects/,
+			);
+			expect(j.requests.map(({ role }) => role)).toEqual(["planner"]);
+			expect(j.requests[0].model).toEqual(selected);
+			expect(JSON.stringify(j.requests[0].context.messages)).toContain(request);
+			expect(j.requests[0].context.tools).toContainEqual(
+				expect.objectContaining({ name: "d3r_report" }),
+			);
+			expect(
+				journeyTools(f.updates)
+					.filter((row) => row.sessionUpdate === "tool_call")
+					.map(({ title }) => title),
+			).toEqual(["planner"]);
+			const failed = journeyTools(f.updates).findLast(
+				(row) => row.title === "planner",
+			);
+			expect(failed).toMatchObject({
+				status: "failed",
+				rawOutput: { error: safeError, failure },
+			});
+			expect(failed!.rawOutput).toEqual({ error: safeError, failure });
+			expect(
+				f.updates.flatMap(({ update }) =>
+					update.sessionUpdate === "usage_update" ? [update.used] : [],
+				),
+			).toEqual([0]);
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+			]);
+			const checkpoint = await f.checkpoint(sessionId);
+			expect(journeyCheckpoint(checkpoint).inner!.engine).toMatchObject({
+				status: "blocked",
+				pause: { kind: "failure", message: safeError },
+				records: expect.arrayContaining([
+					expect.objectContaining({ role: "planner", error: safeError }),
+				]),
+			});
+			const saved = await f.saved(sessionId);
+			expect(saved!.records).toContainEqual({
+				kind: "update",
+				update: expect.objectContaining({
+					title: "planner",
+					status: "failed",
+					rawOutput: { error: safeError, failure },
+				}),
+			});
+			expect(
+				JSON.stringify([f.updates, j.permissions, saved, checkpoint]),
+			).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+			await expect(readdir(j.cwd, { recursive: true })).resolves.toEqual(files);
+			await f.close();
+			const resumed = await j.connect();
+			await expect(
+				resumed.peer.agent.request("session/load", {
+					sessionId,
+					cwd: j.cwd,
+					mcpServers: [],
+				}),
+				"A failed role must remain loadable with its safe error and parsed failure data",
+			).resolves.toBeDefined();
+			await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+			expect(journeyText(resumed.updates)).toBe(text);
+			expect(
+				journeyTools(resumed.updates).findLast((row) => row.title === "planner")
+					?.rawOutput,
+			).toEqual({ error: safeError, failure });
+			expect(j.requests.map(({ role }) => role)).toEqual(["planner"]);
+			expect(j.permissions).toHaveLength(1);
+			await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			const routingStart = resumed.updates.length;
+			await expect(
+				resumed.prompt(sessionId, "What should I check?"),
+			).resolves.toEqual({
+				stopReason: "end_turn",
+			});
+			expect(journeyText(resumed.updates.slice(routingStart))).toBe(answer);
+			expect(journeyTools(resumed.updates.slice(routingStart))).toEqual([]);
+			expect(j.requests.map(({ role }) => role)).toEqual(["planner", "router"]);
+			expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+				safeError,
+			);
+			expect(
+				JSON.stringify([
+					resumed.updates,
+					await resumed.saved(sessionId),
+					j.requests,
+				]),
+			).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+			await expect(readdir(j.cwd, { recursive: true })).resolves.toEqual(files);
+			expect(await readFile(resolve(j.cwd, "AGENTS.md"), "utf8")).toBe(
+				"Preserve the offline user's requirements.",
+			);
+		},
+	);
+
+	// oxlint-disable-next-line max-statements -- Prove approved effects, failure evidence, fresh replay and explicit non-repeating recovery together.
+	it("retains an approved write after provider failure without replaying it on load or recovery", async () => {
+		const artifact =
+			"# Queue tasks\n\nKeep completed writes across provider failures.\n";
+		const failure = {
+			stage: "model_request",
+			category: "quota",
+			httpStatus: 429,
+			code: "insufficient_quota",
+			provider: "fixture",
+			model: "offline",
+			toolsStarted: true,
+		};
+		const safeError =
+			"Role schemer: Model request failed (provider `fixture`; model `offline`; HTTP 429; code `insufficient_quota`). The provider reported an account quota or billing limit. Check usage allowance and billing with the provider. Tools started in this invocation and may have had effects. Review prior tool results before repeating work.";
+		const scripts: JourneyScripts = {
+			planner: journeyDone(
+				"Plan the durable queue without repeating completed writes.",
+			),
+			schemer: [
+				journeyCall("write_file", { path: "tasks.md", content: artifact }),
+				[],
+			],
+			router: [
+				[
+					{
+						type: "text",
+						text: "Review the retained file and billing before restarting.",
+					},
+				],
+			],
+		};
+		const j = await open(scripts, {
+			streamResponse: (role, content) =>
+				role === "schemer" && content.length === 0
+					? journeyFailureStream(
+							`429 ${JSON.stringify({
+								error: {
+									code: "insufficient_quota",
+									message: JOURNEY_PRIVATE_DIAGNOSTIC,
+								},
+							})}`,
+						)
+					: journeyStream(content),
+		});
+		const asked = deferred<RequestPermissionRequest>();
+		const approval = deferred<boolean>();
+		j.approval.decide = async (permission) => {
+			if (permission.toolCall.title?.startsWith("Trust workspace")) {
+				return true;
+			}
+			asked.resolve(permission);
+			return approval.promise;
+		};
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const pending = f.prompt(
+			sessionId,
+			"/delegate Save the durable queue tasks",
+		);
+		try {
+			const permission = await Promise.race([
+				asked.promise,
+				pending.then(() => {
+					throw new Error("Turn ended without requesting write permission");
+				}),
+			]);
+			expect(permission.toolCall.title).toBe("write_file");
+			expect(journeyToolText(permission.toolCall)).toContain("tasks.md");
+			await expect(readFile(resolve(j.cwd, "tasks.md"))).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			approval.resolve(true);
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+		} finally {
+			approval.resolve(false);
+			await pending;
+		}
+		expect(await readFile(resolve(j.cwd, "tasks.md"), "utf8")).toBe(artifact);
+		expect(journeyText(f.updates)).toContain(safeError);
+		expect(journeyText(f.updates)).not.toContain("No tool execution started");
+		expect(j.requests.map(({ role }) => role)).toEqual([
+			"planner",
+			"planner",
+			"schemer",
+			"schemer",
+		]);
+		const writeResult = journeyResult(j.requests.at(-1)!.context, "write_file");
+		expect(writeResult).toMatchObject({
+			toolName: "write_file",
+			isError: false,
+		});
+		const written = journeyTools(f.updates).findLast(
+			(row) => row.title === "write_file",
+		);
+		expect(written).toMatchObject({
+			status: "completed",
+			content: expect.arrayContaining([
+				{
+					type: "diff",
+					path: resolve(j.cwd, "tasks.md"),
+					oldText: null,
+					newText: artifact,
+				},
+			]),
+		});
+		expect(
+			journeyTools(f.updates).findLast((row) => row.title === "schemer")
+				?.rawOutput,
+		).toEqual({
+			error: safeError,
+			failure,
+		});
+		const checkpoint = await f.checkpoint(sessionId);
+		expect(journeyCheckpoint(checkpoint).inner!.engine).toMatchObject({
+			status: "blocked",
+			pause: { kind: "failure", message: safeError },
+		});
+		const saved = await f.saved(sessionId);
+		expect(saved!.records).toContainEqual({ kind: "update", update: written });
+		expect(
+			JSON.stringify([f.updates, saved, j.requests, j.permissions]),
+		).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+		const beforeReload = {
+			requests: j.requests.length,
+			permissions: j.permissions.length,
+		};
+		// A replayed identical write would erase this external edit even if the final file still existed.
+		const external = `${artifact}\nOperator reviewed this file; preserve this edit.\n`;
+		await writeFile(resolve(j.cwd, "tasks.md"), external);
+		await f.close();
+		const resumed = await j.connect();
+		await expect(
+			resumed.peer.agent.request("session/load", {
+				sessionId,
+				cwd: j.cwd,
+				mcpServers: [],
+			}),
+			"Loading a failed workflow must preserve both completed tool evidence and the safe cause",
+		).resolves.toBeDefined();
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(
+			journeyTools(resumed.updates).findLast(
+				(row) => row.title === "write_file",
+			),
+		).toEqual(written);
+		expect(
+			journeyTools(resumed.updates).findLast((row) => row.title === "schemer")
+				?.rawOutput,
+		).toEqual({ error: safeError, failure });
+		expect(j.requests).toHaveLength(beforeReload.requests);
+		expect(j.permissions).toHaveLength(beforeReload.permissions);
+		const recoveryStart = resumed.updates.length;
+		await expect(resumed.prompt(sessionId, "continue")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(journeyText(resumed.updates.slice(recoveryStart))).toContain(
+			safeError,
+		);
+		expect(j.requests).toHaveLength(beforeReload.requests);
+		await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		await expect(
+			resumed.prompt(sessionId, "What should I review before trying again?"),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(
+			j.requests.slice(beforeReload.requests).map(({ role }) => role),
+		).toEqual(["router"]);
+		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+			safeError,
+		);
+		expect(journeyTools(resumed.updates.slice(recoveryStart))).toEqual([]);
+		expect(
+			j.permissions.filter(({ toolCall }) => toolCall.title === "write_file"),
+		).toHaveLength(1);
+		expect(await readFile(resolve(j.cwd, "tasks.md"), "utf8")).toBe(external);
+		expect(
+			JSON.stringify([
+				resumed.updates,
+				await resumed.saved(sessionId),
+				j.requests,
+				j.permissions,
+			]),
+		).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
+
+	// oxlint-disable-next-line max-statements -- A true pre-stream exception must cross ACP as a request error and recover without implicit retry.
+	it("reports a synchronous routing network throw as an ACP request error and requires explicit recovery", async () => {
+		const greeting = "Ready to discuss the queue.";
+		const recovered =
+			"The earlier conversation is retained; no work was repeated.";
+		const scripts: JourneyScripts = {
+			router: [
+				[{ type: "text", text: greeting }],
+				[],
+				[{ type: "text", text: recovered }],
+			],
+		};
+		const j = await open(scripts, {
+			streamResponse: (_role, content) => {
+				if (content.length === 0) {
+					throw Object.assign(
+						new Error(`fetch failed: ${JOURNEY_PRIVATE_DIAGNOSTIC}`),
+						{
+							code: "ECONNRESET",
+							cause: { message: JOURNEY_PRIVATE_DIAGNOSTIC },
+						},
+					);
+				}
+				return journeyStream(content);
+			},
+		});
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await expect(f.prompt(sessionId, "Hello")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const failedPrompt = "Discuss recovery before making a queue plan";
+		const failureStart = f.updates.length;
+		const requestError: unknown = await f
+			.prompt(sessionId, failedPrompt)
+			.catch((error: unknown) => error);
+		const safeError =
+			"Model request failed (provider `fixture`; model `offline`; code `ECONNRESET`). The provider connection failed. Check network connectivity and provider availability. No tool execution started in this invocation.";
+		const failure = {
+			stage: "model_request",
+			category: "network",
+			code: "ECONNRESET",
+			provider: "fixture",
+			model: "offline",
+			toolsStarted: false,
+		};
+		const internalErrorCode = -32_603;
+		expect(requestError).toBeInstanceOf(RequestError);
+		expect(requestError).toMatchObject({
+			code: internalErrorCode,
+			message: `Internal error: ${safeError}`,
+			data: { failure },
+		});
+		expect((requestError as RequestError).data).toEqual({ failure });
+		expect(journeyText(f.updates.slice(failureStart))).toBe("");
+		expect(journeyTools(f.updates)).toEqual([]);
+		expect(j.requests.map(({ role }) => role)).toEqual(["router", "router"]);
+		const checkpoint = await f.checkpoint(sessionId);
+		expect(journeyCheckpoint(checkpoint).inner).toMatchObject({
+			engine: null,
+			routingInterrupted: true,
+		});
+		expect(
+			JSON.stringify([
+				{
+					message: (requestError as RequestError).message,
+					data: (requestError as RequestError).data,
+				},
+				f.updates,
+				await f.saved(sessionId),
+				j.requests,
+				j.permissions,
+			]),
+		).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+		const permissionsBefore = j.permissions.length;
+		const requestsBefore = j.requests.length;
+		await f.close();
+		const resumed = await j.connect();
+		await expect(
+			resumed.peer.agent.request("session/load", {
+				sessionId,
+				cwd: j.cwd,
+				mcpServers: [],
+			}),
+		).resolves.toBeDefined();
+		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
+		expect(j.requests).toHaveLength(requestsBefore);
+		expect(j.permissions).toHaveLength(permissionsBefore);
+		const recoveryStart = resumed.updates.length;
+		await expect(resumed.prompt(sessionId, "continue")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(journeyText(resumed.updates.slice(recoveryStart))).toMatch(
+			/Routing was interrupted[\s\S]*abandon[\s\S]*restart/,
+		);
+		expect(j.requests).toHaveLength(requestsBefore);
+		await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		const routingStart = resumed.updates.length;
+		await expect(
+			resumed.prompt(sessionId, "Continue our earlier discussion"),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(journeyText(resumed.updates.slice(routingStart))).toBe(recovered);
+		expect(j.requests.slice(requestsBefore).map(({ role }) => role)).toEqual([
+			"router",
+		]);
+		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
+			greeting,
+		);
+		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).not.toContain(
+			failedPrompt,
+		);
+		expect(journeyTools(resumed.updates)).toEqual([]);
+		expect(
+			JSON.stringify([
+				resumed.updates,
+				await resumed.saved(sessionId),
+				j.requests,
+			]),
+		).not.toMatch(JOURNEY_DIAGNOSTIC_LEAK);
+		await expect(readdir(j.cwd)).resolves.toEqual(["AGENTS.md"]);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
 	});
 
 	// oxlint-disable-next-line max-statements -- Follow real HTTP evidence, separate grants, persistence and renewed trust in one research journey.
