@@ -387,7 +387,17 @@ describe("native dependency composition", () => {
 		expect(
 			parseNativeCheckpoint(session.snapshot!()).inner?.engine?.status,
 		).toBe("completed");
-		expect(f.disposals).toHaveLength(1);
+		const summary = f.turns.find(
+			({ options }) => options.budgetLabel === "workflow summary",
+		)!;
+		expect(summary.options).toMatchObject({
+			model: MODEL_A,
+			thinkingLevel: "high",
+			tools: [],
+			maxTurns: 1,
+			maxTotalTurns: 1,
+		});
+		expect(f.disposals).toEqual([f.turns[1].runtime, summary.runtime]);
 	});
 
 	it("restores resource and model pins synchronously, without granting trust or creating runtime/MCP effects", async () => {
@@ -427,7 +437,9 @@ describe("native dependency composition", () => {
 		await loaded.setConfig!("model", nativeModelKey(MODEL_A));
 		await loaded.prompt(testPrompt("/design from saved resources"));
 		expect(f.requestPermission).toHaveBeenCalledTimes(permissions + 1);
-		const child = f.turns.at(-1)!.options;
+		const child = f.turns.findLast(
+			({ options }) => options.budgetLabel === "designer",
+		)!.options;
 		expect(child.systemPrompt).toContain("Pinned workspace instructions.");
 		expect(child.systemPrompt).not.toContain("CHANGED");
 		expect(child.model.id).toBe("first");

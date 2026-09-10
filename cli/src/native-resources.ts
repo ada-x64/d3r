@@ -7,6 +7,7 @@ import { isWithinRoot } from "./resource-paths.ts";
 import { isAncestorVaultRoot } from "./resource-vault.ts";
 import { type AgentDefinition, type AgentResources } from "./resources.ts";
 import { THOUGHT_LEVELS } from "./native-models.ts";
+import { WorkflowSummary } from "./workflow-summary.ts";
 
 /** Only named local tools inherit capabilities; remote tool hints never grant authority. */
 const LOCAL_CAPABILITIES: Readonly<
@@ -67,6 +68,7 @@ export const createNativeSkillTool = (
 };
 /** Native routing is deliberately independent of the legacy orchestrator persona. */
 const ROUTING_PROMPT = `You are D3R's native workflow router in Zed.
+Reply in concise Markdown. Structured workflow reports are internal evidence, not output to copy to the user.
 Clarify the user's intent and recommend /design for design and research, /delegate for planning,
 /develop for implementation and review, or /summarize for a summary.
 The user starts a workflow using its slash command or the Phase picker. Do not claim that
@@ -148,13 +150,19 @@ const Inner = z
 		engine: EngineState.nullable(),
 		history: z.array(Content),
 		input: z.array(Content),
+		summary: WorkflowSummary.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
 		routingInput: z.array(Content),
 		routingBefore: JsonValue.optional(),
 		routingHistory: z.number().int().nonnegative().optional(),
 	})
-	.strict();
+	.strict()
+	.refine(
+		(saved) =>
+			saved.summary === undefined || saved.engine?.status === "completed",
+		"A workflow summary requires a completed engine",
+	);
 /** Persist source text and locations, never model objects, credentials, MCP config, or trust grants. */
 const Resources = z
 	.object({

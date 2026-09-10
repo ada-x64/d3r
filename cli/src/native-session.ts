@@ -31,6 +31,7 @@ import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
 import { createVaultTools } from "./vault-tools.ts";
 import { createWebTools } from "./web-tools.ts";
+import { summarizeNativeWorkflow } from "./native-summary.ts";
 
 /** All shell dependencies stay explicit, including workspace roots and the inert resource pin. */
 interface LazyOptions {
@@ -357,9 +358,13 @@ export const createLazyNativeSession = ({
 				{
 					tools: selectedTools,
 					budgetLabel = "routing",
+					maxTurns,
+					maxTotalTurns,
 				}: {
 					tools: readonly RuntimeTool[];
 					budgetLabel?: string;
+					maxTurns?: number;
+					maxTotalTurns?: number;
 				},
 			): RuntimeSession => {
 				validateSelection(available, selection);
@@ -375,6 +380,8 @@ export const createLazyNativeSession = ({
 					modelChoices: available,
 					systemPrompt,
 					budgetLabel,
+					maxTurns,
+					maxTotalTurns,
 					thinkingLevel: selection.thinking as NonNullable<
 						Parameters<
 							NativeDependencies["createEmbeddedRuntime"]
@@ -407,6 +414,15 @@ export const createLazyNativeSession = ({
 				routing,
 				workflow: saved.resources.workflow,
 				agents: saved.resources.agents,
+				summarize: (summary, summarySignal) =>
+					summarizeNativeWorkflow(summary, summarySignal, (systemPrompt) =>
+						create(currentSelection(routing), systemPrompt, {
+							tools: [],
+							budgetLabel: "workflow summary",
+							maxTurns: 1,
+							maxTotalTurns: 1,
+						}),
+					),
 				createAgent: (name, report) => {
 					lifetime.signal.throwIfAborted();
 					const agent = saved.resources.agents.find(

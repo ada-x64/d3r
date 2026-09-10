@@ -24,6 +24,11 @@ import {
 	type ExecutionRecord,
 } from "@d3r/core/engine";
 import { type AgentDefinition } from "./resources.ts";
+import {
+	fallbackWorkflowSummary,
+	WorkflowSummary,
+	type WorkflowSummaryInput,
+} from "./workflow-summary.ts";
 
 /** Main installs this callback as a tool on the newly created role runtime. */
 export type WorkflowReport = (outcome: unknown) => void;
@@ -37,6 +42,10 @@ export interface WorkflowRuntimeOptions {
 		name: string,
 		report: WorkflowReport,
 	) => RuntimeSession | Promise<RuntimeSession>;
+	readonly summarize?: (
+		input: WorkflowSummaryInput,
+		signal: AbortSignal,
+	) => Promise<string>;
 }
 
 /** Install exactly one report tool per child; a natural-language answer is not a report. */
@@ -99,13 +108,19 @@ const Checkpoint = z
 		engine: EngineState.nullable(),
 		history: z.array(Content),
 		input: z.array(Content),
+		summary: WorkflowSummary.optional(),
 		routing: JsonValue,
 		routingInterrupted: z.boolean(),
 		routingInput: z.array(Content),
 		routingBefore: JsonValue.optional(),
 		routingHistory: z.number().int().nonnegative().default(0),
 	})
-	.strict();
+	.strict()
+	.refine(
+		(saved) =>
+			saved.summary === undefined || saved.engine?.status === "completed",
+		"A workflow summary requires a completed engine",
+	);
 
 /** Ordered structured summaries, not arrival order or prose heuristics, feed later roles. */
 const outputs = (engine: EngineState | null): RuntimeContent[] =>
@@ -243,6 +258,7 @@ export const createWorkflowRuntime = (
 	let engine: EngineState | null = null;
 	let history: RuntimeContent[] = [];
 	let input: RuntimeContent[] = [];
+	let summary: string | null = null;
 	let routingInput: RuntimeContent[] = [];
 	let routingInterrupted = false;
 	let routingBefore: unknown = undefined;
@@ -425,6 +441,34 @@ export const createWorkflowRuntime = (
 				: (result.outcome ?? { error: "Missing d3r_report" }),
 		});
 	};
+	const summarize = async (request: RuntimePrompt): Promise<void> => {
+		request.signal.throwIfAborted();
+		let result: unknown = undefined;
+		try {
+			result = await options.summarize?.(
+				structuredClone({
+					command: engine!.command,
+					description: engine!.workflow.commands[engine!.command].description,
+					input,
+					history,
+					records: engine!.records,
+				}),
+				request.signal,
+			);
+		} catch {
+			// A failed synthesis must not invalidate completed work or leak provider errors.
+		}
+		request.signal.throwIfAborted();
+		const parsed = WorkflowSummary.safeParse(result);
+		summary = parsed.success
+			? parsed.data
+			: fallbackWorkflowSummary(
+					engine!.command,
+					Object.keys(workflow.commands),
+				);
+		// Delivery errors propagate: a second message could duplicate an already delivered summary.
+		await say(request, summary);
+	};
 	const drive = async (request: RuntimePrompt): Promise<RuntimeStopReason> => {
 		await plan(request);
 		while (engine!.status === "ready") {
@@ -451,14 +495,7 @@ export const createWorkflowRuntime = (
 		}
 		if (engine!.status === "completed") {
 			phase = "routing";
-			await say(
-				request,
-				`Workflow /${engine!.command} completed with structured reports.\n${outputs(
-					engine,
-				)
-					.map((item) => (item.type === "text" ? item.text : ""))
-					.join("\n")}`,
-			);
+			await summarize(request);
 		} else {
 			const decision = ["failure", "report", "interrupted"].includes(
 				engine!.pause!.kind,
@@ -477,8 +514,15 @@ export const createWorkflowRuntime = (
 			return;
 		}
 		history.push(...input, ...outputs(engine));
+		if (summary !== null) {
+			history.push({
+				type: "text",
+				text: `Workflow summary (/${engine.command}):\n${summary}`,
+			});
+		}
 		engine = null;
 		input = [];
+		summary = null;
 	};
 	const route = async (request: RuntimePrompt): Promise<RuntimeStopReason> => {
 		archiveWorkflow();
@@ -710,6 +754,7 @@ export const createWorkflowRuntime = (
 				engine,
 				history,
 				input,
+				...(summary === null ? {} : { summary }),
 				routing: routingBusy ? routingBefore : routing.snapshot(),
 				routingBefore:
 					routingBusy || routingInterrupted ? routingBefore : undefined,
@@ -761,6 +806,7 @@ export const createWorkflowRuntime = (
 				routingHistory,
 			} = parsed);
 			engine = restored;
+			summary = parsed.summary ?? null;
 			routingBefore = parsed.routingBefore ?? parsed.routing;
 		},
 		dispose: () => {

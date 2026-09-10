@@ -208,6 +208,23 @@ as a completed step. Review approval or implementor `allDone` can terminate a
 loop; loop exhaustion blocks rather than silently skipping to audit. A failed or
 malformed report pauses the workflow.
 
+Those structured reports are internal handoff/checkpoint data, not the final
+chat response. After the entire workflow completes, D3R makes one additional,
+tool-free model request using the selected model to synthesize the original
+brief, role outcomes, prior context, and human checkpoint answers. It returns
+one concise Markdown summary of what happened, why, and the next steps, with
+known artifact links and unresolved questions where relevant. This is not a
+role-by-role report dump, a new worker, or a new research pass.
+
+Summary text is buffered until complete; partial text and thoughts are not
+streamed into the parent chat. The cached summary is replayed on load and passed
+to later routing context without another model request. Checkpoints and blocked
+workflows do not trigger final synthesis. If synthesis fails or returns unusable
+text such as raw report JSON, a short Markdown fallback preserves completion and
+points to reviewing the results. Cancelling synthesis never restarts completed
+work or fabricates a successful summary. Detailed role transcripts remain in
+their cards; old checkpoints without a cached summary are still supported.
+
 Answer declared human checkpoints normally. Blocked or interrupted workflows
 require `abandon` or an explicit `restart`. **Restart reruns the pinned workflow
 from its beginning and can repeat effects.** It is not automatic crash recovery.
