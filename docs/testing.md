@@ -52,6 +52,76 @@ Keep offline journeys bounded and repeatable: no paid provider calls or real
 login required, no arbitrary sleeps for synchronization, and deterministic
 cleanup of temporary files and processes.
 
+### Native journey suites and reusable fixtures
+
+Native ACP journeys live in `adapters/acp/test/journeys/`, split by feature:
+permissions, standalone roles, orchestration, interruption, model failures, web
+research, budgets, transcripts, legacy compatibility, and vault behavior. Keep
+new scenarios in the relevant suite rather than rebuilding a monolithic file.
+
+`harness.ts` owns temporary workspaces, provider scripts, ACP connections, and
+cleanup. `helpers.ts` supplies provider-message builders and observation
+helpers. These fixtures are excluded from production builds and coverage
+instrumentation.
+
+The common form inside a suite is:
+
+```ts
+const { open } = nativeJourneySuite();
+
+it("audits an existing file", async () => {
+  const j = await open(
+    {
+      auditor: [
+        journeyCall("read_file", { path: "example.ts" }),
+        ...journeyDone("Inspected the example; no findings."),
+      ],
+      router: [
+        journeyCall(
+          "d3r_run_role",
+          {
+            role: "auditor",
+            brief: {
+              goal: "Audit example.ts",
+              context: "Inspect the existing worktree without changes.",
+              acceptanceCriteria: ["Report findings without editing files."],
+            },
+          },
+          "audit",
+        ),
+        journeyPhaseReply("audit", "Audit complete"),
+      ],
+    },
+    { routerShortcuts: false },
+  );
+  await writeFiles(j.cwd, { "example.ts": "export const value = 1;\n" });
+  const f = await j.connect();
+  const { sessionId } = await f.session();
+  await expectStop(f.prompt(sessionId, "Audit example.ts without changes."));
+  const { context } = lastRequest(j.requests, "auditor");
+  expect(journeyResultText(context, "read_file")).toContain("value = 1");
+});
+```
+
+- `journeyCall`, `reply`, `callWith`, and `journeyDone` create provider
+  responses; they do not execute tools or submit reports directly. `journeyDone`
+  deliberately emits a report and final text as separate requests.
+- `f.session`, `select`, `configure`, `load`, `cancel`, and `closeSession` wrap
+  real ACP calls. Use the raw `peer` and `newSession` when setup, missing model
+  selection, custom roots, or attachment envelopes are what the test exercises.
+- `expectStop` asserts the exact ACP completion envelope, defaulting to
+  `end_turn`. Other output, permission, and filesystem assertions stay explicit.
+- `workspaceSnapshot` and `journeyPage` derive subsequent arguments from actual
+  tool results. Keep assertions outside scripted provider callbacks.
+- `writeFiles` arranges fixture data only. Agent writes must still happen
+  through the real runtime; external edits during a cancellation race should
+  stay visible at their synchronization point in the scenario.
+- `routerShortcuts` supplies ordinary slash-command responses at the provider
+  boundary for tests focused on worker behavior. Use explicit router scripts
+  when orchestration or user decisions are the subject of the test.
+
+Run only these suites with `pnpm exec vitest run adapters/acp/test/journeys`.
+
 ### Focused tests support the journeys
 
 Unit and narrow integration tests remain useful for pure logic, input domains,

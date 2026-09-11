@@ -17,7 +17,12 @@ export default defineConfig({
 			provider: "v8",
 			reporter: ["text", "html", "json"],
 			include: ["**/*.ts"],
-			exclude: [...sharedExclude, "**/*.test.ts", "scripts/**"],
+			exclude: [
+				...sharedExclude,
+				"**/*.test.ts",
+				"scripts/**",
+				"adapters/acp/test/**",
+			],
 			reportsDirectory: "./coverage",
 		},
 	},
