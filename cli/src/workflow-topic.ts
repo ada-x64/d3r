@@ -13,8 +13,13 @@ export const WorkflowTopicName = z
 	.min(1)
 	.max(MAX_TOPIC_LENGTH)
 	.regex(
-		/^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/,
+		/^[a-z0-9]+(?:-[a-z0-9]+)*$/,
 		"Use a lowercase ASCII kebab slug without whitespace or path separators",
+	)
+	// Provider regex engines may not support lookarounds; keep strict end-of-input validation local.
+	.refine(
+		(topic) => !/\s/.test(topic),
+		"Topic names must not contain whitespace",
 	)
 	.refine(
 		(topic) => !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(topic),

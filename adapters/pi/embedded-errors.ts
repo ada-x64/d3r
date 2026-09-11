@@ -107,6 +107,7 @@ const codeGroups: readonly {
 			"unsupported_value",
 			"invalid_value",
 			"invalid_request_error",
+			"invalid_request_body",
 			"invalid_request",
 			"bad_request",
 		],
@@ -217,6 +218,9 @@ const statusCategory = (status: number | undefined): RuntimeFailureCategory => {
 const requestDetail = (text: string): RuntimeFailureDetail | undefined => {
 	if (
 		/\binvalid (?:json )?schema for (?:function|tool)\b/i.test(text) ||
+		/\binvalid json schema:\s*regex lookaround is not supported\b/i.test(
+			text,
+		) ||
 		/\binvalid (?:tool|function)(?: input)? schema\b/i.test(text) ||
 		/\btools?(?:\.[0-9]+|\[[0-9]+\])?\.(?:input_schema|function\.parameters)\b[^\n]{0,160}\b(?:invalid|must|should|not supported)\b/i.test(
 			text,

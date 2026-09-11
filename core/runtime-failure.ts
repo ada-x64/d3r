@@ -40,6 +40,7 @@ const codeSchema = z.enum([
 	"usage_limit_reached",
 	"usage_not_included",
 	"invalid_request_error",
+	"invalid_request_body",
 	"invalid_request",
 	"bad_request",
 	"unsupported_parameter",

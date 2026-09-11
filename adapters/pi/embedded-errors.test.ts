@@ -154,6 +154,29 @@ describe("Pi failure classifier", () => {
 		});
 	});
 
+	it("identifies Copilot's rejected schema pattern without exposing provider text", () => {
+		const failure = classifyPiFailure({
+			errorMessage: `OpenAI API error (400): ${JSON.stringify({
+				message: `Invalid JSON schema: regex lookaround is not supported. Found at $.properties.topic.pattern. ${secret}`,
+				code: "invalid_request_body",
+			})}`,
+		});
+		expect(failure).toEqual({
+			category: "invalid_request",
+			httpStatus: 400,
+			code: "invalid_request_body",
+			detail: "invalid_tool_schema",
+		});
+		const text = formatRuntimeFailure({
+			...failure,
+			stage: "model_request",
+			toolsStarted: false,
+		});
+		expect(text).toContain("The provider rejected a tool schema");
+		expect(text).not.toContain(secret);
+		expect(text).not.toContain("$.properties");
+	});
+
 	it("prefers terminal failure over a recovered diagnostic and reads unrecovered diagnostic codes", () => {
 		const diagnostic = {
 			type: "provider_transport_failure",
