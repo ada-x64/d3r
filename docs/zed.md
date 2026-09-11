@@ -130,23 +130,24 @@ vault_ls({"path": "process/designs"})
 vault_find({"glob": ".misc/archive/**/*.md", "query": "approval"})
 ```
 
-| Tool          | Native behavior                                                                                       |
-| ------------- | ----------------------------------------------------------------------------------------------------- |
-| `vault_read`  | Read saved text with a full-file snapshot token, or list a directory.                                 |
-| `vault_ls`    | List immediate children; defaults to the vault root.                                                  |
-| `vault_find`  | Find files by glob, body substring, and/or frontmatter kind, including `.misc`.                       |
-| `vault_lint`  | Validate frontmatter for explicit paths or discovered Markdown files.                                 |
-| `vault_write` | Approved raw-text or frontmatter/body write with checked parent creation and atomic file publication. |
-| `vault_edit`  | Approved literal replacement with a snapshot and exact match count.                                   |
-| `vault_mv`    | Approved, non-overwriting move of a regular text file using its snapshot.                             |
-| `vault_rm`    | Approved removal of a regular text file using its snapshot.                                           |
+| Tool          | Native behavior                                                                              |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `vault_read`  | Read saved text with a full-file snapshot token, or list a directory.                        |
+| `vault_ls`    | List immediate children; defaults to the vault root.                                         |
+| `vault_find`  | Find files by glob, body substring, and/or frontmatter kind, including `.misc`.              |
+| `vault_lint`  | Validate frontmatter for explicit paths or discovered Markdown files.                        |
+| `vault_write` | Raw-text or frontmatter/body write with checked parent creation and atomic file publication. |
+| `vault_edit`  | Literal replacement with a snapshot and exact match count.                                   |
+| `vault_mv`    | Non-overwriting move of a regular text file using its snapshot.                              |
+| `vault_rm`    | Removal of a regular text file using its snapshot.                                           |
 
-Role capabilities determine which tools are offered. Reads, listings, search,
-and lint run under workspace/vault trust; writes, edits, moves, and removals
-require separate approval. Vault tools always use disk IO, even for a vault
-inside the workspace. They do not use Zed's unsaved buffers or accept a caller's
-vault-root override. Ordinary workspace file tools retain their existing editor
-behavior.
+Role capabilities determine which tools are offered. After initial
+workspace/vault trust, **all enabled native vault operations run automatically**
+without per-operation approval, including writes, edits, file moves, and file
+removals. This skips permission prompts, not the assigned task scope or the
+constraints below. Vault tools always use disk IO, even for a vault inside the
+workspace. They do not use Zed's unsaved buffers or accept a caller's vault-root
+override. Ordinary workspace file tools retain their existing editor behavior.
 
 `vault_read` returns JSON text containing `path`, `text`, `snapshot`, and
 `truncated`. Follow `nextOffset` to read subsequent pages: `offset` and `limit`
@@ -168,7 +169,8 @@ source; they do not preserve source metadata and are not an atomic transaction.
 If the second step fails, the destination is retained and the result identifies
 both paths for manual recovery. Checked empty parents may remain after a later
 write failure. Root, traversal, private-store, symlink, and hard-link accesses
-remain restricted.
+remain restricted. Preimage checks do not guarantee atomic compare-and-swap
+(CAS) against hostile external file replacement or removal races.
 
 `vault_init` is not an agent tool. Initialization remains an explicit
 `d3r vault init` operation; no native vault tool implicitly initializes,
@@ -180,11 +182,13 @@ vault root every turn. If the vault is **missing**, it is instructed to ask
 whether you want to run `d3r vault init --vault-root <pinned root>` before vault
 document work. Initialization creates seed files and directories plus the
 vault's own Git repository and initial commit; it does not push. It requires
-both your explicit direction and ordinary command approval, using the exact
-pinned root. The guidance forbids automatic initialization, `mkdir`, or
-`vault_write` to create a partial vault. After approved initialization succeeds,
-the orchestrator should recheck with `vault_ls` before document phases in that
-turn; the next turn refreshes the status.
+both your explicit direction and ordinary command authorization, using the exact
+pinned root. An existing command-scope grant can satisfy command approval, but
+never replaces your direction to initialize or disclosure of the initial commit.
+The guidance forbids automatic initialization, `mkdir`, or `vault_write` to
+create a partial vault. After approved initialization succeeds, the orchestrator
+should recheck with `vault_ls` before document phases in that turn; the next
+turn refreshes the status.
 
 You can decline or request no vault artifacts and continue inline audits or code
 work without a vault. The orchestrator is instructed not to ask repeatedly
@@ -400,7 +404,10 @@ keeps the legacy deterministic/slash-command workflow dispatch and separate
 summary behavior below. Reloading or upgrading does not convert that initialized
 session; start a new session for persistent orchestration and `d3r_run_role`.
 This compatibility path is distinct from the Pi proxy selected by
-`d3r acp --legacy`.
+`d3r acp --legacy`. These older checkpoints still receive the current native
+tool permission policy, including automatic implementor edits, enabled vault
+operations, and thread-scoped approvals. No checkpoint version migration is
+needed for this policy; the legacy workflow behavior remains unchanged.
 
 In these legacy native sessions, ordinary routing conversation clarifies work
 separately from phase execution. A recognized slash command starts its phase, or
@@ -484,8 +491,16 @@ increases that invocation's limit; it does not affect siblings, later prompts,
 file permissions, or the hard cap. `additionalRequests` accepts 1-50 and
 defaults to the smaller of 50 and available headroom. Duplicate requests are
 suppressed; a denial or failed/cancelled approval cannot increase the limit and
-must not be retried in the same invocation. Extensions never have a
-remembered-approval option.
+must not be retried in the same invocation.
+
+Every displayed extension approval also offers **Allow identical requests for
+`<title>` for this thread**, using the exact-request identity described under
+[Permissions and tools](#permissions-and-tools), not a broad budget grant. A
+later invocation starts with its own initial allowance and must still call
+`d3r_request_extension`; only an explicitly selected, exactly matching thread
+grant can satisfy that approval without another prompt. Changes to the request's
+reason, role/title, amount, or limits need new approval. No budget is inherited,
+and the hard cap is unchanged.
 
 Request the extension early enough to save and report if it is denied. The
 requesting response itself counts, and there is no hidden extra allowance for a
@@ -528,17 +543,72 @@ approval. A fetch grant is not a domain allowlist; it covers all URLs accepted
 by that tool. It never authorizes commands, file/vault mutations, MCP calls, or
 request-budget extensions.
 
-Grants live only in the open session and are not written to checkpoints.
-Closing, reloading, reconnecting, or starting another thread requires fresh
-permission. An **Allow once** decision is not shared with other queued calls,
-and late responses after cancellation cannot create a remembered grant.
+These grants follow the shared thread-only lifecycle described under
+[Permissions and tools](#permissions-and-tools).
 
 ## Permissions and tools
 
-Before the first model request, approve workspace use for the current session.
-Trust is not carried across restoration. File mutations, commands, MCP
-connections, and MCP calls require separate approval. Missing, denied, unknown,
-or cancelled permission results do not authorize execution.
+Before the first model request, approve workspace use and any discovered
+external vault for the current session. Trust is not carried across restoration.
+After that initial trust:
+
+- The `implementor` role's enabled `write_file` and `edit_file` run
+  automatically, without per-call approval.
+- All enabled native vault tools run automatically for every role, including
+  writes, edits, file moves, and file removals.
+- Other roles' workspace writes/edits, the router's workspace writes/edits,
+  commands, MCP connections, and MCP calls still require authorization, unless
+  their displayed scope has already been granted for this thread.
+
+Skipping asks by default or remembering a grant does not expand role
+capabilities, task scope, or user intent. Read-only audit/review remits and
+requests for no code changes or vault artifacts still apply; commits and pushes
+still need explicit user direction. Path, snapshot, private-store, symlink, and
+CAS constraints are unchanged.
+
+**Every displayed ACP permission card** offers **Allow once**, **Reject**, and
+**Allow `<scope>` for this thread** (`optionId: "allow_scope"`,
+`kind: "allow_always"`). This is the "always" option for the current thread, not
+permanent approval for all future workspaces. Automatic operations and requests
+covered by an existing grant do not display another approval card.
+
+Native setup and tool definitions supply these explicit scopes, not model
+arguments:
+
+- **workspace file writes and edits**: both `write_file` and `edit_file` where
+  approval is still required.
+- **all command executions (not sandboxed)**: all `run_command` calls, not just
+  the displayed executable or arguments. This broad scope is opt-in, not a
+  safe-command allowlist.
+- **this MCP connection configuration**: a setup grant keyed by a per-root HMAC
+  over the complete materialized actual server configuration and `cwd`, before
+  display redaction, not an exact match of the redacted summary. Changes to the
+  URL (including path/query), header values, executable/argv, effective
+  environment, or `cwd` require fresh approval on setup retry, even if the
+  displayed card looks identical. Neither raw credentials nor the HMAC digest is
+  displayed. This setup grant does not authorize tool calls.
+- **calls to MCP tool `<name>`**: a separate grant for one tool in the live
+  connection's catalog, not other tools, servers, or connection approvals.
+- **web searches via Exa** and **web fetches via Exa**: separate scopes, as
+  described above.
+
+Other requests without an explicit scope, including workspace trust and budget
+extensions, use **identical requests for `<title>`**. Matching uses the
+original, unredacted `title`, `kind`, and `input`, before display redaction or
+shortening; `toolCallId` is excluded and object property order does not matter.
+Changing any of those values, including any input value, requires new approval
+even if the redacted cards look identical. Unsafe inputs are denied before
+displaying a card; without a valid explicit scope, inputs that cannot be
+identified losslessly also fail closed.
+
+Explicitly selected thread grants are shared across roles and queued concurrent
+calls in the same live root ACP session. They are never persisted and reset on
+close, load/resume, or reconnect; another thread or workspace never inherits
+them. At most 1024 grants are retained, with the oldest evicted when full. There
+is no global or permanent "allow all". **Allow once** and **Reject** apply only
+to that call, not other queued calls; late responses after cancellation cannot
+create stale grants. Missing, denied, unknown, or cancelled permission results
+do not authorize execution.
 
 Command approvals use a terminal-style preview, such as `bash foo bar baz`,
 without warning paragraphs or JSON argument dumps. Spaces, empty arguments, and
@@ -548,9 +618,7 @@ when supplied; unnormalized activity uses `# requested cwd: ...` instead. The
 title may shorten a long command, but the detail retains every argument and
 masks recognized credentials. This formatting is display-only: execution still
 uses the original executable, argv, cwd, and timeout, including any
-platform/client launch wrappers. Commands still offer only **Allow once** and
-**Reject**. Remembered approvals are limited to explicit built-in web scopes, as
-described above.
+platform/client launch wrappers.
 
 An approval-gated tool waits for its permission response before executing. This
 does not freeze the whole session: independent parallel workflow roles may
@@ -585,16 +653,18 @@ buffer and provides a deliberate follow location.
 Direct filesystem tools are limited to the session roots. Auth, credential,
 secret, token, and key implementation code is ordinary source: these words in
 file or directory names do not exclude it from reads, listings, searches, or
-approved edits. Known private storage paths (including `.agents/d3r/private` and
-the configured native state directory), environment/key files, repository
+permitted edits. Known private storage paths (including `.agents/d3r/private`
+and the configured native state directory), environment/key files, repository
 metadata, and symlink escapes remain excluded. Do not store live credentials in
 ordinary source or configuration files. Additional roots must be supplied again
 on load/resume. These checks are **not an OS sandbox**. POSIX `700` directories
 and `600` credential files protect against other users, not an agent running
-under the same user account. An approved command or MCP process can access the
-host with the agent's privileges. Connection prompts identify the executable,
-nonsecret arguments/environment, and provenance. POSIX process-group cleanup
-stops ordinary descendants, not intentionally daemonized processes.
+under the same user account. An authorized command, including one covered by a
+thread grant, can run arbitrary host code and access the network and files
+outside direct filesystem roots. MCP processes likewise run with the agent's
+privileges. Connection prompts identify the executable, nonsecret
+arguments/environment, and provenance. POSIX process-group cleanup stops
+ordinary descendants, not intentionally daemonized processes.
 
 ## MCP
 

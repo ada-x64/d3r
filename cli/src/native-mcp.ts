@@ -1,8 +1,13 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import {
 	type RuntimeClientServices,
 	type RuntimeMcpServer,
+	type RuntimePermissionScope,
 } from "@d3r/core/runtime";
+
+/** A private per-root key prevents connection identities becoming credential-guessing oracles. */
+const CONNECTION_KEY_BYTES = 32;
 
 /** Optional during composition rollout; ACP owns durable replay redaction, not the MCP transport. */
 type SecretClient = RuntimeClientServices & {
@@ -53,9 +58,21 @@ export interface NativeMcpPlan {
 	readonly server: RuntimeMcpServer;
 	readonly title: string;
 	readonly summary: Record<string, unknown>;
+	readonly permissionScope: RuntimePermissionScope;
 }
 /** Permission masking is separate from persistent substring redaction, which accepts credentials only. */
 export const createNativeMcpSecurity = (client?: SecretClient) => {
+	const connectionKey = randomBytes(CONNECTION_KEY_BYTES);
+	/** Hash the materialized execution inputs, never their lossy display summary. */
+	const connectionScope = (
+		server: RuntimeMcpServer,
+		cwd: string,
+	): RuntimePermissionScope => ({
+		id: `d3r:native:mcp-connection:${createHmac("sha256", connectionKey)
+			.update(JSON.stringify({ server, cwd }))
+			.digest("hex")}`,
+		label: "this MCP connection configuration",
+	});
 	const permissionMasks = new Set<string>();
 	const registeredCredentials = new Set<string>();
 	/** Withholding a display value must never silently turn it into a global transcript replacement. */
@@ -151,9 +168,11 @@ export const createNativeMcpSecurity = (client?: SecretClient) => {
 				) {
 					throw new Error("Invalid MCP endpoint");
 				}
+				const permissionScope = connectionScope(server, context.cwd);
 				const target = redact(url.origin);
 				return {
 					server,
+					permissionScope,
 					title: `Connect MCP ${name}: ${target}`,
 					summary: {
 						name,
@@ -190,11 +209,13 @@ export const createNativeMcpSecurity = (client?: SecretClient) => {
 				([key, value]) => ({ name: key, value }),
 			);
 			const effective = { ...server, env };
+			const permissionScope = connectionScope(effective, context.cwd);
 			collect([effective]);
 			const command = redact(server.command);
 			const args = server.args.map(redact);
 			return {
 				server: effective,
+				permissionScope,
 				title: `Connect MCP ${name} - UNSANDBOXED host execution: ${JSON.stringify([command, ...args])}`,
 				summary: {
 					name,

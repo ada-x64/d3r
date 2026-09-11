@@ -13,6 +13,7 @@ import { waitFor } from "./errors.ts";
 import { createClientWrites } from "./client-writes.ts";
 import { createSecretCollection } from "./secrets.ts";
 import { toolCallPresentation } from "./presentation.ts";
+import { permissionIdentity } from "./permission-identity.ts";
 import { redactSessionData } from "./store.ts";
 
 /** Terminal cleanup must not block shutdown on a non-cooperating client. */
@@ -26,7 +27,9 @@ const answerSchema = z.object({
 });
 /** Bound shell metadata independently from the compact button text. */
 const SCOPE_LIMITS = { id: 256, label: 4096, displayLabel: 100 };
-/** Scope identities are explicit shell metadata, never inferred from titles or tool input. */
+/** Evict old grants rather than retaining an unbounded number of exact requests. */
+const REMEMBERED_SCOPE_LIMIT = 1024;
+/** Broad scope identities come only from explicit shell metadata. */
 const permissionScopeSchema = z
 	.object({
 		id: z
@@ -44,6 +47,22 @@ const permissionScopeSchema = z
 			.refine((value) => value.replace(/[\p{Cc}\p{Cf}\s]/gu, "").length > 0),
 	})
 	.strict();
+
+/** Shell scope IDs and exact request digests must never alias each other. */
+const permissionScopeFor = (
+	reviewed: NonNullable<ReturnType<typeof permissionIdentity>>,
+) => {
+	const parsed = permissionScopeSchema.safeParse(reviewed.scope);
+	if (parsed.success) {
+		return { id: `explicit:${parsed.data.id}`, label: parsed.data.label };
+	}
+	return reviewed.exactId
+		? {
+				id: reviewed.exactId,
+				label: `identical requests for ${reviewed.title}`,
+			}
+		: undefined;
+};
 
 /** Redact before sanitizing or truncating so neither can expose part of a secret. */
 const scopeLabel = (label: string, secrets: readonly string[]): string => {
@@ -86,6 +105,12 @@ export const createClientServices = (
 		Pick<ToolCall, "title" | "content">
 	>();
 	const rememberedScopes = new Set<string>();
+	const rememberScope = (id: string) => {
+		rememberedScopes.add(id);
+		if (rememberedScopes.size > REMEMBERED_SCOPE_LIMIT) {
+			rememberedScopes.delete(rememberedScopes.values().next().value!);
+		}
+	};
 	const scopeRequests = new Map<string, Promise<void>>();
 	const terminals = new Set<TerminalState>();
 	const output = new Map<string, string>();
@@ -150,58 +175,55 @@ export const createClientServices = (
 			}
 			const scopeLock: { id?: string; release?: () => void } = {};
 			try {
-				const presentation = toolCallPresentation(request, {
+				const reviewed = permissionIdentity(request);
+				const scope = reviewed && permissionScopeFor(reviewed);
+				if (!reviewed || !scope) {
+					return false;
+				}
+				const presentation = toolCallPresentation(reviewed, {
 					permission: true,
 					secrets: secretCollection.values,
 				});
-				permissionPreviews.set(request.toolCallId, {
+				permissionPreviews.set(reviewed.toolCallId, {
 					title: presentation.title,
 					content: presentation.content,
 				});
-				const parsed = permissionScopeSchema.safeParse(request.scope);
-				const scope = parsed.success ? parsed.data : undefined;
 				signal.throwIfAborted();
-				if (scope) {
-					scopeLock.id = scope.id;
-					// Wait for a decision, not its grant: only an explicit thread grant is shared.
-					while (scopeRequests.has(scope.id)) {
-						// oxlint-disable-next-line no-await-in-loop -- Each live caller needs its own decision unless a thread grant was selected.
-						await waitFor(scopeRequests.get(scope.id)!, signal);
-						signal.throwIfAborted();
-					}
-					if (rememberedScopes.has(scope.id)) {
-						return true;
-					}
-					scopeRequests.set(
-						scope.id,
-						new Promise<void>((resolve) => {
-							scopeLock.release = resolve;
-						}),
-					);
+				scopeLock.id = scope.id;
+				// Wait for a decision, not its grant: only a selected thread grant is shared.
+				while (scopeRequests.has(scope.id)) {
+					// oxlint-disable-next-line no-await-in-loop -- Each live caller needs its own decision unless a thread grant was selected.
+					await waitFor(scopeRequests.get(scope.id)!, signal);
+					signal.throwIfAborted();
 				}
+				if (rememberedScopes.has(scope.id)) {
+					return true;
+				}
+				scopeRequests.set(
+					scope.id,
+					new Promise<void>((resolve) => {
+						scopeLock.release = resolve;
+					}),
+				);
 				const result = await waitFor(
 					client.request(
 						"session/request_permission",
 						{
 							sessionId,
 							toolCall: {
-								toolCallId: request.toolCallId,
-								kind: request.kind,
+								toolCallId: reviewed.toolCallId,
+								kind: reviewed.kind,
 								...presentation,
 								status: "pending",
 							},
 							options: [
 								{ optionId: "allow", name: "Allow once", kind: "allow_once" },
 								{ optionId: "reject", name: "Reject", kind: "reject_once" },
-								...(scope
-									? [
-											{
-												optionId: "allow_scope",
-												name: `Allow ${scopeLabel(scope.label, secretCollection.values)} for this thread`,
-												kind: "allow_always" as const,
-											},
-										]
-									: []),
+								{
+									optionId: "allow_scope",
+									name: `Allow ${scopeLabel(scope.label, secretCollection.values)} for this thread`,
+									kind: "allow_always",
+								},
 							],
 						},
 						{ cancellationSignal: signal },
@@ -211,8 +233,8 @@ export const createClientServices = (
 				if (signal.aborted || result.outcome.outcome !== "selected") {
 					return false;
 				}
-				if (scope && result.outcome.optionId === "allow_scope") {
-					rememberedScopes.add(scope.id);
+				if (result.outcome.optionId === "allow_scope") {
+					rememberScope(scope.id);
 					return true;
 				}
 				return result.outcome.optionId === "allow";

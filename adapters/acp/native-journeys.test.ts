@@ -123,6 +123,28 @@ const journeyStream = (
 		result: async () => message,
 	} as JourneyStream;
 };
+/** Pause provider IO before a tool response, without changing production permission or execution paths. */
+const journeyToolGate = (id: string) => {
+	const reached = deferred<JourneyMessage["content"]>();
+	const release = deferred<void>();
+	return {
+		reached,
+		release,
+		stream: (content: JourneyMessage["content"], signal?: AbortSignal) =>
+			journeyStream(content, async (index) => {
+				if (
+					index === 0 &&
+					content.some((part) => part.type === "toolCall" && part.id === id)
+				) {
+					reached.resolve(content);
+					await Promise.race([
+						release.promise,
+						...(signal ? [waitForAbort(signal)] : []),
+					]);
+				}
+			}),
+	};
+};
 /** A terminal provider rejection carries no deltas or usage, only untrusted diagnostics. */
 const journeyFailureStream = (errorMessage: string): JourneyStream => {
 	const message = journeyStream([])
@@ -367,6 +389,7 @@ const journeyTools = (updates: readonly SessionNotification[]) =>
 		);
 
 /** Offline journeys exercise D3R, not binary launch, Zed rendering, live auth or model judgment. */
+// oxlint-disable-next-line max-statements -- Keep the journey matrix under one isolated workspace lifecycle.
 describe("native ACP shipped-workflow journeys", () => {
 	const cleanup: (() => Promise<void>)[] = [];
 	const directories: string[] = [];
@@ -611,6 +634,409 @@ describe("native ACP shipped-workflow journeys", () => {
 					.map((path) => rm(path, { recursive: true, force: true })),
 			);
 		}
+	});
+
+	// oxlint-disable-next-line max-statements -- Direct implementation, role boundaries and protected disk effects form one journey.
+	it("runs a direct implementor's writes and edits plus cross-role vault mutations with workspace trust alone", async () => {
+		const gate = journeyToolGate("stale-workspace-edit");
+		const scripts: JourneyScripts = {};
+		const j = await open(scripts, {
+			routerShortcuts: false,
+			streamResponse: (_role, content, settings) =>
+				gate.stream(content, settings?.signal),
+		});
+		const vault = resolve(j.cwd, ".agents/vault");
+		await cp(SEED_ROOT, vault, { recursive: true });
+		const sentinel = "PRIVATE automatic-write sentinel";
+		const privateFile = resolve(j.cwd, ".git/private.txt");
+		const outside = resolve(j.root, "outside.txt");
+		await mkdir(dirname(privateFile));
+		await Promise.all([
+			writeFile(privateFile, sentinel),
+			writeFile(outside, sentinel),
+		]);
+		const original = "Queue: pending\n";
+		const external = "Queue: ready\nOperator comment\n";
+		const final = external.replace("ready", "done");
+		const note = "notes/automatic.md";
+		const moved = "notes/reviewed.md";
+		const snapshot = (context: JourneyContext, id: string) =>
+			/^Snapshot: ([a-f0-9]{64})/m.exec(journeyResultText(context, id))?.[1];
+		const goal =
+			"Implement the local queue in auto mode, with workspace files and a vault log; no commands.";
+		scripts.router = [
+			journeyCall(
+				"d3r_run_role",
+				{
+					role: "implementor",
+					mode: "auto",
+					brief: {
+						goal,
+						context: "Preserve external edits and private paths.",
+						acceptanceCriteria: [
+							"Save the queue and counter, and update its vault log.",
+						],
+					},
+				},
+				"implement",
+			),
+			journeyPhaseReply("implement", "Implementation saved"),
+			journeyCall(
+				"d3r_run_role",
+				{
+					role: "reviewer",
+					brief: {
+						goal: "Review the queue and move its vault log; save notes/review.md.",
+						context: goal,
+						acceptanceCriteria: [
+							"Verify the saved files before moving the log.",
+						],
+					},
+				},
+				"review",
+			),
+			journeyPhaseReply("review", "Review saved"),
+			journeyCall(
+				"d3r_run_role",
+				{
+					role: "auditor",
+					brief: {
+						goal: "Audit the saved review, remove the temporary vault log and save notes/audit.md.",
+						context: goal,
+						acceptanceCriteria: ["Read the log before removing it."],
+					},
+				},
+				"audit",
+			),
+			journeyPhaseReply("audit", "Audit saved"),
+		];
+		scripts.implementor = [
+			[
+				...journeyCall(
+					"write_file",
+					{ path: "queue.txt", content: original },
+					"create-queue",
+				),
+				...journeyCall(
+					"write_file",
+					{ path: "counter.txt", content: "Count: 0\n" },
+					"create-counter",
+				),
+			],
+			[
+				...journeyCall("read_file", { path: "queue.txt" }, "queue-read"),
+				...journeyCall("read_file", { path: "counter.txt" }, "counter-read"),
+			],
+			(context) => [
+				...journeyCall(
+					"edit_file",
+					{
+						path: "queue.txt",
+						oldText: "pending",
+						newText: "ready",
+						snapshot: snapshot(context, "queue-read"),
+					},
+					"edit-queue",
+				),
+				...journeyCall(
+					"edit_file",
+					{
+						path: "counter.txt",
+						oldText: "0",
+						newText: "1",
+						snapshot: snapshot(context, "counter-read"),
+					},
+					"edit-counter",
+				),
+			],
+			[
+				...journeyCall("read_file", { path: "queue.txt" }, "before-external"),
+				...journeyCall("read_file", { path: "counter.txt" }, "counter-edited"),
+			],
+			(context) =>
+				journeyCall(
+					"edit_file",
+					{
+						path: "queue.txt",
+						oldText: "ready",
+						newText: "done",
+						snapshot: snapshot(context, "before-external"),
+					},
+					"stale-workspace-edit",
+				),
+			journeyCall("read_file", { path: "queue.txt" }, "fresh-queue"),
+			(context) => [
+				...journeyCall(
+					"edit_file",
+					{
+						path: "queue.txt",
+						oldText: "ready",
+						newText: "done",
+						snapshot: snapshot(context, "fresh-queue"),
+					},
+					"fresh-workspace-edit",
+				),
+				...journeyCall(
+					"write_file",
+					{
+						path: "counter.txt",
+						content: "Count: 2\n",
+						snapshot: snapshot(context, "counter-edited"),
+					},
+					"overwrite-counter",
+				),
+			],
+			[
+				...journeyCall(
+					"write_file",
+					{ path: "queue.txt", content: "Clobbered" },
+					"missing-workspace-snapshot",
+				),
+				...journeyCall(
+					"write_file",
+					{ path: ".git/private.txt", content: "Clobbered" },
+					"private-workspace-write",
+				),
+				...journeyCall(
+					"write_file",
+					{ path: outside, content: "Clobbered" },
+					"outside-workspace-write",
+				),
+				...journeyCall(
+					"vault_write",
+					{ mode: "raw", path: note, contents: "State: pending\n" },
+					"create-log",
+				),
+			],
+			journeyCall("vault_read", { path: note }, "log-read"),
+			(context) =>
+				journeyCall(
+					"vault_edit",
+					{
+						path: note,
+						find: "pending",
+						replace: "done",
+						snapshot: journeyPage(context, "log-read").snapshot,
+					},
+					"edit-log",
+				),
+			...journeyDone(
+				"Saved queue.txt, counter.txt and the vault log with the operator comment intact.",
+			),
+		];
+		scripts.reviewer = [
+			[
+				...journeyCall("read_file", { path: "queue.txt" }, "review-queue"),
+				...journeyCall("read_file", { path: "counter.txt" }, "review-counter"),
+				...journeyCall("vault_read", { path: note }, "review-log"),
+			],
+			(context) =>
+				journeyCall(
+					"vault_mv",
+					{
+						from: note,
+						to: moved,
+						snapshot: journeyPage(context, "review-log").snapshot,
+					},
+					"move-log",
+				),
+			journeyCall(
+				"vault_write",
+				{
+					mode: "raw",
+					path: "notes/review.md",
+					contents: "Queue and counter verified.\n",
+				},
+				"save-review",
+			),
+			journeyReport("Reviewed the saved files and moved the log.", {
+				review: "approved",
+			}),
+			[{ type: "text", text: "Review complete." }],
+		];
+		scripts.auditor = [
+			[
+				...journeyCall("vault_read", { path: moved }, "audit-log"),
+				...journeyCall(
+					"vault_read",
+					{ path: "notes/review.md" },
+					"audit-review",
+				),
+			],
+			(context) =>
+				journeyCall(
+					"vault_rm",
+					{ path: moved, snapshot: journeyPage(context, "audit-log").snapshot },
+					"remove-log",
+				),
+			journeyCall(
+				"vault_write",
+				{
+					mode: "raw",
+					path: "notes/audit.md",
+					contents: "Review verified; temporary log removed.\n",
+				},
+				"save-audit",
+			),
+			...journeyDone(
+				"Audited the saved review and removed only the temporary log.",
+			),
+		];
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		j.approval.decide = async () => false;
+		await expect(f.prompt(sessionId, goal)).resolves.toEqual({
+			stopReason: "end_turn",
+		});
+		expect(j.requests).toEqual([]);
+		await expect(readFile(resolve(j.cwd, "queue.txt"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		j.approval.decide = async ({ toolCall }) =>
+			toolCall.title?.startsWith("Trust workspace") === true;
+		const pending = f.prompt(sessionId, goal);
+		try {
+			await Promise.race([
+				gate.reached.promise,
+				pending.then(() => {
+					throw new Error(
+						"Implementation ended before the stale snapshot gate",
+					);
+				}),
+			]);
+			await expect(readFile(resolve(j.cwd, "queue.txt"), "utf8")).resolves.toBe(
+				"Queue: ready\n",
+			);
+			await writeFile(resolve(j.cwd, "queue.txt"), external);
+			gate.release.resolve();
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+		} finally {
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			gate.release.resolve();
+			await pending;
+		}
+		expect(new Set(j.requests.map(({ role }) => role))).toEqual(
+			new Set(["router", "implementor"]),
+		);
+		expect(
+			journeyCheckpoint(await f.checkpoint(sessionId)).inner,
+		).toMatchObject({
+			standaloneRole: "implementor",
+			engine: { command: "standalone", status: "completed", mode: "auto" },
+		});
+		const implemented = j.requests.findLast(
+			({ role }) => role === "implementor",
+		)!.context;
+		for (const id of [
+			"create-queue",
+			"create-counter",
+			"edit-queue",
+			"edit-counter",
+			"fresh-workspace-edit",
+			"overwrite-counter",
+			"create-log",
+			"edit-log",
+		]) {
+			expect(journeyResult(implemented, id), id).toMatchObject({
+				isError: false,
+			});
+		}
+		for (const id of [
+			"stale-workspace-edit",
+			"missing-workspace-snapshot",
+			"private-workspace-write",
+			"outside-workspace-write",
+		]) {
+			expect(journeyResult(implemented, id), id).toMatchObject({
+				isError: true,
+			});
+		}
+		expect(journeyResultText(implemented, "stale-workspace-edit")).toBe(
+			"Tool execution failed; effects may have occurred. Do not automatically retry.",
+		);
+		expect(snapshot(implemented, "fresh-queue")).not.toBe(
+			snapshot(implemented, "before-external"),
+		);
+		for (const line of external.trim().split("\n")) {
+			expect(journeyResultText(implemented, "fresh-queue")).toContain(line);
+		}
+		await expect(readFile(resolve(vault, note), "utf8")).resolves.toBe(
+			"State: done\n",
+		);
+		await expect(
+			f.prompt(
+				sessionId,
+				"Review the files, move the temporary log and save notes/review.md.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const reviewed = j.requests.findLast(
+			({ role }) => role === "reviewer",
+		)!.context;
+		for (const line of final.trim().split("\n")) {
+			expect(journeyResultText(reviewed, "review-queue")).toContain(line);
+		}
+		expect(journeyResultText(reviewed, "review-counter")).toContain("Count: 2");
+		expect(journeyPage(reviewed, "review-log").text).toBe("State: done\n");
+		for (const id of ["move-log", "save-review"]) {
+			expect(journeyResult(reviewed, id), id).toMatchObject({ isError: false });
+		}
+		await expect(readFile(resolve(vault, moved), "utf8")).resolves.toBe(
+			"State: done\n",
+		);
+		await expect(readFile(resolve(vault, note))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		await expect(
+			f.prompt(
+				sessionId,
+				"Audit the review, remove the temporary log and save notes/audit.md.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const audited = j.requests.findLast(
+			({ role }) => role === "auditor",
+		)!.context;
+		expect(journeyPage(audited, "audit-log").text).toBe("State: done\n");
+		expect(journeyPage(audited, "audit-review").text).toBe(
+			"Queue and counter verified.\n",
+		);
+		for (const id of ["remove-log", "save-audit"]) {
+			expect(journeyResult(audited, id), id).toMatchObject({ isError: false });
+		}
+		await expect(readFile(resolve(vault, moved))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		await Promise.all(
+			[
+				[resolve(j.cwd, "queue.txt"), final],
+				[resolve(j.cwd, "counter.txt"), "Count: 2\n"],
+				[resolve(vault, "notes/review.md"), "Queue and counter verified.\n"],
+				[
+					resolve(vault, "notes/audit.md"),
+					"Review verified; temporary log removed.\n",
+				],
+				[privateFile, sentinel],
+				[outside, sentinel],
+			].map(async ([path, content]) => {
+				await expect(readFile(path, "utf8")).resolves.toBe(content);
+			}),
+		);
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+			expect.stringMatching(/^Trust workspace/),
+		]);
+		expect(journeyText(f.updates)).toContain("Audited the saved review");
+		expect(JSON.stringify([j.requests, f.updates])).not.toContain(sentinel);
+		expect(JSON.stringify(await f.saved(sessionId))).not.toMatch(
+			/allow_scope|d3r:native:workspace-edits/,
+		);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
 	});
 
 	// oxlint-disable-next-line max-statements -- Real worktree evidence, role isolation, and subsequent discussion form one journey.
@@ -1805,8 +2231,8 @@ describe("native ACP shipped-workflow journeys", () => {
 		).toHaveLength(1);
 		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 			expect.stringMatching(/^Trust workspace/),
-			"write_file",
 		]);
+		expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 		expect(await readdir(j.cwd)).toEqual(["AGENTS.md", "queue.mjs"]);
 		expect(await readFile(resolve(j.cwd, "queue.mjs"), "utf8")).toBe(source);
 		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
@@ -2706,8 +3132,6 @@ describe("native ACP shipped-workflow journeys", () => {
 			).toHaveLength(1);
 			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 				expect.stringMatching(/^Trust workspace/),
-				"write_file",
-				"write_file",
 			]);
 			const writes = journeyTools(f.updates).flatMap((row) =>
 				row.status === "completed"
@@ -3656,8 +4080,13 @@ describe("native ACP shipped-workflow journeys", () => {
 				j.permissions
 					.find(({ toolCall }) => toolCall.title === "write_file")
 					?.options.map(({ kind }) => kind),
-			).toEqual(["allow_once", "reject_once"]);
-			mutation.resolve(true);
+			).toEqual(["allow_once", "reject_once", "allow_always"]);
+			expect(
+				j.permissions
+					.find(({ toolCall }) => toolCall.title === "write_file")
+					?.options.at(-1)?.name,
+			).toBe("Allow workspace file writes and edits for this thread");
+			mutation.resolve("allow_scope");
 			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
 		} finally {
 			search.resolve(false);
@@ -3792,6 +4221,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		).toContain(source);
 		expect(journeyText(f.updates)).toContain(JOURNEY_SUMMARY);
 
+		// oxlint-disable-next-line max-statements -- Reuse the same web and workspace grant probes for retained, new and reloaded sessions.
 		const probeScopes = async (
 			connection: typeof f,
 			id: string,
@@ -3855,12 +4285,71 @@ describe("native ACP shipped-workflow journeys", () => {
 					(update) => update.title === "researcher",
 				),
 			).toMatchObject({ status: "completed", rawOutput: { summary } });
-			if (reuse) {
-				scripts.designer = journeyDone("Updated design based on new evidence.");
-				await expect(
-					connection.prompt(id, "Use the new evidence."),
-				).resolves.toEqual({ stopReason: "end_turn" });
+			scripts.designer = journeyDone(
+				"Updated design based on available evidence.",
+			);
+			await expect(
+				connection.prompt(id, "Use the available evidence."),
+			).resolves.toEqual({ stopReason: "end_turn" });
+			const workspacePermissions = j.permissions.length;
+			const created = `scope-probe-${workspacePermissions}.md`;
+			await writeFile(resolve(j.cwd, "scope-edit.txt"), "Before\n");
+			scripts.router = [
+				journeyCall("read_file", { path: "scope-edit.txt" }, "scope-read"),
+				(observed) =>
+					journeyCall(
+						"edit_file",
+						{
+							path: "scope-edit.txt",
+							oldText: "Before",
+							newText: "After",
+							snapshot: /^Snapshot: ([a-f0-9]{64})/m.exec(
+								journeyResultText(observed, "scope-read"),
+							)?.[1],
+						},
+						"scope-edit",
+					),
+				journeyCall(
+					"write_file",
+					{ path: created, content: "Follow-up report\n" },
+					"scope-write",
+				),
+				[
+					{
+						type: "text",
+						text: "Workspace follow-up finished within the current permissions.",
+					},
+				],
+			];
+			await expect(
+				connection.prompt(
+					id,
+					"Update scope-edit.txt and save a follow-up report directly, without starting another phase.",
+				),
+			).resolves.toEqual({ stopReason: "end_turn" });
+			expect(
+				j.permissions
+					.slice(workspacePermissions)
+					.map(({ toolCall }) => toolCall.title),
+			).toEqual(reuse ? [] : ["edit_file", "write_file"]);
+			const router = j.requests.findLast(
+				({ role }) => role === "router",
+			)!.context;
+			for (const call of ["scope-edit", "scope-write"]) {
+				expect(journeyResult(router, call), call).toMatchObject({
+					isError: !reuse,
+				});
 			}
+			await expect(
+				readFile(resolve(j.cwd, "scope-edit.txt"), "utf8"),
+			).resolves.toBe(reuse ? "After\n" : "Before\n");
+			await (reuse
+				? expect(readFile(resolve(j.cwd, created), "utf8")).resolves.toBe(
+						"Follow-up report\n",
+					)
+				: expect(readFile(resolve(j.cwd, created))).rejects.toMatchObject({
+						code: "ENOENT",
+					}));
 		};
 		await probeScopes(f, sessionId, true);
 		const fresh = await f.newSession(j.cwd);
@@ -3886,7 +4375,9 @@ describe("native ACP shipped-workflow journeys", () => {
 		for (const state of [saved, await resumed.saved(sessionId)]) {
 			const text = JSON.stringify(state);
 			expect(text).not.toContain("allow_scope");
-			expect(text).not.toMatch(/exa:web_(search|fetch)/);
+			expect(text).not.toMatch(
+				/exa:web_(search|fetch)|d3r:native:workspace-edits/,
+			);
 			expect(text).not.toContain(key);
 			expect(text).not.toContain(encodeURIComponent(key));
 		}
@@ -4017,6 +4508,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				expect(permission.options.map(({ kind }) => kind)).toEqual([
 					"allow_once",
 					"reject_once",
+					"allow_always",
 				]);
 			}
 			await f.peer.agent.request("session/list", {});
@@ -4024,7 +4516,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			await expect(
 				readFile(resolve(j.cwd, "research.md")),
 			).rejects.toMatchObject({ code: "ENOENT" });
-			grants.researcher.resolve(true);
+			grants.researcher.resolve("allow_scope");
 			await vi.waitFor(() =>
 				expect(
 					journeyTools(f.updates).findLast(
@@ -4252,13 +4744,13 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(
 			j.permissions.filter(({ toolCall }) => toolCall.title === "write_file"),
 		).toHaveLength(roles.length);
-		expect(
-			j.permissions.every(({ options }) =>
-				options.every(
-					({ kind }) => kind === "allow_once" || kind === "reject_once",
-				),
-			),
-		).toBe(true);
+		for (const { options } of j.permissions) {
+			expect(options.map(({ kind }) => kind)).toEqual([
+				"allow_once",
+				"reject_once",
+				"allow_always",
+			]);
+		}
 		expect(journeyText(f.updates)).toContain(
 			"Discuss design questions before drafting",
 		);
@@ -5457,7 +5949,8 @@ describe("native ACP shipped-workflow journeys", () => {
 				JSON.stringify(vault),
 				"not its parent directory",
 				"disk IO, not editor buffers",
-				"Writes still require separate approval",
+				"Native vault operations need no additional approval",
+				"commands remain separately authorized",
 				"Trust is not saved",
 			]) {
 				expect(preview).toContain(text);
@@ -5481,7 +5974,17 @@ describe("native ACP shipped-workflow journeys", () => {
 		// oxlint-disable-next-line max-statements -- Consent, parallel publication and fresh-session continuation form one acceptance journey.
 		async () => {
 			const scripts: JourneyScripts = {};
-			const j = await open(scripts, { routerShortcuts: false });
+			const gates = {
+				aggregator: journeyToolGate("vault_write"),
+				researcher: journeyToolGate("vault_write"),
+			};
+			const j = await open(scripts, {
+				routerShortcuts: false,
+				streamResponse: (role, content, settings) =>
+					role === "aggregator" || role === "researcher"
+						? gates[role].stream(content, settings?.signal)
+						: journeyStream(content),
+			});
 			const cli = fileURLToPath(
 				new URL("../../cli/dist/cli.js", import.meta.url),
 			);
@@ -5688,23 +6191,23 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(await readdir(j.cwd, { recursive: true })).toEqual(files);
 			await expect(readdir(vault)).rejects.toMatchObject({ code: "ENOENT" });
 
-			const writes: RequestPermissionRequest[] = [];
-			const release = deferred<JourneyDecision>();
-			j.approval.decide = async (request) => {
-				if (request.toolCall.title === "vault_write") {
-					writes.push(request);
-					return release.promise;
-				}
-				return true;
-			};
+			j.approval.decide = async ({ toolCall }) =>
+				toolCall.title?.startsWith("Trust workspace") === true ||
+				(toolCall.rawInput as { command?: string } | undefined)?.command ===
+					process.execPath;
 			const pending = f.prompt(
 				sessionId,
-				"Retry initialization; I will approve the command and the recon writes.",
+				"Retry initialization; I will approve the command, then save recon in the trusted vault.",
 			);
 			try {
-				await vi.waitFor(() => expect(writes).toHaveLength(recon.length), {
-					timeout: 10_000,
-				});
+				const writes = await Promise.race([
+					Promise.all(
+						Object.values(gates).map(({ reached }) => reached.promise),
+					),
+					pending.then(() => {
+						throw new Error("Recon ended before both provider write gates");
+					}),
+				]);
 				const router = j.requests.findLast(
 					({ role }) => role === "router",
 				)!.context;
@@ -5744,13 +6247,17 @@ describe("native ACP shipped-workflow journeys", () => {
 				expect(topic).toMatch(/^design-an-offline-job-queue-[a-z0-9]+$/);
 				expect(
 					writes
-						.map(({ toolCall }) => (toolCall.rawInput as { path: string }).path)
+						.flatMap((content) =>
+							content.flatMap((part) =>
+								part.type === "toolCall" ? [part.arguments.path] : [],
+							),
+						)
 						.toSorted(),
 				).toEqual([
 					`process/designs/${topic}/remember.md`,
 					`process/designs/${topic}/research.md`,
 				]);
-				// Both real writes are waiting for independent approval: neither role can finish first.
+				// Provider IO holds both roles before publication, not obsolete per-vault approvals.
 				await expect(
 					readdir(resolve(vault, "process/designs", topic)),
 				).rejects.toMatchObject({ code: "ENOENT" });
@@ -5761,9 +6268,14 @@ describe("native ACP shipped-workflow journeys", () => {
 				);
 				expect(stdout.trim()).toBe("chore: initial vault seed");
 			} finally {
-				release.resolve(true);
+				Object.values(gates).forEach(({ release }) => release.resolve());
 			}
 			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+			expect(
+				j.permissions.some(({ toolCall }) =>
+					toolCall.title?.startsWith("vault_"),
+				),
+			).toBe(false);
 			const checkpoint = await f.checkpoint(sessionId);
 			const waiting = journeyCheckpoint(checkpoint).inner!;
 			const topic = waiting.topic!;
@@ -5880,7 +6392,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				j.permissions
 					.slice(effects.permissions)
 					.map(({ toolCall }) => toolCall.title),
-			).toEqual([expect.stringMatching(/^Trust workspace/), "vault_write"]);
+			).toEqual([expect.stringMatching(/^Trust workspace/)]);
 			expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
 				true,
 			);
@@ -6384,15 +6896,9 @@ describe("native ACP shipped-workflow journeys", () => {
 		);
 		expect(await readFile(resolve(vault, child), "utf8")).toBe(schema);
 		expect(await readdir(vault, { recursive: true })).toEqual(files);
-		expect(
-			j.permissions
-				.filter(({ toolCall }) => toolCall.title === "vault_write")
-				.map(({ toolCall }) => (toolCall.rawInput as { path: string }).path),
-		).toEqual([
-			`process/designs/${topic}/plan.md`,
-			child,
-			researchPath,
-			`process/designs/${topic}/plan.md`,
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+			expect.stringMatching(/^Trust workspace/),
 		]);
 		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
 			true,
@@ -6432,7 +6938,6 @@ describe("native ACP shipped-workflow journeys", () => {
 			),
 		]);
 		const artifact = "process/designs/offline-queue/recon/remember.md";
-		const parent = resolve(vault, "process/designs/offline-queue");
 		const body =
 			"# Remember: offline-queue\n\n## 1. Prior behavior\n\n**Source:** [[.misc/archive/prior-queue]]\n\nJobs survive restarts.\n";
 		const document = `---\ncreated: 2026-09-09\nstatus: draft\nkind: remember\n---\n${body}`;
@@ -6512,15 +7017,8 @@ describe("native ACP shipped-workflow journeys", () => {
 			),
 			[{ type: "text", text: "Design complete using the persisted recon." }],
 		];
-		const asked = deferred<RequestPermissionRequest>();
-		const answer = deferred<boolean>();
-		j.approval.decide = async (permission) => {
-			if (permission.toolCall.title?.startsWith("Trust workspace")) {
-				return true;
-			}
-			asked.resolve(permission);
-			return answer.promise;
-		};
+		j.approval.decide = async ({ toolCall }) =>
+			toolCall.title?.startsWith("Trust workspace") === true;
 		const f = await j.connect();
 		const { sessionId } = await f.newSession(j.cwd);
 		await f.peer.agent.request("session/set_config_option", {
@@ -6528,33 +7026,15 @@ describe("native ACP shipped-workflow journeys", () => {
 			configId: "model",
 			value: nativeModelKey(JOURNEY_MODEL),
 		});
-		const pending = f.prompt(
-			sessionId,
-			"/design Read .misc/templates/remember.md with vault_read and save factual recon as process/designs/offline-queue/recon/remember.md in the vault.",
-		);
-		try {
-			const permission = await Promise.race([
-				asked.promise,
-				pending.then(() => {
-					throw new Error("Design ended without vault write approval");
-				}),
-			]);
-			expect(permission.toolCall.title).toBe("vault_write");
-			expect(journeyToolText(permission.toolCall)).toContain(artifact);
-			expect(journeyToolText(permission.toolCall)).toContain("remember");
-			await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
-			await expect(readFile(resolve(vault, artifact))).rejects.toMatchObject({
-				code: "ENOENT",
-			});
-			await f.peer.agent.request("session/list", {});
-			await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
-			answer.resolve(true);
-			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
-		} finally {
-			answer.resolve(false);
-			await f.peer.agent.notify("session/cancel", { sessionId });
-			await pending;
-		}
+		await expect(
+			f.prompt(
+				sessionId,
+				"/design Read .misc/templates/remember.md with vault_read and save factual recon as process/designs/offline-queue/recon/remember.md in the vault.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+			expect.stringMatching(/^Trust workspace/),
+		]);
 		await expect(readFile(resolve(vault, artifact), "utf8")).resolves.toBe(
 			document,
 		);
@@ -6735,13 +7215,21 @@ describe("native ACP shipped-workflow journeys", () => {
 		await resumed.peer.agent.request("session/close", { sessionId });
 	});
 
-	it.each(["denied", "cancelled"] as const)(
-		"recovers a %s vault mutation on /develop reload and protects an external edit with real read snapshots",
-		// oxlint-disable-next-line max-statements -- Approval failure, fresh pin and snapshot-safe recovery must share the same real workflow.
+	it.each(["failed", "cancelled"] as const)(
+		"recovers a %s automatic vault mutation on /develop reload and protects an external edit with real read snapshots",
+		// oxlint-disable-next-line max-statements -- Failed execution, cancellation and snapshot-safe recovery share the real workflow.
 		async (failure) => {
 			const scripts: JourneyScripts = {};
+			const publication = journeyToolGate("publish-log");
+			const edit = journeyToolGate("stale-edit");
 			const j = await open(scripts, {
 				workspace: "repo/worktrees/topic",
+				streamResponse: (_role, content, settings) =>
+					content.some(
+						(part) => part.type === "toolCall" && part.id === "stale-edit",
+					)
+						? edit.stream(content, settings?.signal)
+						: publication.stream(content, settings?.signal),
 				readTextFile: async ({ path }) => {
 					throw new Error(
 						`Zed cannot open vault files outside the worktree: ${path}`,
@@ -6752,7 +7240,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			await cp(SEED_ROOT, vault, { recursive: true });
 			const note = "notes/queue.md";
 			const original = "# Queue\nState: pending\n";
-			const external = `${original}User added this line during approval.\n`;
+			const external = `${original}User added this line after the model read.\n`;
 			const edited = external.replace("pending", "ready");
 			const artifact = "process/tasks/offline-queue/implementation-log.md";
 			const parent = resolve(vault, "process/tasks/offline-queue");
@@ -6777,18 +7265,13 @@ describe("native ACP shipped-workflow journeys", () => {
 			scripts.implementor = [
 				journeyCall("vault_read", { path: note }, "before-denial"),
 				write,
-				journeyReport("Vault write was not authorized.", { status: "blocked" }),
+				journeyReport("Vault publication failed; preserve the saved note.", {
+					status: "blocked",
+				}),
 				[{ type: "text", text: "No vault mutation was made." }],
 			];
-			const asked = deferred<RequestPermissionRequest>();
-			const answer = deferred<boolean>();
-			j.approval.decide = async (permission) => {
-				if (permission.toolCall.title?.startsWith("Trust workspace")) {
-					return true;
-				}
-				asked.resolve(permission);
-				return answer.promise;
-			};
+			j.approval.decide = async ({ toolCall }) =>
+				toolCall.title?.startsWith("Trust workspace") === true;
 			const f = await j.connect();
 			const { sessionId } = await f.newSession(j.cwd);
 			await f.peer.agent.request("session/set_config_option", {
@@ -6804,17 +7287,17 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(journeyText(f.updates)).toContain("Choose develop mode");
 			const pending = f.prompt(sessionId, "auto");
 			try {
-				const permission = await Promise.race([
-					asked.promise,
+				await Promise.race([
+					publication.reached.promise,
 					pending.then(() => {
-						throw new Error("Develop ended without vault write approval");
+						throw new Error(
+							"Develop ended before the publication provider gate",
+						);
 					}),
 				]);
-				expect(permission.toolCall.title).toBe("vault_write");
-				expect(journeyToolText(permission.toolCall)).toContain(artifact);
-				expect(journeyToolText(permission.toolCall)).toContain(
-					JSON.stringify(contents),
-				);
+				expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+					expect.stringMatching(/^Trust workspace/),
+				]);
 				await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
 				await expect(readFile(resolve(vault, artifact))).rejects.toMatchObject({
 					code: "ENOENT",
@@ -6822,33 +7305,40 @@ describe("native ACP shipped-workflow journeys", () => {
 				if (failure === "cancelled") {
 					await f.peer.agent.notify("session/cancel", { sessionId });
 				} else {
-					answer.resolve(false);
+					await writeFile(parent, "A file blocks the artifact directory.\n");
+					publication.release.resolve();
 				}
 				await expect(pending).resolves.toEqual({
 					stopReason: failure === "cancelled" ? "cancelled" : "end_turn",
 				});
-				// A late allow must not revive a cancelled publication or create its parents.
-				answer.resolve(true);
+				if (failure === "failed") {
+					await expect(readFile(parent, "utf8")).resolves.toBe(
+						"A file blocks the artifact directory.\n",
+					);
+					await rm(parent);
+				}
+				// A late provider response cannot revive cancelled publication or create its parents.
+				publication.release.resolve();
 				await f.peer.agent.request("session/list", {});
 				await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
 				await expect(readFile(resolve(vault, note), "utf8")).resolves.toBe(
 					original,
 				);
 			} finally {
-				answer.resolve(false);
 				await f.peer.agent.notify("session/cancel", { sessionId });
+				publication.release.resolve();
 				await pending;
 			}
 			const initial = j.requests.findLast(
 				({ role }) => role === "implementor",
 			)!.context;
 			expect(journeyPage(initial, "before-denial").text).toBe(original);
-			if (failure === "denied") {
+			if (failure === "failed") {
 				expect(journeyResult(initial, "publish-log")).toMatchObject({
 					isError: true,
 				});
-				expect(JSON.stringify(journeyResult(initial, "publish-log"))).toMatch(
-					/permission.*denied/i,
+				expect(journeyResultText(initial, "publish-log")).toBe(
+					"Tool execution failed; effects may have occurred. Do not automatically retry.",
 				);
 			}
 			expect(
@@ -6868,11 +7358,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(j.requests).toHaveLength(beforeReload);
 			expect(j.permissions).toHaveLength(permissionsBefore);
 			await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
-			j.approval.decide = async () => true;
 			const retained = journeyCheckpoint(await resumed.checkpoint(sessionId))
 				.inner!.engine;
 			await expect(
-				resumed.prompt(sessionId, failure === "denied" ? "continue" : "status"),
+				resumed.prompt(sessionId, failure === "failed" ? "continue" : "status"),
 			).resolves.toEqual({
 				stopReason: "end_turn",
 			});
@@ -6886,9 +7375,9 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(
 				journeyResult(
 					j.requests.at(-1)!.context,
-					failure === "denied" ? "d3r_continue_phase" : "d3r_phase_status",
+					failure === "failed" ? "d3r_continue_phase" : "d3r_phase_status",
 				),
-			).toMatchObject({ isError: failure === "denied" });
+			).toMatchObject({ isError: failure === "failed" });
 			scripts.implementor = [
 				journeyCall("vault_read", { path: note }, "stale-read"),
 				(context) =>
@@ -7015,7 +7504,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				journeyReport("The external edit is preserved on disk."),
 				[{ type: "text", text: "Audit complete." }],
 			];
-			if (failure === "denied") {
+			if (failure === "failed") {
 				await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
 					stopReason: "end_turn",
 				});
@@ -7024,37 +7513,28 @@ describe("native ACP shipped-workflow journeys", () => {
 				});
 			}
 			const recoveryRequests = j.requests.length;
-			const editAsked = deferred<RequestPermissionRequest>();
-			const editAnswer = deferred<boolean>();
-			j.approval.decide = async (permission) => {
-				if (permission.toolCall.title !== "vault_edit") {
-					return true;
-				}
-				editAsked.resolve(permission);
-				return editAnswer.promise;
-			};
 			const recovery = resumed.prompt(
 				sessionId,
-				failure === "denied" ? "auto" : "continue",
+				failure === "failed" ? "auto" : "continue",
 			);
 			try {
-				const permission = await Promise.race([
-					editAsked.promise,
+				await Promise.race([
+					edit.reached.promise,
 					recovery.then(() => {
-						throw new Error("Recovery ended without snapshot edit approval");
+						throw new Error(
+							"Recovery ended before the stale edit provider gate",
+						);
 					}),
 				]);
-				expect(permission.toolCall.title).toBe("vault_edit");
-				expect(journeyToolText(permission.toolCall)).toContain(note);
 				await expect(readFile(resolve(vault, note), "utf8")).resolves.toBe(
 					original,
 				);
 				await writeFile(resolve(vault, note), external);
-				editAnswer.resolve(true);
+				edit.release.resolve();
 				await expect(recovery).resolves.toEqual({ stopReason: "end_turn" });
 			} finally {
-				editAnswer.resolve(false);
 				await resumed.peer.agent.notify("session/cancel", { sessionId });
+				edit.release.resolve();
 				await recovery;
 			}
 			const resumedImplementor = j.requests
@@ -7064,9 +7544,9 @@ describe("native ACP shipped-workflow journeys", () => {
 				expect(journeyPage(resumedImplementor, "before-denial").text).toBe(
 					original,
 				);
-				expect(journeyResult(resumedImplementor, "publish-log")).toMatchObject({
-					isError: true,
-				});
+				expect(
+					journeyResult(resumedImplementor, "publish-log"),
+				).toBeUndefined();
 			}
 			expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 			const implementor = j.requests.findLast(
@@ -7147,7 +7627,12 @@ describe("native ACP shipped-workflow journeys", () => {
 				j.permissions
 					.slice(permissionsBefore)
 					.map(({ toolCall }) => toolCall.title),
-			).toContainEqual(expect.stringMatching(/^Trust workspace/));
+			).toEqual([expect.stringMatching(/^Trust workspace/)]);
+			expect(
+				j.permissions.some(({ toolCall }) =>
+					toolCall.title?.startsWith("vault_"),
+				),
+			).toBe(false);
 			const effects = journeyTools(resumed.updates)
 				.filter(({ status }) => status === "completed")
 				.flatMap(
@@ -7214,6 +7699,231 @@ describe("native ACP shipped-workflow journeys", () => {
 			await resumed.peer.agent.request("session/close", { sessionId });
 		},
 	);
+
+	// oxlint-disable-next-line max-statements -- One thread covers denial, once, queued scope reuse, later work and fresh-session boundaries.
+	it("grants all native commands only on always, including queued and later calls, and forgets grants on reload or a new session", async () => {
+		const command = (id: string) =>
+			journeyCall(
+				"run_command",
+				{
+					command: process.execPath,
+					args: [
+						"-e",
+						"require('node:fs').writeFileSync(process.argv[1], process.argv[2]);",
+						`${id}.txt`,
+						id,
+					],
+				},
+				id,
+			);
+		const queued = journeyToolGate("queued-command");
+		const scripts: JourneyScripts = {
+			aggregator: [
+				command("denied-command"),
+				command("once-command"),
+				command("scope-command"),
+				command("later-command"),
+				...journeyDone("Checked all authorized local probes."),
+			],
+			researcher: [
+				command("queued-command"),
+				...journeyDone("Ran the queued local probe."),
+			],
+			designer: journeyDone("Verified the local design after recon."),
+			router: [
+				command("next-turn-command"),
+				[{ type: "text", text: "The final local probe completed." }],
+			],
+		};
+		const j = await open(scripts, {
+			streamResponse: (_role, content, settings) =>
+				queued.stream(content, settings?.signal),
+		});
+		const asked = deferred<RequestPermissionRequest>();
+		const grant = deferred<JourneyDecision>();
+		j.approval.decide = async (permission) => {
+			if (permission.toolCall.title?.startsWith("Trust workspace")) {
+				return true;
+			}
+			const input = permission.toolCall.rawInput as { args: string[] };
+			if (input.args.at(-1) === "once-command") {
+				return true;
+			}
+			if (input.args.at(-1) === "scope-command") {
+				asked.resolve(permission);
+				return grant.promise;
+			}
+			return false;
+		};
+		const f = await j.connect();
+		const { sessionId } = await f.newSession(j.cwd);
+		await f.peer.agent.request("session/set_config_option", {
+			sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		const pending = f.prompt(
+			sessionId,
+			"/design Probe the local queue with native commands, then discuss the design.",
+		);
+		try {
+			const [permission] = await Promise.race([
+				Promise.all([asked.promise, queued.reached.promise]),
+				pending.then(() => {
+					throw new Error("Recon ended before the command scope decision");
+				}),
+			]);
+			expect(permission.options.map(({ kind }) => kind)).toEqual([
+				"allow_once",
+				"reject_once",
+				"allow_always",
+			]);
+			expect(permission.options.at(-1)?.name).toBe(
+				"Allow all command executions (not sandboxed) for this thread",
+			);
+			await expect(
+				readFile(resolve(j.cwd, "denied-command.txt")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(
+				readFile(resolve(j.cwd, "once-command.txt"), "utf8"),
+			).resolves.toBe("once-command");
+			queued.release.resolve();
+			await vi.waitFor(() =>
+				expect(
+					journeyTools(f.updates).some(
+						(row) =>
+							row.sessionUpdate === "tool_call" &&
+							(row.rawInput as { args?: string[] } | undefined)?.args?.at(
+								-1,
+							) === "queued-command",
+					),
+				).toBe(true),
+			);
+			await f.peer.agent.request("session/list", {});
+			const commandPermissions = j.permissions.filter(
+				({ toolCall }) => !toolCall.title?.startsWith("Trust workspace"),
+			);
+			expect(
+				commandPermissions.map(({ toolCall }) =>
+					(toolCall.rawInput as { args: string[] }).args.at(-1),
+				),
+			).toEqual(["denied-command", "once-command", "scope-command"]);
+			await Promise.all(
+				["scope-command", "queued-command", "later-command"].map(async (id) => {
+					await expect(
+						readFile(resolve(j.cwd, `${id}.txt`)),
+					).rejects.toMatchObject({ code: "ENOENT" });
+				}),
+			);
+			grant.resolve("allow_scope");
+			await expect(pending).resolves.toEqual({ stopReason: "end_turn" });
+		} finally {
+			await f.peer.agent.notify("session/cancel", { sessionId });
+			queued.release.resolve();
+			grant.resolve(false);
+			await pending;
+		}
+		await expect(
+			f.prompt(sessionId, "Finish the design in chat."),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		await expect(
+			f.prompt(
+				sessionId,
+				"Run one final local probe directly, without starting another phase.",
+			),
+		).resolves.toEqual({ stopReason: "end_turn" });
+		const commands = [
+			"once-command",
+			"scope-command",
+			"queued-command",
+			"later-command",
+			"next-turn-command",
+		];
+		await Promise.all(
+			commands.map(async (id) => {
+				await expect(
+					readFile(resolve(j.cwd, `${id}.txt`), "utf8"),
+				).resolves.toBe(id);
+				const result = j.requests
+					.map(({ context }) => journeyResult(context, id))
+					.find(Boolean);
+				expect(result, id).toMatchObject({ isError: false });
+			}),
+		);
+		expect(j.permissions).toHaveLength(
+			["trust", "denied", "once", "scope"].length,
+		);
+		expect(journeyText(f.updates)).toContain(JOURNEY_SUMMARY);
+		const saved = await f.saved(sessionId);
+		const beforeLoad = {
+			requests: j.requests.length,
+			permissions: j.permissions.length,
+		};
+		await f.close();
+		const resumed = await j.connect();
+		await resumed.peer.agent.request("session/load", {
+			sessionId,
+			cwd: j.cwd,
+			mcpServers: [],
+		});
+		expect(j.requests).toHaveLength(beforeLoad.requests);
+		expect(j.permissions).toHaveLength(beforeLoad.permissions);
+		const probeFresh = async (id: string, label: string) => {
+			const before = j.permissions.length;
+			scripts.aggregator = [
+				command(label),
+				...journeyDone("Denied probe left no effect."),
+			];
+			scripts.researcher = journeyDone("No other probe needed.");
+			j.approval.decide = async ({ toolCall }) =>
+				toolCall.title?.startsWith("Trust workspace") === true;
+			await expect(
+				resumed.prompt(
+					id,
+					`/design Check ${label}; do not reuse past approvals.`,
+				),
+			).resolves.toEqual({ stopReason: "end_turn" });
+			expect(
+				j.permissions.slice(before).map(({ toolCall }) => toolCall.title),
+			).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+				expect.stringContaining("-e"),
+			]);
+			expect(j.permissions.at(-1)?.options.map(({ kind }) => kind)).toEqual([
+				"allow_once",
+				"reject_once",
+				"allow_always",
+			]);
+			await expect(
+				readFile(resolve(j.cwd, `${label}.txt`)),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			const { context } = j.requests.findLast(
+				({ role }) => role === "aggregator",
+			)!;
+			expect(journeyResult(context, label)).toMatchObject({ isError: true });
+			expect(journeyResultText(context, label)).toMatch(/permission.*denied/i);
+		};
+		await probeFresh(sessionId, "reloaded-command");
+		const fresh = await resumed.newSession(j.cwd);
+		await resumed.peer.agent.request("session/set_config_option", {
+			sessionId: fresh.sessionId,
+			configId: "model",
+			value: nativeModelKey(JOURNEY_MODEL),
+		});
+		await probeFresh(fresh.sessionId, "new-session-command");
+		for (const state of [
+			saved,
+			await resumed.saved(sessionId),
+			await resumed.saved(fresh.sessionId),
+		]) {
+			expect(JSON.stringify(state)).not.toMatch(
+				/allow_scope|d3r:native:commands/,
+			);
+		}
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
 
 	it.each(["allowed", "denied", "cancelled"] as const)(
 		"shows concise command approval before a real process is %s",
@@ -7426,33 +8136,33 @@ describe("native ACP shipped-workflow journeys", () => {
 		},
 	);
 
-	it.each(["denied", "cancelled"] as const)(
-		"recovers a %s /develop write without replay, then implements, reviews and audits through real tools",
+	it.each(["failed", "cancelled"] as const)(
+		"recovers a %s automatic /develop write without replay, then implements, reviews and audits through real tools",
 		// oxlint-disable-next-line max-statements -- Failure, persisted recovery and successful retry are one acceptance journey.
 		async (failure) => {
 			const content = "Durable offline jobs\n";
-			const write = journeyCall("write_file", { path: "queue.txt", content });
+			const write = journeyCall(
+				"write_file",
+				{ path: "queue.txt", content },
+				"publish-queue",
+			);
 			const scripts: JourneyScripts = {
 				implementor: [
 					journeyCall("write_file", { path: 42, content }),
 					write,
-					journeyReport(
-						"Write permission was denied; no implementation was made.",
-						{ status: "blocked" },
-					),
-					[{ type: "text", text: "The write was not authorized." }],
+					journeyReport("Write failed; no implementation was made.", {
+						status: "blocked",
+					}),
+					[{ type: "text", text: "A directory obstructed the write." }],
 				],
 			};
-			const j = await open(scripts);
-			const asked = deferred<RequestPermissionRequest>();
-			const answer = deferred<boolean>();
-			j.approval.decide = async (permission) => {
-				if (permission.toolCall.title?.startsWith("Trust workspace")) {
-					return true;
-				}
-				asked.resolve(permission);
-				return answer.promise;
-			};
+			const publication = journeyToolGate("publish-queue");
+			const j = await open(scripts, {
+				streamResponse: (_role, response, settings) =>
+					publication.stream(response, settings?.signal),
+			});
+			j.approval.decide = async ({ toolCall }) =>
+				toolCall.title?.startsWith("Trust workspace") === true;
 			const f = await j.connect();
 			const { sessionId } = await f.newSession(j.cwd);
 			await f.peer.agent.request("session/set_config_option", {
@@ -7474,22 +8184,17 @@ describe("native ACP shipped-workflow journeys", () => {
 			});
 			const pending = f.prompt(sessionId, "auto");
 			try {
-				const permission = await Promise.race([
-					asked.promise,
+				await Promise.race([
+					publication.reached.promise,
 					pending.then(() => {
-						throw new Error("Turn ended without requesting write permission");
+						throw new Error(
+							"Turn ended before the workspace write provider gate",
+						);
 					}),
 				]);
-				expect(permission.toolCall.title).toBe("write_file");
-				expect(journeyToolText(permission.toolCall)).toContain("queue.txt");
-				expect(journeyToolText(permission.toolCall)).toContain(
-					JSON.stringify(content),
-				);
-				expect(
-					j.permissions.filter(
-						({ toolCall }) => toolCall.title === "write_file",
-					),
-				).toHaveLength(1);
+				expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+					expect.stringMatching(/^Trust workspace/),
+				]);
 				expect(j.requests.at(-1)?.context.messages.at(-1)).toMatchObject({
 					role: "toolResult",
 					toolName: "write_file",
@@ -7501,23 +8206,39 @@ describe("native ACP shipped-workflow journeys", () => {
 				if (failure === "cancelled") {
 					await f.peer.agent.notify("session/cancel", { sessionId });
 				} else {
-					answer.resolve(false);
+					await mkdir(resolve(j.cwd, "queue.txt"));
+					publication.release.resolve();
 				}
 				await expect(pending).resolves.toEqual({
 					stopReason: failure === "cancelled" ? "cancelled" : "end_turn",
 				});
+				if (failure === "failed") {
+					const { context } = j.requests.findLast(
+						({ role }) => role === "implementor",
+					)!;
+					expect(journeyResult(context, "publish-queue")).toMatchObject({
+						isError: true,
+					});
+					expect(journeyResultText(context, "publish-queue")).toBe(
+						"Tool execution failed; effects may have occurred. Do not automatically retry.",
+					);
+					await expect(readdir(resolve(j.cwd, "queue.txt"))).resolves.toEqual(
+						[],
+					);
+					await rm(resolve(j.cwd, "queue.txt"), { recursive: true });
+				}
 			} finally {
-				answer.resolve(false);
 				await f.peer.agent.notify("session/cancel", { sessionId });
+				publication.release.resolve();
 				await pending;
 			}
 			await expect(readFile(resolve(j.cwd, "queue.txt"))).rejects.toMatchObject(
 				{ code: "ENOENT" },
 			);
-			if (failure === "denied") {
+			if (failure === "failed") {
 				expect(
 					journeyTools(f.updates).map(journeyToolText).join("\n"),
-				).toContain("Write permission was denied");
+				).toContain("Write failed");
 				expect(
 					j.requests
 						.findLast(({ role }) => role === "implementor")
@@ -7527,9 +8248,11 @@ describe("native ACP shipped-workflow journeys", () => {
 					isError: false,
 				});
 			}
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+			]);
 			const beforeReload = j.requests.length;
 			await f.close();
-			j.approval.decide = async () => true;
 			const resumed = await j.connect();
 			await resumed.peer.agent.request("session/load", {
 				sessionId,
@@ -7556,7 +8279,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				journeyCheckpoint(checkpoint).inner!.input,
 			);
 			await expect(
-				resumed.prompt(sessionId, failure === "denied" ? "continue" : "status"),
+				resumed.prompt(sessionId, failure === "failed" ? "continue" : "status"),
 			).resolves.toEqual({
 				stopReason: "end_turn",
 			});
@@ -7572,9 +8295,9 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(
 				journeyResult(
 					j.requests.at(-1)!.context,
-					failure === "denied" ? "d3r_continue_phase" : "d3r_phase_status",
+					failure === "failed" ? "d3r_continue_phase" : "d3r_phase_status",
 				),
-			).toMatchObject({ isError: failure === "denied" });
+			).toMatchObject({ isError: failure === "failed" });
 			await expect(readFile(resolve(j.cwd, "queue.txt"))).rejects.toMatchObject(
 				{ code: "ENOENT" },
 			);
@@ -7594,7 +8317,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				[{ type: "text", text: "Audit complete." }],
 			];
 			const recoveryUpdates = resumed.updates.length;
-			if (failure === "denied") {
+			if (failure === "failed") {
 				await expect(resumed.prompt(sessionId, "abandon")).resolves.toEqual({
 					stopReason: "end_turn",
 				});
@@ -7604,7 +8327,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			}
 			const recoveryRequests = j.requests.length;
 			await expect(
-				resumed.prompt(sessionId, failure === "denied" ? "auto" : "continue"),
+				resumed.prompt(sessionId, failure === "failed" ? "auto" : "continue"),
 			).resolves.toEqual({ stopReason: "end_turn" });
 			expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(content);
 			expect(journeyText(resumed.updates.slice(recoveryUpdates))).toContain(
@@ -7653,6 +8376,10 @@ describe("native ACP shipped-workflow journeys", () => {
 					content.trim(),
 				);
 			}
+			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
+				expect.stringMatching(/^Trust workspace/),
+				expect.stringMatching(/^Trust workspace/),
+			]);
 			const effects = resumed.updates
 				.slice(recoveryUpdates)
 				.flatMap(({ update }) =>

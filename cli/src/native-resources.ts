@@ -47,11 +47,18 @@ export const nativeRoleTools = (
 	agent: AgentDefinition,
 	tools: readonly RuntimeTool[],
 ): RuntimeTool[] =>
-	tools.filter((tool) =>
-		Object.hasOwn(LOCAL_CAPABILITIES, tool.name)
-			? agent.spec.capabilities.includes(LOCAL_CAPABILITIES[tool.name])
-			: agent.spec.tools.includes(tool.name),
-	);
+	tools
+		.filter((tool) =>
+			Object.hasOwn(LOCAL_CAPABILITIES, tool.name)
+				? agent.spec.capabilities.includes(LOCAL_CAPABILITIES[tool.name])
+				: agent.spec.tools.includes(tool.name),
+		)
+		.map((tool) =>
+			agent.spec.name === "implementor" &&
+			["write_file", "edit_file"].includes(tool.name)
+				? { ...tool, permission: "none" as const, permissionScope: undefined }
+				: tool,
+		);
 /** Skill reads use pinned text so global skills need no home-directory filesystem grant. */
 export const createNativeSkillTool = (
 	resources: AgentResources,
@@ -91,7 +98,7 @@ const resourceContext = (resources: AgentResources): string =>
 	[
 		resources.systemPrompt ?? "",
 		resources.instructions,
-		`Workspace vault location: ${resources.vaultRoot}. Use vault_read, vault_ls, vault_find, and vault_lint for vault documents; use vault_write/vault_edit for approved artifact changes. Their paths are relative to this pinned vault, not the repository or process cwd. In role briefs, .misc/templates/, .misc/archive/, process/, notes/, and issues/ refer to vault-relative paths. For example, read .misc/templates/remember.md with vault_read, not read_file. Read relevant vault instructions and templates before writing; do not substitute core/seed templates for an inaccessible vault. vault_read returns a file snapshot; pass it to every overwrite, edit, move, or removal. Vault tools use saved disk contents, not unsaved editor buffers. vault_mv/vault_rm support files only, not directories; directory archival requires an explicitly approved command. No tool implicitly initializes or commits the vault.`,
+		`Workspace vault location: ${resources.vaultRoot}. Use vault_read, vault_ls, vault_find, and vault_lint for vault documents; use vault_write/vault_edit for artifact changes within the assigned scope. Enabled native vault tools run under workspace/vault trust without per-operation approval. Their paths are relative to this pinned vault, not the repository or process cwd. In role briefs, .misc/templates/, .misc/archive/, process/, notes/, and issues/ refer to vault-relative paths. For example, read .misc/templates/remember.md with vault_read, not read_file. Read relevant vault instructions and templates before writing; do not substitute core/seed templates for an inaccessible vault. vault_read returns a file snapshot; pass it to every overwrite, edit, move, or removal. Vault tools use saved disk contents, not unsaved editor buffers. vault_mv/vault_rm support files only, not directories; directory archival requires an explicitly approved command. No tool implicitly initializes or commits the vault.`,
 		"Security implementation code, tests, configuration schemas, and documentation are normal inspection targets. Do not skip files or directories just because their names contain auth, credentials, secrets, tokens, or keys. Protect actual stored credential values, not the code that handles them.",
 		"Skills are inert text. Use read_skill with a skill's name to read its pinned SKILL.md before using it. Reading a skill does not authorize commands or code execution.",
 		"For external research, use the installed web_search and web_fetch tools rather than curl, shell-based Exa calls, or reading environment credentials. This is the native equivalent of any bash/EXA_API_KEY workflow mentioned in a role brief. Credentials are managed by the host. If web tools report unavailable configuration, ask the operator to configure them; do not read stored credential values, print live secrets, or work around a denial with run_command. Search and fetch have separate thread approval scopes. Only tools in your tool list are available.",
@@ -115,7 +122,7 @@ export const nativeSystemPrompt = (
 			: routingPrompt,
 		resourceContext(resources),
 		...(agent && orchestrated ? [NATIVE_BRIEF_CONTRACT] : []),
-		"Use read_file, list_directory, and search for workspace inspection when available. Read before edit_file/write_file and retain the returned snapshot. All mutations, commands, and MCP calls require approval; never bypass a denial. A tool absent from your tool list is unavailable.",
+		"Use read_file, list_directory, and search for workspace inspection when available. Read before edit_file/write_file and retain the returned snapshot. After workspace trust, the implementor may use write_file/edit_file without per-call approval, and all roles may use their enabled native vault tools without per-operation approval. Other workspace mutations, commands, and MCP calls require client authorization, which may be remembered for the explicitly displayed thread scope. Snapshot, path, role-capability, and task-scope checks still apply; never bypass a denial. A tool absent from your tool list is unavailable.",
 		...(agent
 			? [
 					"You MUST call d3r_report exactly once with your final structured workflow outcome after all work. Natural-language output is not a report. Use blocked or needs_human when incomplete; never fabricate success, approval, or allDone.",

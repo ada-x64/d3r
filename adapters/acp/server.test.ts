@@ -794,7 +794,7 @@ describe("native ACP full surface", () => {
 		await f.peer.agent.request("session/resume", { sessionId, cwd: CWD });
 	});
 
-	it.each(["allow", "reject", "allow_always"])(
+	it.each(["allow", "reject", "allow_always", "allow_scope"])(
 		"keeps the visible command preview through permission choice %s and final activity",
 		async (optionId) => {
 			const permissions: RequestPermissionRequest[] = [];
@@ -818,6 +818,11 @@ describe("native ACP full surface", () => {
 					expect(params.options).toEqual([
 						{ optionId: "allow", name: "Allow once", kind: "allow_once" },
 						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+						{
+							optionId: "allow_scope",
+							name: "Allow identical requests for run_command for this thread",
+							kind: "allow_always",
+						},
 					]);
 					expect(execute).not.toHaveBeenCalled();
 					return { outcome: { outcome: "selected", optionId } };
@@ -895,7 +900,7 @@ describe("native ACP full surface", () => {
 			});
 			expect(JSON.stringify([permissions, updates])).not.toContain(secret);
 			expect(updates.map((update) => update.status)).toEqual(
-				optionId === "allow"
+				optionId === "allow" || optionId === "allow_scope"
 					? ["pending", "in_progress", "completed"]
 					: ["pending", "failed"],
 			);
@@ -921,8 +926,10 @@ describe("native ACP full surface", () => {
 				],
 				rawOutput: { result: "retained" },
 			});
-			expect(execute).toHaveBeenCalledTimes(optionId === "allow" ? 1 : 0);
-			if (optionId === "allow") {
+			expect(execute).toHaveBeenCalledTimes(
+				optionId === "allow" || optionId === "allow_scope" ? 1 : 0,
+			);
+			if (optionId === "allow" || optionId === "allow_scope") {
 				expect(execute).toHaveBeenCalledWith(input);
 			}
 			expect(input.args.at(-1)).toBe(secret);
@@ -1370,6 +1377,7 @@ describe("native ACP full surface", () => {
 				expect(params.options.map((option) => option.kind)).toEqual([
 					"allow_once",
 					"reject_once",
+					"allow_always",
 				]);
 				return { outcome: { outcome: "selected", optionId: "allow" } };
 			})

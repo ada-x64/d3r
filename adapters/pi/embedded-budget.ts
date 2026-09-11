@@ -100,7 +100,7 @@ export const beginBudgetedRequest = (
 		systemPrompt,
 		"[D3R request budget - current invocation only]",
 		`Response ${budget.used} of ${budget.limit}. Remaining model requests: ${remaining}, including this response and any final synthesis. Hard cap: ${budget.hard}. Extension headroom: ${headroom}.`,
-		"Reserve requests to save work, report results, and provide a final response. There is no extra final-response allowance. Earlier invocation budgets or approvals do not apply.",
+		"Reserve requests to save work, report results, and provide a final response. There is no extra final-response allowance. Earlier invocation budgets do not apply. Extensions still require this tool call; the client may reuse an explicitly remembered identical-request approval within this thread.",
 		extension,
 		...(remaining <= WARNING_REQUESTS
 			? [
@@ -131,7 +131,7 @@ export const createRequestExtensionTool = (
 ): RuntimeTool => ({
 	name: REQUEST_EXTENSION_TOOL,
 	description:
-		"Request explicit client approval for more model requests in this invocation only. Supply a nonempty reason and optionally 1-50 additionalRequests (default: min(50, available headroom)). The requesting response consumes budget. Never increases the hard cap; denied requests must not be retried. Reserve room for saving work and a final report.",
+		"Request client authorization for more model requests in this invocation only (a matching thread grant may satisfy approval). Supply a nonempty reason and optionally 1-50 additionalRequests (default: min(50, available headroom)). The requesting response consumes budget. Never increases the hard cap; denied requests must not be retried. Reserve room for saving work and a final report.",
 	kind: "other",
 	schema: extensionSchema,
 	permission: "none",

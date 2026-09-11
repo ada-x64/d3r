@@ -516,7 +516,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "write_file",
 			description:
-				"Create or overwrite a UTF-8 file after approval. Existing files REQUIRE the explicit snapshot token from your own read_file result; a prior read alone is not sufficient. Parent directory must exist. Emits the actual old/new diff.",
+				"Create or overwrite a UTF-8 file under the runtime's permission policy. Existing files REQUIRE the explicit snapshot token from your own read_file result; a prior read alone is not sufficient. Parent directory must exist. Emits the actual old/new diff.",
 			kind: "edit",
 			schema: writeSchema,
 			permission: "ask",
@@ -528,7 +528,7 @@ export const createWorkspaceTools = ({
 		{
 			name: "edit_file",
 			description:
-				"Replace exact text after approval. Requires the explicit snapshot token from your own read_file result (never inferred from another call); rejects stale files and unexpected non-overlapping match counts. Emits the actual old/new diff.",
+				"Replace exact text under the runtime's permission policy. Requires the explicit snapshot token from your own read_file result (never inferred from another call); rejects stale files and unexpected non-overlapping match counts. Emits the actual old/new diff.",
 			kind: "edit",
 			schema: editSchema,
 			permission: "ask",

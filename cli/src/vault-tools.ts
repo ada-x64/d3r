@@ -273,7 +273,7 @@ export const createVaultTools = ({
 		excludedDirectories: excluded,
 		signal: context.signal,
 	});
-	// Approval belongs to the outer bridge. Never give vault IO the ACP editor fs,
+	// Native vault operations use the session's trust. Never give vault IO the ACP editor fs,
 	// even when this separate document store is physically inside the workspace.
 	const diskContext = (context: RuntimeToolContext): RuntimeToolContext => ({
 		toolCallId: context.toolCallId,
@@ -351,10 +351,10 @@ export const createVaultTools = ({
 		{
 			name: "vault_write",
 			description:
-				"After approval, create or overwrite a vault-relative UTF-8 file on disk, never an editor buffer. mode raw requires contents and forbids kind/frontmatter/body; mode doc requires kind and body, permits frontmatter, and forbids contents. Metadata is non-executable YAML with bounded JSON-compatible values; body is preserved verbatim without parsing or template merging. Existing files REQUIRE snapshot from vault_read; omit only for creation. Creates checked parent directories, never a missing vault root. Rejects stale snapshots before mkdir. Uses native atomic publication/no-clobber and returns the actual diff plus new snapshot. Empty parents may remain on later failure.",
+				"Create or overwrite a vault-relative UTF-8 file under session trust, without an additional approval prompt. Uses saved disk, never an editor buffer. mode raw requires contents and forbids kind/frontmatter/body; mode doc requires kind and body, permits frontmatter, and forbids contents. Metadata is non-executable YAML with bounded JSON-compatible values; body is preserved verbatim without parsing or template merging. Existing files REQUIRE snapshot from vault_read; omit only for creation. Creates checked parent directories, never a missing vault root. Rejects stale snapshots before mkdir. Uses native atomic publication/no-clobber and returns the actual diff plus new snapshot. Empty parents may remain on later failure.",
 			kind: "edit",
 			schema: writeSchema,
-			permission: "ask",
+			permission: "none",
 			execute: async (args, context) => {
 				const input = writeSchema.parse(args);
 				const access = accessFor(context);
@@ -382,10 +382,10 @@ export const createVaultTools = ({
 		{
 			name: "vault_edit",
 			description:
-				"After approval, replace literal find with replace in a vault-relative saved file. Requires the explicit snapshot from vault_read and exactly count non-overlapping matches (default 1). Native checked atomic disk write; preserves literal replacement text and returns actual old/new diff plus new snapshot. Never uses ACP editor filesystem services.",
+				"Replace literal find with replace in a vault-relative saved file under session trust, without an additional approval prompt. Requires the explicit snapshot from vault_read and exactly count non-overlapping matches (default 1). Native checked atomic disk write; preserves literal replacement text and returns actual old/new diff plus new snapshot. Never uses ACP editor filesystem services.",
 			kind: "edit",
 			schema: editSchema,
-			permission: "ask",
+			permission: "none",
 			execute: async (args, context) => {
 				const input = editSchema.parse(args);
 				const access = accessFor(context);
@@ -409,10 +409,10 @@ export const createVaultTools = ({
 		{
 			name: "vault_mv",
 			description:
-				"After approval, move a regular UTF-8 file between vault-relative paths using source snapshot from vault_read. Directories, vault root, and overwrite=true are unsupported. Copies text into a new private-mode destination without clobber, then rechecks/removes source under both writer locks; original metadata is not preserved. This two-step move is NOT atomic or rollback-capable. On removal failure the destination is retained and reported for recovery. Creates checked destination parents; emits actual creation/deletion diffs. Node cannot guarantee CAS against hostile external inode swaps.",
+				"Move a regular UTF-8 file between vault-relative paths under session trust, without an additional approval prompt, using source snapshot from vault_read. Directories, vault root, and overwrite=true are unsupported. Copies text into a new private-mode destination without clobber, then rechecks/removes source under both writer locks; original metadata is not preserved. This two-step move is NOT atomic or rollback-capable. On removal failure the destination is retained and reported for recovery. Creates checked destination parents; emits actual creation/deletion diffs. Node cannot guarantee CAS against hostile external inode swaps.",
 			kind: "move",
 			schema: mvSchema,
-			permission: "ask",
+			permission: "none",
 			execute: async (args, context) => {
 				const input = mvSchema.parse(args);
 				const access = accessFor(context);
@@ -455,10 +455,10 @@ export const createVaultTools = ({
 		{
 			name: "vault_rm",
 			description:
-				"After approval, remove a regular UTF-8 vault-relative file using explicit snapshot from vault_read. Rechecks text and identity under the native writer lock before unlink and returns the actual preimage diff. Vault root, directories and recursive=true are unsupported; no recursive rollback or hostile-writer CAS is promised.",
+				"Remove a regular UTF-8 vault-relative file under session trust, without an additional approval prompt, using explicit snapshot from vault_read. Rechecks text and identity under the native writer lock before unlink and returns the actual preimage diff. Vault root, directories and recursive=true are unsupported; no recursive rollback or hostile-writer CAS is promised.",
 			kind: "delete",
 			schema: rmSchema,
-			permission: "ask",
+			permission: "none",
 			execute: async (args, context) => {
 				const input = rmSchema.parse(args);
 				const access = accessFor(context);

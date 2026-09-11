@@ -66,7 +66,7 @@ describe("native vault tools", () => {
 		await rm(base, { recursive: true, force: true });
 	});
 
-	it("exposes exactly eight inert tools, with approval for all mutations and no initialization", async () => {
+	it("exposes exactly eight inert tools without per-operation approval or initialization", async () => {
 		expect(new Set(tools.map(({ name }) => name))).toEqual(
 			new Set([
 				"vault_read",
@@ -79,26 +79,16 @@ describe("native vault tools", () => {
 				"vault_lint",
 			]),
 		);
-		expect(
-			new Set(
-				tools
-					.filter(({ permission }) => permission === "ask")
-					.map(({ name }) => name),
-			),
-		).toEqual(new Set(["vault_write", "vault_edit", "vault_mv", "vault_rm"]));
-		expect(
-			new Set(
-				tools
-					.filter(({ permission }) => permission === "none")
-					.map(({ name }) => name),
-			),
-		).toEqual(new Set(["vault_read", "vault_ls", "vault_find", "vault_lint"]));
+		// Native vault operations rely on workspace/vault trust, not per-call grants.
+		expect(new Set(tools.map(({ permission }) => permission))).toEqual(
+			new Set(["none"]),
+		);
 		const write = tools.find(({ name }) => name === "vault_write")!;
 		expect(
 			write.schema.parse({
 				mode: "raw",
 				path: "new/child.txt",
-				contents: "approved later",
+				contents: "not executed by schema parsing",
 			}),
 		).toMatchObject({ path: "new/child.txt" });
 		expect(await readdir(vaultRoot)).toEqual([]);
@@ -421,7 +411,7 @@ describe("native vault tools", () => {
 			);
 			expect(editorRead).not.toHaveBeenCalled();
 			expect(editorWrite).not.toHaveBeenCalled();
-			// Direct execution is below the permission dispatcher, which the ACP journey exercises.
+			// This checks direct IO; assembled journeys cover workspace/vault trust.
 			expect(requestPermission).not.toHaveBeenCalled();
 		},
 	);

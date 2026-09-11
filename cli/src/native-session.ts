@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
 	type RuntimeConfigOption,
 	type RuntimePrompt,
+	type RuntimePermissionScope,
 	type RuntimeSession,
 	type RuntimeSessionInput,
 	type RuntimeStopReason,
@@ -35,6 +36,7 @@ import { isWithinRoot, readDiskText } from "./resource-paths.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
 import { createVaultTools } from "./vault-tools.ts";
 import { createWebTools } from "./web-tools.ts";
+import { nativeWorkspaceScope, nativeMcpScope } from "./native-permissions.ts";
 import { summarizeNativeWorkflow } from "./native-summary.ts";
 import { nativeVaultContext } from "./native-vault-status.ts";
 
@@ -77,7 +79,7 @@ const vaultReadClient = (input: RuntimeSessionInput, vaultRoot: string) => {
 				: client.readTextFile!(path, signal),
 	};
 };
-/** Capabilities select tools; the runtime dispatcher still asks before every privileged call. */
+/** Pin filesystem access and shell-owned grant scopes before role policy is applied. */
 const scopeTools = (
 	tools: readonly RuntimeTool[],
 	input: RuntimeSessionInput,
@@ -94,6 +96,7 @@ const scopeTools = (
 		permission: ["read_file", "list_directory", "search"].includes(tool.name)
 			? "none"
 			: "ask",
+		permissionScope: nativeWorkspaceScope(tool.name),
 		execute: (args, context) => {
 			const parsed = tool.schema.parse(args);
 			const diskOwned =
@@ -244,7 +247,7 @@ export const createLazyNativeSession = ({
 	const permit = async (
 		title: string,
 		summary: unknown,
-		signal: AbortSignal,
+		{ signal, scope }: { signal: AbortSignal; scope?: RuntimePermissionScope },
 	): Promise<boolean> => {
 		signal.throwIfAborted();
 		const allowed = await input.client?.requestPermission(
@@ -253,6 +256,7 @@ export const createLazyNativeSession = ({
 				title,
 				kind: "execute",
 				input: summary,
+				...(scope ? { scope } : {}),
 			},
 			signal,
 		);
@@ -288,13 +292,13 @@ export const createLazyNativeSession = ({
 						? {
 								vaultRoot,
 								vaultAccess:
-									"Allow reads of this vault only, not its parent directory. External vault files use disk IO, not editor buffers. Writes still require separate approval.",
+									"Allow native vault reads, writes, edits, moves, and removals in this vault only, not its parent directory. External vault files use disk IO, not editor buffers. Native vault operations need no additional approval; commands remain separately authorized.",
 							}
 						: {}),
 					summary:
-						"Allow workspace instructions and skills to guide model requests and workspace reads. Provider requests may incur charges. Mutations, commands, MCP connections and MCP calls still require separate approval. Trust is not saved.",
+						"Allow workspace instructions and skills to guide model requests and workspace reads. Provider requests may incur charges. Implementor file writes/edits and enabled native vault operations run without per-call approval. Other file edits, commands, MCP connections and MCP calls require approval unless their displayed scope is already granted for this thread. Trust is not saved.",
 				},
-				signal,
+				{ signal },
 			))
 		) {
 			return "workspace_denied";
@@ -322,7 +326,10 @@ export const createLazyNativeSession = ({
 			if (!(await previous)) {
 				return false;
 			}
-			return permit(entry.title, entry.summary, signal);
+			return permit(entry.title, entry.summary, {
+				signal,
+				scope: entry.permissionScope,
+			});
 		}, Promise.resolve(true));
 		if (!approved) {
 			return "mcp_denied";
@@ -358,6 +365,7 @@ export const createLazyNativeSession = ({
 				...opened.tools.map((tool) => ({
 					...tool,
 					permission: "ask" as const,
+					permissionScope: nativeMcpScope(tool.name),
 				})),
 			];
 			const create = (

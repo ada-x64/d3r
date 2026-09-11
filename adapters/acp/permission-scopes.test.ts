@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { compileTools, createToolBridge } from "../pi/embedded-tools.ts";
 import { createClientServices } from "./client.ts";
+import { permissionIdentity } from "./permission-identity.ts";
 import { CWD, deferred } from "./test-support.ts";
 
 /** Shell-owned web scopes deliberately separate fetching from searching. */
@@ -259,7 +260,7 @@ describe("scoped ACP approval", () => {
 		await expect(second).resolves.toBe(true);
 	});
 
-	it("does not lock different scopes or unscoped requests behind each other", async () => {
+	it("does not lock explicit and exact scopes behind each other", async () => {
 		const f = open();
 		const fetching = f.ask(FETCH);
 		const searching = f.ask(SEARCH);
@@ -272,7 +273,7 @@ describe("scoped ACP approval", () => {
 		await expect(searching).resolves.toBe(true);
 		await expect(f.ask(SEARCH)).resolves.toBe(true);
 		f.calls[2].reply.resolve(selected("allow_scope"));
-		await expect(unscoped).resolves.toBe(false);
+		await expect(unscoped).resolves.toBe(true);
 		expect(f.calls).toHaveLength(3);
 		f.calls[0].reply.resolve(selected("reject"));
 		await expect(fetching).resolves.toBe(false);
@@ -294,20 +295,32 @@ describe("scoped ACP approval", () => {
 		{ id: FETCH.id, label: "x".repeat(4097) },
 		{ ...FETCH, extra: "not scope metadata" },
 	])(
-		"offers no remembered option for malformed or absent scope (case %#)",
+		"offers only an exact fallback for malformed or absent scope (case %#)",
 		async (scope) => {
 			const f = open();
 			const first = f.ask(scope);
 			expect(f.calls[0].params.options.map(({ kind }) => kind)).toEqual([
 				"allow_once",
 				"reject_once",
+				"allow_always",
 			]);
+			expect(f.calls[0].params.options.at(-1)).toMatchObject({
+				optionId: "allow_scope",
+				name: "Allow identical requests for web_fetch for this thread",
+			});
 			f.calls[0].reply.resolve(selected("allow_scope"));
-			await expect(first).resolves.toBe(false);
-			const next = f.ask(scope);
-			expect(f.calls).toHaveLength(2);
+			await expect(first).resolves.toBe(true);
+			await expect(f.ask(scope)).resolves.toBe(true);
+			expect(f.calls).toHaveLength(1);
+			const next = f.ask(scope, undefined, {
+				input: { url: "https://other.example" },
+			});
+			const explicit = f.ask(FETCH);
+			expect(f.calls).toHaveLength(3);
 			f.calls[1].reply.resolve(selected("allow"));
+			f.calls[2].reply.resolve(selected("reject"));
 			await expect(next).resolves.toBe(true);
+			await expect(explicit).resolves.toBe(false);
 		},
 	);
 
@@ -317,9 +330,11 @@ describe("scoped ACP approval", () => {
 		"apply_patch",
 		"mcp_exa_fetch",
 		"Extend response budget",
+		"Trust workspace",
+		"Connect MCP server",
 		"web_fetch",
 	])(
-		"never infers a scope for %s from its title or model input",
+		"never infers a broad scope for %s from its title or model input",
 		async (title) => {
 			const f = open();
 			const grant = f.ask(FETCH);
@@ -331,9 +346,21 @@ describe("scoped ACP approval", () => {
 				input: { scope: FETCH, permissionScope: FETCH },
 			});
 			expect(f.calls).toHaveLength(2);
-			expect(f.calls[1].params.options).toHaveLength(2);
+			expect(f.calls[1].params.options.at(-1)).toEqual({
+				optionId: "allow_scope",
+				name: `Allow identical requests for ${title} for this thread`,
+				kind: "allow_always",
+			});
 			f.calls[1].reply.resolve(selected("allow_scope"));
-			await expect(pending).resolves.toBe(false);
+			await expect(pending).resolves.toBe(true);
+			const changed = f.ask(undefined, undefined, {
+				title,
+				kind: "execute",
+				input: { scope: FETCH, permissionScope: SEARCH },
+			});
+			expect(f.calls).toHaveLength(3);
+			f.calls[2].reply.resolve(selected("reject"));
+			await expect(changed).resolves.toBe(false);
 		},
 	);
 
@@ -497,6 +524,449 @@ describe("scoped ACP approval", () => {
 		expect(name).toMatch(/\.\.\. for this thread$/);
 		f.calls[0].reply.resolve(selected("reject"));
 		await first;
+	});
+
+	it("coalesces exact requests across roles and turns, preserving reviewed cache-hit previews", async () => {
+		const f = open();
+		const input = {
+			command: "node",
+			args: ["a", "b"],
+			cwd: CWD,
+			env: { z: "last", a: "first" },
+		};
+		const first = f.ask(undefined, undefined, {
+			title: "run_command",
+			kind: "execute",
+			input,
+		});
+		const second = f.ask(undefined, undefined, {
+			toolCallId: "other-role",
+			title: "run_command",
+			kind: "execute",
+			input: {
+				env: { a: "first", z: "last" },
+				cwd: CWD,
+				args: ["a", "b"],
+				command: "node",
+			},
+		});
+		const effect = vi.fn();
+		const executing = second.then((allowed) => {
+			if (allowed) {
+				effect();
+			}
+		});
+		expect(f.calls).toHaveLength(1);
+		await setImmediate();
+		expect(effect).not.toHaveBeenCalled();
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+		await executing;
+		expect(effect).toHaveBeenCalledTimes(1);
+		expect(f.bridge.permissionPresentation("other-role")).toEqual(
+			f.bridge.permissionPresentation("call:0"),
+		);
+		await f.bridge.finishTurn();
+		expect(f.bridge.permissionPresentation("other-role")).toBeUndefined();
+		await expect(
+			f.ask(undefined, undefined, {
+				toolCallId: "next-turn",
+				title: "run_command",
+				kind: "execute",
+				input,
+			}),
+		).resolves.toBe(true);
+		expect(f.bridge.permissionPresentation("next-turn")?.content).toBeDefined();
+		expect(f.calls).toHaveLength(1);
+	});
+
+	it("does not reuse exact grants for different commands, argv order, cwd, credentials, title, or kind", async () => {
+		const secret = "first-private-credential";
+		const otherSecret = "second-private-credential";
+		const f = open("root", [secret, otherSecret]);
+		const title = `Connect MCP ${"x".repeat(120)} ${secret}`;
+		const input = {
+			command: "node",
+			args: ["a", "b"],
+			cwd: CWD,
+			credentials: secret,
+		};
+		const first = f.ask(undefined, undefined, {
+			title,
+			kind: "execute",
+			input,
+		});
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		await expect(first).resolves.toBe(true);
+		const changed = [
+			{ input: { ...input, command: "other" } },
+			{ input: { ...input, args: ["b", "a"] } },
+			{ input: { ...input, args: ["a b"] } },
+			{ input: { ...input, cwd: `${CWD}/other` } },
+			{ input: { ...input, credentials: otherSecret } },
+			{ title: `Connect MCP ${"x".repeat(120)} ${otherSecret}` },
+			{ kind: "other" as const },
+		].map((overrides) =>
+			f.ask(undefined, undefined, {
+				title,
+				kind: "execute",
+				input,
+				...overrides,
+			}),
+		);
+		expect(f.calls).toHaveLength(8);
+		expect(f.calls[0].params.toolCall.title).toBe(
+			f.calls[6].params.toolCall.title,
+		);
+		expect(f.calls[0].params.toolCall.rawInput).toEqual(
+			f.calls[5].params.toolCall.rawInput,
+		);
+		expect(f.calls[0].params.options).toEqual(f.calls[6].params.options);
+		expect(JSON.stringify(f.calls.map(({ params }) => params))).not.toContain(
+			secret,
+		);
+		expect(JSON.stringify(f.calls.map(({ params }) => params))).not.toContain(
+			otherSecret,
+		);
+		f.calls.slice(1).forEach(({ reply }) => reply.resolve(selected("reject")));
+		await expect(Promise.all(changed)).resolves.toEqual(Array(7).fill(false));
+	});
+
+	it.each(["allow", "reject", "allow_always"])(
+		"does not coalesce exact requests on %s",
+		async (optionId) => {
+			const f = open();
+			const first = f.ask(undefined);
+			const second = f.ask(undefined);
+			expect(f.calls).toHaveLength(1);
+			f.calls[0].reply.resolve(selected(optionId));
+			await expect(first).resolves.toBe(optionId === "allow");
+			await setImmediate();
+			expect(f.calls).toHaveLength(2);
+			f.calls[1].reply.resolve(selected("reject"));
+			await expect(second).resolves.toBe(false);
+		},
+	);
+
+	it("discards late exact grants and cancelled waiters without blocking live siblings", async () => {
+		const f = open();
+		const owner = new AbortController();
+		const waiter = new AbortController();
+		const first = f.ask(undefined, owner.signal);
+		const cancelled = f.ask(undefined, waiter.signal);
+		const live = f.ask(undefined);
+		waiter.abort();
+		await expect(cancelled).resolves.toBe(false);
+		expect(f.calls).toHaveLength(1);
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		owner.abort();
+		await expect(first).resolves.toBe(false);
+		await setImmediate();
+		expect(f.calls).toHaveLength(2);
+		f.calls[1].reply.resolve(selected("reject"));
+		await expect(live).resolves.toBe(false);
+		const next = f.ask(undefined);
+		expect(f.calls).toHaveLength(3);
+		f.calls[2].reply.resolve(selected("allow_scope"));
+		await expect(next).resolves.toBe(true);
+	});
+
+	it.each(["dispose", "disconnect"])(
+		"keeps exact grants within the live root on %s",
+		async (ending) => {
+			const f = open();
+			const first = f.ask(undefined);
+			f.calls[0].reply.resolve(selected("allow_scope"));
+			await first;
+			const otherRequest = vi.fn(async () => selected("reject"));
+			const other = createClientServices(
+				"other-root",
+				{ request: otherRequest } as unknown as AgentContext,
+				{
+					capabilities: {},
+					connectionSignal: f.connection.signal,
+				},
+			);
+			cleanup.push(other.dispose);
+			await expect(
+				other.services.requestPermission(
+					{
+						toolCallId: "other",
+						title: "web_fetch",
+						kind: "fetch",
+						input: { url: "https://example.com" },
+					},
+					new AbortController().signal,
+				),
+			).resolves.toBe(false);
+			expect(otherRequest).toHaveBeenCalledTimes(1);
+			const pending = f.ask(undefined, undefined, { title: "another request" });
+			const queued = f.ask(undefined, undefined, { title: "another request" });
+			if (ending === "dispose") {
+				await f.bridge.dispose();
+			} else {
+				f.connection.abort();
+			}
+			await expect(Promise.all([pending, queued])).resolves.toEqual([
+				false,
+				false,
+			]);
+			f.calls[1].reply.resolve(selected("allow_scope"));
+			await expect(f.ask(undefined)).resolves.toBe(false);
+			const reopened = open();
+			const next = reopened.ask(undefined);
+			expect(reopened.calls).toHaveLength(1);
+			reopened.calls[0].reply.resolve(selected("reject"));
+			await expect(next).resolves.toBe(false);
+		},
+	);
+
+	it.each(["explicit first", "exact first"])(
+		"separates explicit IDs from exact hash keys: %s",
+		async (order) => {
+			const f = open();
+			const id = permissionIdentity({
+				toolCallId: "ignored",
+				title: "web_fetch",
+				kind: "fetch",
+				input: { url: "https://example.com" },
+			})!.exactId;
+			const scope = { id, label: "opaque explicit scope" };
+			const first = f.ask(order === "explicit first" ? scope : undefined);
+			f.calls[0].reply.resolve(selected("allow_scope"));
+			await first;
+			const next = f.ask(order === "explicit first" ? undefined : scope);
+			expect(f.calls).toHaveLength(2);
+			f.calls[1].reply.resolve(selected("reject"));
+			await expect(next).resolves.toBe(false);
+			expect(JSON.stringify(f.calls.map(({ params }) => params))).not.toContain(
+				id,
+			);
+		},
+	);
+
+	it("redacts and bounds fallback labels before control sanitization and truncation", async () => {
+		const secret = "private\nprovider-credential";
+		const f = open("root", ["private", secret]);
+		const first = f.ask(undefined, undefined, {
+			title: `Connect ${secret}\n\u001b\u202e ${"x".repeat(200)}`,
+		});
+		const { name } = f.calls[0].params.options.at(-1)!;
+		expect(name).toContain("identical requests for Connect [redacted] ");
+		expect(name).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+		expect(name).toHaveLength(
+			"Allow ".length + 100 + " for this thread".length,
+		);
+		expect(JSON.stringify(f.calls[0].params)).not.toContain(
+			"provider-credential",
+		);
+		f.calls[0].reply.resolve(selected("reject"));
+		await first;
+	});
+
+	describe("payload safety and size", () => {
+		it.each(["x", "\u0001"])(
+			"authorizes full 1 MiB write content under explicit and exact scopes (case %#)",
+			async (character) => {
+				const f = open();
+				const input = {
+					path: `${CWD}/large.txt`,
+					content: character.repeat(1_048_576),
+				};
+				expect(Buffer.byteLength(input.content, "utf8")).toBe(1_048_576);
+				const requests = [
+					undefined,
+					{
+						id: "d3r:native:workspace-edits",
+						label: "workspace file writes and edits",
+					},
+				].map((scope) =>
+					f.ask(scope, undefined, { title: "write_file", kind: "edit", input }),
+				);
+				expect(f.calls).toHaveLength(2);
+				for (const { params, reply } of f.calls) {
+					expect(params.toolCall.rawInput).toEqual(input);
+					expect(params.options.at(-1)).toMatchObject({
+						optionId: "allow_scope",
+						kind: "allow_always",
+					});
+					reply.resolve(selected("allow_scope"));
+				}
+				await expect(Promise.all(requests)).resolves.toEqual([true, true]);
+			},
+		);
+
+		it.each([
+			{
+				input: { url: "https://example.com", absent: undefined },
+				normalized: { url: "https://example.com" },
+			},
+			{ input: { nested: { absent: undefined } }, normalized: { nested: {} } },
+			{
+				input: { nested: [{ absent: undefined }] },
+				normalized: { nested: [{}] },
+			},
+		])(
+			"fails closed on undefined fields before and after an exact grant for their normalized JSON (case %#)",
+			async ({ input, normalized }) => {
+				const f = open();
+				await expect(f.ask(undefined, undefined, { input })).resolves.toBe(
+					false,
+				);
+				expect(f.calls).toHaveLength(0);
+				expect(f.bridge.permissionPresentation("call:0")).toBeUndefined();
+
+				const first = f.ask(undefined, undefined, { input: normalized });
+				f.calls[0].reply.resolve(selected("allow_scope"));
+				await expect(first).resolves.toBe(true);
+				await expect(f.ask(undefined, undefined, { input })).resolves.toBe(
+					false,
+				);
+				await expect(
+					f.ask({ ...FETCH, label: "" }, undefined, { input }),
+				).resolves.toBe(false);
+				await expect(
+					f.ask(undefined, undefined, { input: normalized }),
+				).resolves.toBe(true);
+				expect(f.calls).toHaveLength(1);
+			},
+		);
+
+		it("never authorizes negative zero with an exact zero grant, but preserves explicit scopes", async () => {
+			const f = open();
+			const input = { value: -0 };
+			await expect(f.ask(undefined, undefined, { input })).resolves.toBe(false);
+			expect(f.calls).toHaveLength(0);
+			expect(f.bridge.permissionPresentation("call:0")).toBeUndefined();
+			const zero = f.ask(undefined, undefined, { input: { value: 0 } });
+			f.calls[0].reply.resolve(selected("allow_scope"));
+			await expect(zero).resolves.toBe(true);
+			await expect(f.ask(undefined, undefined, { input })).resolves.toBe(false);
+			await expect(
+				f.ask({ ...FETCH, label: "" }, undefined, { input }),
+			).resolves.toBe(false);
+			await expect(
+				f.ask(undefined, undefined, { input: { value: 0 } }),
+			).resolves.toBe(true);
+			expect(f.calls).toHaveLength(1);
+			const explicit = f.ask(FETCH, undefined, { input });
+			expect(f.calls[1].params.toolCall.rawInput).toEqual({ value: 0 });
+			f.calls[1].reply.resolve(selected("allow_scope"));
+			await expect(explicit).resolves.toBe(true);
+			await expect(f.ask(FETCH, undefined, { input })).resolves.toBe(true);
+			expect(Object.is(input.value, -0)).toBe(true);
+		});
+
+		it("normalizes undefined fields only for a validated explicit scope, never for an exact grant", async () => {
+			const f = open();
+			const input = {
+				url: "https://example.com",
+				absent: undefined,
+				nested: [{ absent: undefined }],
+			};
+			const normalized = { url: "https://example.com", nested: [{}] };
+			const first = f.ask(FETCH, undefined, { input });
+			expect(f.calls[0].params.toolCall.rawInput).toEqual(normalized);
+			expect(f.calls[0].params.options.at(-1)?.name).toBe(
+				"Allow web fetches via Exa for this thread",
+			);
+			f.calls[0].reply.resolve(selected("allow_scope"));
+			await expect(first).resolves.toBe(true);
+			await expect(f.ask(FETCH, undefined, { input })).resolves.toBe(true);
+			await expect(
+				f.ask(FETCH, undefined, { input: normalized }),
+			).resolves.toBe(true);
+			await expect(f.ask(undefined, undefined, { input })).resolves.toBe(false);
+			const exact = f.ask(undefined, undefined, { input: normalized });
+			expect(f.calls).toHaveLength(2);
+			f.calls[1].reply.resolve(selected("reject"));
+			await expect(exact).resolves.toBe(false);
+			expect(Object.hasOwn(input, "absent")).toBe(true);
+			expect(Object.hasOwn(input.nested[0], "absent")).toBe(true);
+		});
+	});
+
+	it("fails closed before preview or RPC on unsafe input, even with a remembered explicit grant", async () => {
+		const f = open();
+		const granted = f.ask(FETCH);
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		await granted;
+		const hook = vi.fn(() => {
+			throw new Error("must not execute");
+		});
+		const cycle: unknown[] = [];
+		cycle.push(cycle);
+		const inputs = [
+			{ toJSON: hook },
+			Object.defineProperty({}, "key", { get: hook, enumerable: true }),
+			new Proxy({}, { getPrototypeOf: hook, get: hook, ownKeys: hook }),
+			cycle,
+			undefined,
+			NaN,
+			[undefined],
+			"x".repeat(8_388_608),
+		];
+		await expect(
+			Promise.all(
+				inputs.flatMap((input) =>
+					[undefined, FETCH].map((scope) =>
+						f.ask(scope, undefined, { input, toolCallId: "unsafe" }),
+					),
+				),
+			),
+		).resolves.toEqual(Array(inputs.length * 2).fill(false));
+		expect(hook).not.toHaveBeenCalled();
+		expect(f.calls).toHaveLength(1);
+		expect(f.bridge.permissionPresentation("unsafe")).toBeUndefined();
+	});
+
+	it("falls back narrowly on executable scope metadata without running it", async () => {
+		const f = open();
+		const hook = vi.fn(() => {
+			throw new Error("must not execute");
+		});
+		const scope = Object.defineProperty({ label: FETCH.label }, "id", {
+			get: hook,
+		});
+		const first = f.ask(scope);
+		expect(f.calls[0].params.options.at(-1)?.name).toBe(
+			"Allow identical requests for web_fetch for this thread",
+		);
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		await expect(first).resolves.toBe(true);
+		await expect(f.ask(undefined)).resolves.toBe(true);
+		expect(hook).not.toHaveBeenCalled();
+	});
+
+	it("evicts the oldest grant after 1024 remembered explicit and exact scopes", async () => {
+		const f = open();
+		const oldest = f.ask(FETCH);
+		f.calls[0].reply.resolve(selected("allow_scope"));
+		await oldest;
+		const requests = Array.from({ length: 1024 }, (_, i) =>
+			f.ask(undefined, undefined, { input: { number: i } }),
+		);
+		f.calls
+			.slice(1)
+			.forEach(({ reply }) => reply.resolve(selected("allow_scope")));
+		const allowed = await Promise.all(requests);
+		expect(allowed.every(Boolean)).toBe(true);
+		await f.bridge.finishTurn();
+		await expect(
+			f.ask(undefined, undefined, { input: { number: 0 } }),
+		).resolves.toBe(true);
+		await expect(
+			f.ask(undefined, undefined, { input: { number: 1023 } }),
+		).resolves.toBe(true);
+		expect(f.calls).toHaveLength(1025);
+		const evicted = f.ask(FETCH);
+		expect(f.calls).toHaveLength(1026);
+		f.calls.at(-1)!.reply.resolve(selected("allow_scope"));
+		await expect(evicted).resolves.toBe(true);
+		const exactEvicted = f.ask(undefined, undefined, { input: { number: 0 } });
+		expect(f.calls).toHaveLength(1027);
+		f.calls.at(-1)!.reply.resolve(selected("reject"));
+		await expect(exactEvicted).resolves.toBe(false);
 	});
 
 	it("uses credentials registered while queued when rendering the next permission option", async () => {

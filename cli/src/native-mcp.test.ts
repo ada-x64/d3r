@@ -3,12 +3,16 @@ import { createEmbeddedRuntime } from "@d3r/adapter-pi/embedded";
 import { type Models } from "@d3r/adapter-pi/auth";
 import {
 	type RuntimeActivity,
+	type RuntimeMcpServer,
 	type RuntimePermission,
 } from "@d3r/core/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { connectMcpTools, mcpToolName } from "./mcp.ts";
+import { createClientServices } from "../../adapters/acp/client.ts";
+import { createNativeMcpSecurity } from "./native-mcp.ts";
 import {
 	CWD,
+	HOME,
 	MODEL_A,
 	chosenModel,
 	nativeFixture,
@@ -67,6 +71,21 @@ const response = (
 		totalTokens: 0,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	},
+});
+
+/** Each test owns synthetic credentials and endpoints; no live configuration is loaded. */
+const httpServer = (): Extract<RuntimeMcpServer, { type: string }> => ({
+	name: "remote",
+	type: "http",
+	url: "https://remote.invalid/read-only?token=first-query-credential",
+	headers: [{ name: "Authorization", value: "Bearer first-http-credential" }],
+});
+/** The fake transport consumes this plan without ever spawning its executable. */
+const stdioServer = (): Extract<RuntimeMcpServer, { command: string }> => ({
+	name: "local",
+	command: "offline-command",
+	args: ["--token", "first-argv-credential"],
+	env: [{ name: "API_KEY", value: "first-stdio-credential" }],
 });
 
 /** Real runtime and MCP SDK-facing discovery/validation; only the provider/transport IO is fake. */
@@ -286,6 +305,192 @@ describe("native real runtime and MCP composition", () => {
 		}
 	});
 
+	it.each([
+		{
+			change: "HTTP endpoint",
+			original: httpServer(),
+			changed: { ...httpServer(), url: "https://other.invalid/read-only" },
+			samePreview: false,
+		},
+		{
+			change: "HTTP path",
+			original: httpServer(),
+			changed: {
+				...httpServer(),
+				url: "https://remote.invalid/admin?token=first-query-credential",
+			},
+			samePreview: true,
+		},
+		{
+			change: "HTTP query credential",
+			original: httpServer(),
+			changed: {
+				...httpServer(),
+				url: "https://remote.invalid/read-only?token=second-query-credential",
+			},
+			samePreview: true,
+		},
+		{
+			change: "HTTP header credential",
+			original: httpServer(),
+			changed: {
+				...httpServer(),
+				headers: [
+					{ name: "Authorization", value: "Bearer second-http-credential" },
+				],
+			},
+			samePreview: true,
+		},
+		{
+			change: "stdio environment credential",
+			original: stdioServer(),
+			changed: {
+				...stdioServer(),
+				env: [{ name: "API_KEY", value: "second-stdio-credential" }],
+			},
+			samePreview: true,
+		},
+		{
+			change: "stdio argv credential",
+			original: stdioServer(),
+			changed: {
+				...stdioServer(),
+				args: ["--token", "second-argv-credential"],
+			},
+			samePreview: true,
+		},
+	])(
+		"reuses an unchanged setup grant but requires approval after a $change change",
+		// oxlint-disable-next-line max-statements -- Hold approval, failed setup, denial and recovered execution in the same live root.
+		async ({ original, changed, samePreview }) => {
+			const f = nativeFixture();
+			const decisions = ["allow_scope", "allow_scope", "reject"];
+			const request = vi.fn(async (_method: string, _params: unknown) => ({
+				outcome: {
+					outcome: "selected",
+					optionId: decisions.shift() ?? "reject",
+				},
+			}));
+			const bridge = createClientServices(
+				"offline-session",
+				{ request } as unknown as Parameters<typeof createClientServices>[1],
+				{ capabilities: {}, connectionSignal: new AbortController().signal },
+			);
+			const close = vi.fn(async () => {});
+			const createConnection = vi
+				.fn(async (_server: RuntimeMcpServer) => ({
+					listTools: async () => ({ tools: [] }),
+					callTool: async () => ({ content: [] }),
+					close,
+				}))
+				.mockRejectedValueOnce(new Error("First controlled transport failure"))
+				.mockRejectedValueOnce(
+					new Error("Second controlled transport failure"),
+				);
+			const connector = vi.fn<typeof connectMcpTools>((servers, options) =>
+				connectMcpTools(servers, { ...options, createConnection }),
+			);
+			f.deps.loadMcpConfig.mockResolvedValue([original]);
+			f.deps.getMcpEnvironment.mockReturnValue({
+				INHERITED_TOKEN: "inherited-stdio-credential",
+			});
+			f.models.streamSimple.mockImplementation(() =>
+				eventStream(
+					response([
+						{ type: "text", text: "Recovered with the approved connection." },
+					]),
+				),
+			);
+			try {
+				const session = await f.open(
+					{ client: bridge.services },
+					{ createEmbeddedRuntime, connectMcpTools: connector },
+				);
+				await expect(session.prompt(testPrompt())).rejects.toThrow(
+					"Unable to initialize native session",
+				);
+				expect(request).toHaveBeenCalledTimes(2);
+				expect(connector).toHaveBeenCalledTimes(1);
+				expect(createConnection).toHaveBeenCalledTimes(1);
+				expect(request.mock.calls[1][1]).toMatchObject({
+					options: expect.arrayContaining([
+						{
+							optionId: "allow_scope",
+							kind: "allow_always",
+							name: "Allow this MCP connection configuration for this thread",
+						},
+					]),
+				});
+				await bridge.finishTurn();
+				await expect(session.prompt(testPrompt())).rejects.toThrow(
+					"Unable to initialize native session",
+				);
+				expect(request).toHaveBeenCalledTimes(2);
+				expect(connector).toHaveBeenCalledTimes(2);
+				expect(createConnection.mock.calls[1][0]).toEqual(
+					createConnection.mock.calls[0][0],
+				);
+				await bridge.finishTurn();
+
+				f.deps.loadMcpConfig.mockResolvedValue([changed]);
+				const denied = testPrompt();
+				await expect(session.prompt(denied)).resolves.toBe("completed");
+				expect(request).toHaveBeenCalledTimes(3);
+				expect(connector).toHaveBeenCalledTimes(2);
+				expect(createConnection).toHaveBeenCalledTimes(2);
+				expect(f.models.streamSimple).not.toHaveBeenCalled();
+				expect(denied.emit).toHaveBeenCalledWith(
+					expect.objectContaining({
+						text: expect.stringContaining(
+							"MCP connection permission was not granted",
+						),
+					}),
+				);
+				if (samePreview) {
+					const preview = (index: number) => {
+						const params = request.mock.calls[index][1] as {
+							toolCall: { title: string; content: unknown; rawInput: unknown };
+						};
+						const { title, content, rawInput } = params.toolCall;
+						return { title, content, rawInput };
+					};
+					expect(preview(2)).toEqual(preview(1));
+				}
+				await bridge.finishTurn();
+
+				f.deps.loadMcpConfig.mockResolvedValue([original]);
+				const recovered = testPrompt();
+				await expect(session.prompt(recovered)).resolves.toBe("completed");
+				expect(request).toHaveBeenCalledTimes(3);
+				expect(connector).toHaveBeenCalledTimes(3);
+				expect(createConnection).toHaveBeenCalledTimes(3);
+				expect(createConnection.mock.calls[2][0]).toEqual(
+					createConnection.mock.calls[0][0],
+				);
+				expect(f.models.streamSimple).toHaveBeenCalledTimes(1);
+				expect(recovered.emit).toHaveBeenCalledWith(
+					expect.objectContaining({
+						text: "Recovered with the approved connection.",
+					}),
+				);
+				const visible = JSON.stringify(request.mock.calls);
+				const saved = JSON.stringify(session.snapshot!());
+				for (const text of [visible, saved]) {
+					expect(text).not.toContain("d3r:native:mcp-connection:");
+					expect(text).not.toMatch(
+						/(?:first|second)-(?:http|query|stdio|argv)-credential|inherited-stdio-credential/,
+					);
+				}
+				expect(visible).not.toMatch(/[a-f0-9]{64}/);
+				expect(decisions).toEqual([]);
+			} finally {
+				await f.close();
+				await bridge.dispose();
+			}
+			expect(close).toHaveBeenCalledTimes(1);
+		},
+	);
+
 	it("rolls back earlier MCP connections if a later connection fails, without requesting a model", async () => {
 		const f = nativeFixture();
 		const close = vi.fn(async () => {});
@@ -325,6 +530,129 @@ describe("native real runtime and MCP composition", () => {
 			expect(f.deps.createEmbeddedRuntime).not.toHaveBeenCalled();
 		} finally {
 			await f.close();
+		}
+	});
+});
+
+/** Plan-level cases cover identity fields and instance isolation without transport noise. */
+describe("native MCP connection identities", () => {
+	it.each(["http", "sse"] as const)(
+		"binds %s identities to the original URL, every header, name, transport and cwd",
+		(type) => {
+			const security = createNativeMcpSecurity();
+			const server = { ...httpServer(), type };
+			const context = { home: HOME, cwd: CWD, environment: {} };
+			const [original] = security.plan([server], [], context);
+			const changed = [
+				{ ...server, name: "renamed" },
+				{
+					...server,
+					type: type === "http" ? ("sse" as const) : ("http" as const),
+				},
+				{ ...server, url: server.url.replace("read-only", "admin") },
+				{ ...server, url: server.url.replace("first-query", "second-query") },
+				{
+					...server,
+					headers: [
+						{ name: "Authorization", value: "Bearer second-http-credential" },
+					],
+				},
+				{
+					...server,
+					headers: [...server.headers, { name: "X-Tenant", value: "other" }],
+				},
+			].map(
+				(value) => security.plan([value], [], context)[0].permissionScope.id,
+			);
+			changed.push(
+				security.plan([server], [], { ...context, cwd: `${CWD}-other` })[0]
+					.permissionScope.id,
+			);
+			expect(changed).not.toContain(original.permissionScope.id);
+			expect(new Set(changed).size).toBe(changed.length);
+			expect(
+				security.plan([structuredClone(server)], [], context)[0]
+					.permissionScope,
+			).toEqual(original.permissionScope);
+		},
+	);
+
+	it("binds stdio identities to command, ordered argv and effective environment after overrides", () => {
+		const security = createNativeMcpSecurity();
+		const server = stdioServer();
+		const context = {
+			home: HOME,
+			cwd: CWD,
+			environment: {
+				PATH: "original-path",
+				API_KEY: "overridden-host-credential",
+				SESSION_TOKEN: "first-host-credential",
+			},
+		};
+		const [original] = security.plan([server], [], context);
+		expect(original.server).toMatchObject({
+			env: expect.arrayContaining([
+				{ name: "PATH", value: "original-path" },
+				{ name: "API_KEY", value: "first-stdio-credential" },
+				{ name: "SESSION_TOKEN", value: "first-host-credential" },
+			]),
+		});
+		const changed = [
+			{ ...server, name: "renamed" },
+			{ ...server, command: "different-command" },
+			{ ...server, args: server.args.toReversed() },
+			{ ...server, args: ["--token", "second-argv-credential"] },
+			{
+				...server,
+				env: [{ name: "API_KEY", value: "second-stdio-credential" }],
+			},
+		].map((value) => security.plan([value], [], context)[0].permissionScope.id);
+		for (const environment of [
+			{ ...context.environment, PATH: "different-path" },
+			{ ...context.environment, SESSION_TOKEN: "second-host-credential" },
+		]) {
+			changed.push(
+				security.plan([server], [], { ...context, environment })[0]
+					.permissionScope.id,
+			);
+		}
+		changed.push(
+			security.plan([server], [], { ...context, cwd: `${CWD}-other` })[0]
+				.permissionScope.id,
+		);
+		expect(changed).not.toContain(original.permissionScope.id);
+		expect(new Set(changed).size).toBe(changed.length);
+		expect(
+			security.plan([server], [], {
+				...context,
+				environment: {
+					...context.environment,
+					API_KEY: "different-but-overridden",
+				},
+			})[0].permissionScope,
+		).toEqual(original.permissionScope);
+	});
+
+	it("keeps identical plans stable only in their owning root and leaves display summaries separate", () => {
+		const security = createNativeMcpSecurity();
+		const context = { home: HOME, cwd: CWD, environment: {} };
+		for (const server of [httpServer(), stdioServer()]) {
+			const [original] = security.plan([server], [], context);
+			const [repeated] = security.plan([structuredClone(server)], [], context);
+			const [otherRoot] = createNativeMcpSecurity().plan([server], [], context);
+			expect(original.permissionScope).toEqual({
+				id: expect.stringMatching(/^d3r:native:mcp-connection:[a-f0-9]{64}$/),
+				label: "this MCP connection configuration",
+			});
+			expect(repeated.permissionScope).toEqual(original.permissionScope);
+			expect(otherRoot.permissionScope.id).not.toBe(
+				original.permissionScope.id,
+			);
+			expect(otherRoot.summary).toEqual(original.summary);
+			expect(otherRoot.title).toBe(original.title);
+			expect(JSON.stringify([original.title, original.summary])).not.toMatch(
+				/[a-f0-9]{64}|first-(?:http|query|stdio|argv)-credential/,
+			);
 		}
 	});
 });
