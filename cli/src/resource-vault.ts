@@ -1,7 +1,8 @@
 /* oxlint-disable no-await-in-loop -- Nearest-first ancestry checks must not skip a hostile candidate. */
 import { constants } from "node:fs";
 import { access, lstat } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { resourceAncestors } from "./resource-ancestors.ts";
 import { withResourceDeadline } from "./resource-io.ts";
 import {
 	checkedWorkspaceRoot,
@@ -10,9 +11,6 @@ import {
 	ResourceAccessError,
 } from "./resource-paths.ts";
 
-/** A finite ancestry budget also bounds validation of untrusted checkpoint paths. */
-const MAX_VAULT_ANCESTORS = 256;
-
 /** Candidates are exact lexical ancestors, never aliases, siblings, or descendants. */
 const vaultAncestors = (cwd: string): string[] => {
 	if (!isAbsolute(cwd) || cwd.includes("\0") || resolve(cwd) !== cwd) {
@@ -20,19 +18,10 @@ const vaultAncestors = (cwd: string): string[] => {
 			"Vault discovery requires a canonical workspace path",
 		);
 	}
-	const ancestors: string[] = [];
-	let cursor = cwd;
-	for (;;) {
-		if (ancestors.length >= MAX_VAULT_ANCESTORS) {
-			throw new ResourceAccessError("Vault discovery ancestry limit exceeded");
-		}
-		ancestors.push(cursor);
-		const parent = dirname(cursor);
-		if (parent === cursor) {
-			return ancestors;
-		}
-		cursor = parent;
-	}
+	return resourceAncestors(
+		cwd,
+		new ResourceAccessError("Vault discovery ancestry limit exceeded"),
+	);
 };
 
 /** Structural checkpoint validation grants no access and performs no filesystem IO. */

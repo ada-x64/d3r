@@ -32,6 +32,8 @@ thin imperative shell.
 Headline principles (one phrase each):
 
 - `DOD-PRIORITY-ORDER` -- data-safety > clarity > anti-pessimization.
+- `DOD-MINIMUM-ABSTRACTIONS` -- KISS: simple is not easy; prefer less code and
+  fewer concepts without sacrificing safety or readability.
 - `DOD-LAYERED-SHELL-CORE` -- imperative shell (`cli/`, `adapters/pi/`) wraps a
   pure functional core (`core/`, `tools/`).
 - `DOD-NO-MUTABLE-STATE` -- no module-level `let`, no mutable singletons; inject
@@ -44,7 +46,8 @@ Headline principles (one phrase each):
   wrapper classes around it.
 
 See `docs/data-oriented-design.md` for the full list of `DOD-` codes and the
-review-citable IDs.
+review-citable IDs. One-shot CLI invocations and persistent ACP sessions have
+different cost profiles; benchmark the relevant workload before optimizing.
 
 ## Code comments
 

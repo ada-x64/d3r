@@ -75,14 +75,14 @@ carries it from there.
 ## DOD-ZOD-OPTIONAL-ACCEPTED
 
 `z.object({ x: z.string().optional() })` infers `{ x?: string }` (property may
-be absent), which is the shape V8 likes least when an object is mutated through
-hidden-class transitions in a long-running process. d3r runs as a short-lived
-CLI where startup and JIT warmup dominate, so this cost is invisible in
-practice. Do **not** introduce `.transform(o => ({ x: o.x ?? undefined }))`,
+be absent). Mutating objects through hidden-class transitions can cost more in
+long-running processes. For one-shot CLI invocations, startup and JIT warmup can
+dominate; persistent ACP sessions need their own workload measurements. Neither
+justifies speculative `.transform(o => ({ x: o.x ?? undefined }))`,
 `.default(undefined)`, or other force-initialization scaffolding to "fix" the
-shape. The trade-off is documented here so contributors know it is a knowingly
-accepted cost, not an oversight; if a future workload changes the answer, that
-will amend this principle, not show up as a one-off workaround in code.
+shape. Optional properties remain an accepted trade-off. Benchmark the actual
+workload before optimizing; measured evidence that changes this trade-off should
+amend this principle, not prompt a one-off workaround.
 
 ## DOD-AOS-DEFAULT
 
@@ -220,12 +220,12 @@ vocabulary they have not earned.
 ## DOD-DRY-IS-LOAD-BEARING
 
 DRY is positively load-bearing for this codebase, not merely tolerated. Removing
-duplication is worth a real cost in code volume, an extra indirection, or a
-small runtime hit, because d3r is one-off-task-shaped (CLI invocations) and has
-no hot path in the sense that "don't DRY in hot paths" arguments require. The
-general rejection of DRY-as-anti-pattern that some performance-oriented writing
-trades in does not bind here. Any anti-DRY argument that wants to apply must
-show a specific hot path and a measured cost; absent that, DRY wins.
+duplication can justify extra code, indirection, or a small runtime hit when it
+makes behavior easier to maintain. One-shot CLI invocations and persistent ACP
+sessions have different cost profiles; neither is proof that a path is cold or
+hot. An anti-DRY performance argument must identify a specific hot path and
+benchmark its cost in the actual workload. Absent that evidence, prefer shared
+behavior, subject to DOD-MINIMUM-ABSTRACTIONS and the safety/clarity priorities.
 
 ## DOD-COVER-TYPE-OPTIONAL
 
@@ -254,11 +254,12 @@ The V8 + Node substrate is treated as an anti-pessimization guardrail, not as an
 optimization lever. That means: don't write code that forces megamorphic inline
 caches or `HOLEY_ELEMENTS` arrays for no reason (monomorphic call sites, packed
 homogeneous arrays, stable hidden classes are the defaults). It does **not**
-mean: claim wall-clock wins from V8-shape changes. d3r is a short-lived CLI;
-startup and JIT warmup dominate hot-path IC behavior. No principle here promises
-faster execution from substrate-shape changes; the rationale for a guardrail is
-"this would be actively bad if we ignored it", not "this will make the program
-faster".
+mean: claim wall-clock wins from V8-shape changes. Startup and JIT warmup can
+dominate one-shot CLI invocations; persistent ACP sessions can expose repeated
+hot paths and accumulated allocation costs. Benchmark the relevant workload
+before optimizing either. No principle here promises faster execution from
+substrate-shape changes, and data-safety and clarity still outrank substrate
+preferences.
 
 ## DOD-COST-AND-BENEFIT
 
@@ -283,6 +284,9 @@ itself yet.
 
 ## DOD-MINIMUM-ABSTRACTIONS
 
+KISS (keep it simple) is the golden rule: simple is not the same as easy. Prefer
+less code and fewer concepts when they preserve safety and make behavior easier
+to read; a quick abstraction or a shorter but cryptic expression is not simpler.
 Introduce an abstraction only when nothing simpler will do. Zod offers
 everything; class hierarchies are easy to write; effect systems and state
 machines are available off the shelf. The bar is "excellent for this specific

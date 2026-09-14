@@ -15,6 +15,7 @@ import {
 	workspacePath,
 	type WorkspaceAccess,
 } from "./resource-paths.ts";
+import { resourceAncestors } from "./resource-ancestors.ts";
 import { withResourceDeadline } from "./resource-io.ts";
 import { discoverVaultRoot } from "./resource-vault.ts";
 export { loadMcpConfig } from "./resource-mcp.ts";
@@ -95,7 +96,6 @@ export const resolveWorkspaceResource = async (
 const RESOURCE_LIMITS = {
 	entries: 5000,
 	depth: 20,
-	ancestors: 256,
 	bytes: 8_388_608,
 	aliases: 50,
 };
@@ -125,19 +125,10 @@ const installedCorePackage = (): string =>
 
 /** Instruction scope follows directory ancestry, not repository or vault boundaries. */
 const instructionRoots = (home: string, cwd: string): string[] => {
-	const ancestors: string[] = [];
-	let cursor = resolve(cwd);
-	for (;;) {
-		if (ancestors.length >= RESOURCE_LIMITS.ancestors) {
-			throw new Error("Instruction discovery ancestry limit exceeded");
-		}
-		ancestors.push(cursor);
-		const parent = dirname(cursor);
-		if (parent === cursor) {
-			break;
-		}
-		cursor = parent;
-	}
+	const ancestors = resourceAncestors(
+		resolve(cwd),
+		new Error("Instruction discovery ancestry limit exceeded"),
+	);
 	const global = resolve(home);
 	return [
 		...(ancestors.includes(global) ? [] : [global]),
