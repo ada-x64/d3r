@@ -305,7 +305,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(result(implemented, id), id).toMatchObject({ isError: true });
 		}
 		expect(resultText(implemented, "stale-workspace-edit")).toBe(
-			"Tool execution failed; effects may have occurred. Do not automatically retry.",
+			"Tool execution failed. Check current state before retrying changes. This error is not itself a permission denial.",
 		);
 		expect(snapshot(implemented, "fresh-queue")).not.toBe(
 			snapshot(implemented, "before-external"),

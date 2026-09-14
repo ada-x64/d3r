@@ -394,7 +394,7 @@ export const createLazyNativeSession = ({
 					models,
 					model,
 					modelChoices: available,
-					systemPrompt,
+					systemPrompt: `${systemPrompt}\n\nSession workspace: ${input.cwd}\nFor run_command, omit cwd to use this workspace. The vault location is separate; its parent is not implicitly an approved command directory.`,
 					budgetLabel,
 					maxTurns,
 					maxTotalTurns,

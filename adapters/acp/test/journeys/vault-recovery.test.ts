@@ -147,7 +147,7 @@ describe("native ACP shipped-workflow journeys", () => {
 					isError: true,
 				});
 				expect(journeyResultText(initial, "publish-log")).toBe(
-					"Tool execution failed; effects may have occurred. Do not automatically retry.",
+					"Tool execution failed. Check current state before retrying changes. This error is not itself a permission denial.",
 				);
 			}
 			expect(

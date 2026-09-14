@@ -597,7 +597,7 @@ describe("native ACP shipped-workflow journeys", () => {
 						isError: true,
 					});
 					expect(resultText(context, "publish-queue")).toBe(
-						"Tool execution failed; effects may have occurred. Do not automatically retry.",
+						"Tool execution failed. Check current state before retrying changes. This error is not itself a permission denial.",
 					);
 					await expect(readdir(resolve(j.cwd, "queue.txt"))).resolves.toEqual(
 						[],

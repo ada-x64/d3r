@@ -130,13 +130,13 @@ export const describeWorkflowState = (
 			? "[Role evidence truncated for this status report.]"
 			: "",
 		resumable
-			? "The unfinished roles have retained conversations and settled tool results. The user's answer, correction, or explicit continue can resume only those roles; completed roles are not replayed. Inspect current state before more effects."
+			? "The unfinished roles have retained conversations and settled tool results. The user's answer, correction, or explicit continue can resume only those roles; completed roles are not replayed. Use the latest instructions and inspect existing changes when needed."
 			: "",
 		engine.status === "interrupted" && !resumable
-			? "Safe role continuation is unavailable. Do not resume or replay effects. Discuss recovery with the user; abandon only at their direction."
+			? "This workflow lacks a resumable checkpoint. Discuss its recovery rather than rerunning completed steps. This does not disable unrelated inspection or explicitly requested operational commands."
 			: "",
 		["waiting", "blocked", "interrupted"].includes(engine.status)
-			? "Return control to the user. Do not answer this checkpoint, restart, or abandon on their behalf."
+			? "Return control to the user for workflow decisions. Do not advance, restart, or abandon the workflow without their direction. A paused workflow does not disable explicitly requested operational commands."
 			: "",
 	]
 		.filter(Boolean)

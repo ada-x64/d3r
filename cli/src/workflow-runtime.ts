@@ -452,7 +452,7 @@ export const createWorkflowRuntime = (
 						? [
 								{
 									type: "text" as const,
-									text: "Continue this unfinished role using the retained conversation and tool results plus the user's latest answer or correction. This is a new role invocation, not a replay. Inspect current state before further changes; do not repeat earlier commands or mutations automatically. Previous reports do not complete this invocation: call d3r_report once after addressing the correction.",
+									text: "Continue this unfinished role using the retained conversation and tool results plus the user's latest answer or correction. This is a new role invocation, not a replay. Preserve completed work and use the latest instructions. Correct invalid tool arguments and retry as appropriate; inspect current state before repeating a change whose outcome is uncertain. Previous reports do not complete this invocation: call d3r_report once after addressing the correction.",
 								},
 							]
 						: []),

@@ -561,7 +561,10 @@ describe("workspace runtime tools", () => {
 		).rejects.toThrow("cancelled");
 		await expect(
 			execute("run_command", { command: process.execPath }, ctx),
-		).rejects.toThrow("cancelled");
+		).resolves.toMatchObject({
+			isError: true,
+			text: "Command cancelled before execution; no process was started.",
+		});
 		expect(runCommand).not.toHaveBeenCalled();
 		await expect(readFile(join(cwd, "new.txt"))).rejects.toMatchObject({
 			code: "ENOENT",
@@ -785,6 +788,43 @@ describe("workspace runtime tools", () => {
 		});
 		expect(tool.schema.parse(input)).toEqual(input);
 		expect(tool.schema.parse(tool.schema.parse(input))).toEqual(input);
+	});
+
+	it("reports cwd preflight failures without executing and permits a corrected retry", async () => {
+		const notDirectory = join(cwd, "not-a-directory");
+		await writeFile(notDirectory, "fixture");
+		const runCommand = vi.fn(async () => ({ output: "ready", exitCode: 0 }));
+		const ctx = {
+			...context,
+			client: { requestPermission: vi.fn(), runCommand },
+		};
+		const results = await Promise.all(
+			[base, join(cwd, "missing"), notDirectory].map((path) =>
+				execute(
+					"run_command",
+					{ command: "npx", args: ["difit", "--help"], cwd: path },
+					ctx,
+				),
+			),
+		);
+		for (const result of results) {
+			expect(result.isError).toBe(true);
+			expect(result.text).toContain("Command was not started");
+			expect(result.text).toContain("Omit cwd");
+			expect(result.text).toContain("correct it and retry");
+			expect(result.text).not.toContain("effects may have occurred");
+		}
+		expect(runCommand).not.toHaveBeenCalled();
+		const corrected = await execute(
+			"run_command",
+			{ command: "npx", args: ["difit", "--help"] },
+			ctx,
+		);
+		expect(corrected.isError).toBe(false);
+		expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+			{ command: "npx", args: ["difit", "--help"], cwd },
+			expect.any(AbortSignal),
+		);
 	});
 
 	it("runs a real subprocess with literal argv and combines stderr", async () => {

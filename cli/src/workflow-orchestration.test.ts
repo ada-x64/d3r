@@ -1699,13 +1699,13 @@ describe("persistent workflow orchestration", () => {
 			const before = resumed.saved().engine;
 			await resumed.prompt("Continue safely", async ({ run }) => {
 				const status = await run({ action: "status" });
-				expect(status.text).toMatch(/safe role continuation is unavailable/i);
+				expect(status.text).toMatch(/workflow lacks a resumable checkpoint/i);
 				const result = await run({
 					action: "continue",
 					instructions: "Resume",
 				});
 				expect(result.isError).toBe(true);
-				expect(result.text).toMatch(/do not resume or replay effects/i);
+				expect(result.text).toMatch(/rather than rerunning completed steps/i);
 			});
 			expect(resumed.createAgent).not.toHaveBeenCalled();
 			expect(resumed.saved().engine).toEqual(before);

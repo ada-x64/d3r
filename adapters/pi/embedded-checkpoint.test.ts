@@ -117,7 +117,7 @@ describe("embedded checkpoint boundary", () => {
 					{
 						type: "text",
 						text: expect.stringContaining(
-							"Do not automatically repeat effects",
+							"Check current state before deciding whether to retry",
 						),
 					},
 				],

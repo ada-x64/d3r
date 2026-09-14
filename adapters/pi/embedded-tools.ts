@@ -207,8 +207,8 @@ export const createToolBridge = (
 			} catch {
 				call.result = {
 					text: activeSignal.aborted
-						? "Tool execution cancelled; effects may have occurred. Do not automatically retry."
-						: "Tool execution failed; effects may have occurred. Do not automatically retry.",
+						? "Tool execution cancelled. Check current state before retrying changes."
+						: "Tool execution failed. Check current state before retrying changes. This error is not itself a permission denial.",
 					isError: true,
 				};
 			}

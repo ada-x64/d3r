@@ -256,7 +256,7 @@ export const closeToolBatches = (
 				content: [
 					{
 						type: "text",
-						text: "Tool call interrupted; no completed result is available. Do not automatically repeat effects.",
+						text: "Tool call interrupted; no completed result is available. Check current state before deciding whether to retry.",
 					},
 				],
 				isError: true,

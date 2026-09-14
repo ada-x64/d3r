@@ -620,6 +620,20 @@ masks recognized credentials. This formatting is display-only: execution still
 uses the original executable, argv, cwd, and timeout, including any
 platform/client launch wrappers.
 
+Command working directories are separate from the vault location. Omit `cwd` to
+use the session workspace; do not infer a workspace from the vault's parent.
+Directory preflight failures report that no process started, so the agent can
+correct the input and retry rather than treating the error as disabled command
+permissions. Generic tool failures are not blanket retry prohibitions: inspect
+current state before repeating changes with uncertain results, and honor actual
+permission denials.
+
+A paused workflow does not disable the router's command tool. Explicitly
+requested operational work, such as checking ports or restarting a local review
+server, can be handled directly without abandoning or advancing a reviewer task.
+Workflow checkpoint and incomplete-journal protections still govern workflow
+resumption, not every diagnostic command.
+
 An approval-gated tool waits for its permission response before executing. This
 does not freeze the whole session: independent parallel workflow roles may
 continue while another role awaits approval, and already-streamed text may

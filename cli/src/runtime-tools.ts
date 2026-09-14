@@ -649,18 +649,30 @@ export const createWorkspaceTools = ({
 		{
 			name: "run_command",
 			description:
-				"APPROVAL REQUIRED. Execute a program with literal argv, or an explicitly requested shell. NOT A SANDBOX: commands can access files/network outside workspace roots. Execution has a bounded timeout and captured output cap; no automatic execution.",
+				"Execute a program with literal argv, or an explicitly requested shell, under the client's command authorization policy. Omit cwd to use the session workspace; a supplied cwd must be an existing approved directory, not an inferred parent of the vault. NOT A SANDBOX: commands can access files/network outside workspace roots. Execution has a bounded timeout and captured output cap.",
 			kind: "execute",
 			schema: scopedCommandSchema,
 			permission: "ask",
 			execute: async (args, context) => {
 				const input = scopedCommandSchema.parse(args);
-				const path = await scopedPath(input.cwd, context);
-				const info = await lstat(path);
-				if (!info.isDirectory()) {
-					throw new Error("Command cwd must be a directory");
+				let path = input.cwd;
+				try {
+					path = await scopedPath(input.cwd, context);
+					const info = await lstat(path);
+					if (!info.isDirectory()) {
+						throw new Error("Command cwd must be a directory");
+					}
+					context.signal.throwIfAborted();
+				} catch {
+					return {
+						...textResult(
+							context.signal.aborted
+								? "Command cancelled before execution; no process was started."
+								: "Command was not started: cwd must be an accessible directory within the approved workspace roots. Omit cwd to use the session workspace, or correct it and retry. This is not a command approval denial.",
+						),
+						isError: true,
+					};
 				}
-				context.signal.throwIfAborted();
 				const command: RuntimeCommand = {
 					command: input.command,
 					args: input.args,

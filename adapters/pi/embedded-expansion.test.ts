@@ -842,7 +842,9 @@ describe("embedded runtime expansion", () => {
 		expect(
 			saved.messages.filter((entry) => entry.role === "toolResult"),
 		).toHaveLength(count);
-		expect(JSON.stringify(saved)).toContain("effects may have occurred");
+		expect(JSON.stringify(saved)).toContain(
+			"Check current state before retrying changes",
+		);
 		const other = f.createSession();
 		other.restore?.(saved);
 		f.faux.setResponses([fauxAssistantMessage("resumed")]);
@@ -970,7 +972,7 @@ describe("embedded runtime expansion", () => {
 			"first effect completed",
 		);
 		expect(JSON.stringify(checkpoint(f.session))).toContain(
-			"effects may have occurred",
+			"Check current state before retrying changes",
 		);
 	});
 
