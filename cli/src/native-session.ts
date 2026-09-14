@@ -13,7 +13,7 @@ import { type NativeDependencies } from "./native.ts";
 import {
 	nativeModelConfig,
 	nativeModelKey,
-	nativeThoughtLevels,
+	defaultThinkingLevel,
 	SELECT_MODEL,
 	validateSelection,
 	type NativeModel,
@@ -201,7 +201,7 @@ export const createLazyNativeSession = ({
 		}
 		return selection;
 	};
-	/** Apply a saved pair on the unpublished runtime, bridging incompatible thought-level menus first. */
+	/** Restore the selected model before applying its saved capability setting. */
 	const restoreSelection = async (
 		runtime: RuntimeSession,
 		wanted: NativeSelection,
@@ -209,23 +209,6 @@ export const createLazyNativeSession = ({
 		const previous = currentSelection(runtime);
 		validateSelection(available, wanted);
 		if (previous.model !== wanted.model) {
-			const before = available.find(
-				(model) => nativeModelKey(model) === previous.model,
-			);
-			const after = available.find(
-				(model) => nativeModelKey(model) === wanted.model,
-			);
-			const bridge = nativeThoughtLevels(before).find((level) =>
-				nativeThoughtLevels(after).includes(level),
-			);
-			if (bridge === undefined) {
-				throw new Error(
-					"Saved and selected models have no compatible thought level for transition",
-				);
-			}
-			if (previous.thinking !== bridge) {
-				await runtime.setConfig!("thought_level", bridge);
-			}
 			await runtime.setConfig!("model", wanted.model!);
 		}
 		if (currentSelection(runtime).thinking !== wanted.thinking) {
@@ -566,9 +549,16 @@ export const createLazyNativeSession = ({
 					throw new Error("Unknown native configuration option");
 				}
 				const selectedModel = value === SELECT_MODEL ? null : value;
+				const model = id === "model" ? selectedModel : saved.selection.model;
+				const thinking =
+					model === saved.selection.model
+						? saved.selection.thinking
+						: defaultThinkingLevel(
+								available.find((entry) => nativeModelKey(entry) === model),
+							);
 				const selection = {
-					model: id === "model" ? selectedModel : saved.selection.model,
-					thinking: id === "thought_level" ? value : saved.selection.thinking,
+					model,
+					thinking: id === "thought_level" ? value : thinking,
 				};
 				validateSelection(available, selection);
 				if (saved.inner && !selection.model) {

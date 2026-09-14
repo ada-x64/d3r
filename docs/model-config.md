@@ -36,7 +36,8 @@ Global defaults live at `~/.agents/models.json`. Workspace overrides live at
   and must be non-empty; duplicate IDs in one file are errors.
 - `thinkingLevel` is optional: `off`, `minimal`, `low`, `medium`, `high`,
   `xhigh`, or `max`. The runtime must still validate support against the
-  selected model.
+  selected model. When omitted, use `off` if supported, otherwise that model's
+  lowest supported thinking level. An explicit level is never silently changed.
 - `defaultPreset` is optional. A string selects an effective preset ID; `null`
   explicitly clears an inherited selection. Without a selection, the loader does
   not silently choose the first preset or a provider default.

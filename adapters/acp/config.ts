@@ -64,11 +64,17 @@ export const validateRestoreConfig = (
 export const configOptions = (
 	config: readonly RuntimeConfigOption[],
 ): SessionConfigOption[] =>
-	config.map((option) => ({
-		id: option.id,
-		name: option.name,
-		category: option.category,
-		type: "select",
-		currentValue: option.value,
-		options: option.options.map((value) => ({ ...value })),
-	}));
+	config
+		// Keep fixed values in persisted runtime metadata, not as meaningless UI controls.
+		.filter(
+			(option) =>
+				option.category !== "thought_level" || option.options.length > 1,
+		)
+		.map((option) => ({
+			id: option.id,
+			name: option.name,
+			category: option.category,
+			type: "select",
+			currentValue: option.value,
+			options: option.options.map((value) => ({ ...value })),
+		}));

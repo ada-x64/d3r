@@ -27,6 +27,13 @@ import { runEmbeddedTurn } from "./embedded-turn.ts";
 
 export { type ResolveResource } from "./embedded-content.ts";
 export { parseCheckpoint as parseEmbeddedCheckpoint } from "./embedded-checkpoint.ts";
+export {
+	configOptions as modelConfigOptions,
+	defaultThinkingLevel,
+	modelKey,
+	SELECT_MODEL,
+	thinkingLevels,
+} from "./embedded-config.ts";
 
 /** Explicit capabilities only; the adapter never discovers providers, auth, or tools. */
 export interface EmbeddedRuntimeOptions {
@@ -68,7 +75,7 @@ export const createEmbeddedRuntime = (
 	}
 	const initial = selectModel(
 		choices,
-		{ key: modelKey(options.model), thinking: options.thinkingLevel ?? "off" },
+		{ key: modelKey(options.model), thinking: options.thinkingLevel },
 		[],
 	);
 	return (input) => {
@@ -146,12 +153,15 @@ export const createEmbeddedRuntime = (
 				if (id !== "model" && id !== "thought_level") {
 					throw new Error("Unknown runtime configuration option");
 				}
+				const changingModel =
+					id === "model" && value !== modelKey(agent.state.model);
+				const thinking =
+					id === "thought_level" ? value : agent.state.thinkingLevel;
 				const selection = selectModel(
 					choices,
 					{
 						key: id === "model" ? value : modelKey(agent.state.model),
-						thinking:
-							id === "thought_level" ? value : agent.state.thinkingLevel,
+						thinking: changingModel ? undefined : thinking,
 					},
 					agent.state.messages,
 				);

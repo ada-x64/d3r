@@ -76,11 +76,20 @@ contain project content; treat them as private.
 
 ## Models and resources
 
-Select a model and thought level with Zed's selectors. Without an explicit
-default, D3R shows a selection prompt rather than silently choosing a model.
+Select a model first. Zed shows a thought-level selector only when that model
+has more than one supported level; there is no universal thinking control for an
+unselected or non-reasoning model. Changing models initializes the new model's
+supported default (`off` when available, otherwise its lowest supported level),
+rather than carrying an incompatible setting across models. Choose a level after
+selecting the model. Reselecting the same model preserves its setting; session
+reload preserves the saved model/level pair. Explicitly unsupported settings are
+rejected, not silently clamped.
+
+Without an explicit default, D3R shows a model-selection prompt.
 [Model configuration](./model-config.md) describes global/workspace presets;
 `d3r acp --preset careful` selects a named preset. Selection is checked against
-the authenticated model catalog, including supported thought levels.
+the authenticated model catalog. Fixed capability values remain in internal
+checkpoint metadata for compatibility, but are not displayed as selectors.
 
 D3R loads inert resources from global `~/.agents/` and workspace `.agents/`:
 

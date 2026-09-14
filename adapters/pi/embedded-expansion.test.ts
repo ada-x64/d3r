@@ -436,9 +436,7 @@ describe("embedded runtime expansion", () => {
 		).toEqual(getSupportedThinkingLevels(f.faux.models[0]));
 		await f.session.setConfig?.("thought_level", "medium");
 		const previous = f.session.getConfig?.();
-		await expect(
-			f.session.setConfig?.("model", plainKey(f.session)),
-		).rejects.toThrow("Unsupported thought");
+
 		await expect(f.session.setConfig?.("model", "unknown")).rejects.toThrow(
 			"Unknown model",
 		);
@@ -449,7 +447,6 @@ describe("embedded runtime expansion", () => {
 			"Unknown runtime configuration",
 		);
 		expect(f.session.getConfig?.()).toEqual(previous);
-		await f.session.setConfig?.("thought_level", "off");
 		await f.session.setConfig?.("model", plainKey(f.session));
 		expect(f.session.getConfig?.()[1].options).toEqual([
 			{ value: "off", name: "off" },

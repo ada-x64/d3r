@@ -9,6 +9,23 @@ import {
 } from "@earendil-works/pi-ai";
 import { type RuntimeConfigOption } from "@d3r/core/runtime";
 
+/** The unselected state is metadata only, never an executable model. */
+export const SELECT_MODEL = "select-model";
+
+/** Catalog capabilities are the sole source of thinking levels. */
+export const thinkingLevels = (model?: Model<Api>): readonly ThinkingLevel[] =>
+	model ? getSupportedThinkingLevels(model) : ["off"];
+
+/** Prefer disabled reasoning when supported; otherwise use the model's lowest supported level. */
+export const defaultThinkingLevel = (model?: Model<Api>): ThinkingLevel => {
+	const levels = thinkingLevels(model);
+	const level = levels.includes("off") ? "off" : levels[0];
+	if (!level) {
+		throw new Error("Selected model has no supported thought levels");
+	}
+	return level;
+};
+
 /** Only identity is exposed or persisted, never provider configuration or headers. */
 export const modelKey = (model: {
 	readonly provider: string;
@@ -47,15 +64,16 @@ export const assertImageSupport = (
 /** Selection validation is atomic and does not silently clamp the caller's intent. */
 export const selectModel = (
 	choices: readonly Model<Api>[],
-	selection: { readonly key: string; readonly thinking: string },
+	selection: { readonly key: string; readonly thinking?: string },
 	messages: readonly AgentMessage[],
 ): { readonly model: Model<Api>; readonly thinkingLevel: ThinkingLevel } => {
 	const model = choices.find((choice) => modelKey(choice) === selection.key);
 	if (!model) {
 		throw new Error("Unknown model selection");
 	}
-	const thinkingLevel = getSupportedThinkingLevels(model).find(
-		(level) => level === selection.thinking,
+	const requested = selection.thinking ?? defaultThinkingLevel(model);
+	const thinkingLevel = thinkingLevels(model).find(
+		(level) => level === requested,
 	);
 	if (!thinkingLevel) {
 		throw new Error("Unsupported thought level for selected model");
@@ -67,25 +85,32 @@ export const selectModel = (
 /** Fresh metadata arrays prevent callers from mutating session configuration. */
 export const configOptions = (
 	choices: readonly Model<Api>[],
-	model: Model<Api>,
-	thinkingLevel: ThinkingLevel,
-): readonly RuntimeConfigOption[] => [
+	model: Model<Api> | undefined,
+	thinkingLevel: string,
+): RuntimeConfigOption[] => [
 	{
 		id: "model",
 		name: "Model",
 		category: "model",
-		value: modelKey(model),
-		options: choices.map((choice) => ({
-			value: modelKey(choice),
-			name: `${choice.name} (${choice.provider})`,
-		})),
+		value: model ? modelKey(model) : SELECT_MODEL,
+		options: [
+			...(model
+				? []
+				: [
+						{ value: SELECT_MODEL, name: "Select a model in Zed (no default)" },
+					]),
+			...choices.map((choice) => ({
+				value: modelKey(choice),
+				name: `${choice.name} (${choice.provider})`,
+			})),
+		],
 	},
 	{
 		id: "thought_level",
 		name: "Thought level",
 		category: "thought_level",
 		value: thinkingLevel,
-		options: getSupportedThinkingLevels(model).map((level) => ({
+		options: thinkingLevels(model).map((level) => ({
 			value: level,
 			name: level,
 		})),

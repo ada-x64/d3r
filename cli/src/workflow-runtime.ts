@@ -211,7 +211,7 @@ const NativeSelection = z
 	})
 	.passthrough();
 
-/** Generic runtimes validate each selector; model changes may require a neutral thought level. */
+/** Select the model first; its runtime owns dependent capability defaults and validation. */
 const applySelection = async (
 	routing: RuntimeSession,
 	desired: readonly RuntimeConfigOption[],
@@ -235,10 +235,7 @@ const applySelection = async (
 	};
 	const model = desired.find(({ id }) => id === "model");
 	const thought = desired.find(({ id }) => id === "thought_level");
-	if (model && current(model.id)?.value !== model.value) {
-		if (thought) {
-			await select(thought.id, "off");
-		}
+	if (model) {
 		await select(model.id, model.value);
 	}
 	if (thought) {

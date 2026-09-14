@@ -44,6 +44,11 @@ it.each(["unavailable model", "changed roots"] as const)(
 				configId: "model",
 				value: nativeModelKey(MODEL_A),
 			});
+			await f.peer.agent.request("session/set_config_option", {
+				sessionId,
+				configId: "thought_level",
+				value: "medium",
+			});
 			await f.prompt(sessionId);
 			await f.peer.agent.request("session/close", { sessionId });
 			const file = join(dir, `${sessionId}.json`);

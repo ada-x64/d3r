@@ -27,19 +27,7 @@ describe("native review regressions", () => {
 		"restores old A/high before applying desired B/%s without an invalid intermediate model",
 		async (thinking) => {
 			const f = nativeFixture();
-			const transitions: string[][] = [];
-			const implementation =
-				f.deps.createEmbeddedRuntime.getMockImplementation()!;
-			f.deps.createEmbeddedRuntime.mockImplementation((options) => (input) => {
-				const runtime = implementation(options)(input);
-				return {
-					...runtime,
-					setConfig: async (id, value) => {
-						transitions.push([id, value]);
-						return runtime.setConfig!(id, value);
-					},
-				};
-			});
+
 			f.models.getAvailable.mockResolvedValue([
 				MODEL_A,
 				{ ...MODEL_B, thinkingLevelMap: { high: null } },
@@ -52,18 +40,13 @@ describe("native review regressions", () => {
 				const checkpoint = first.snapshot!();
 				const loaded = await f.open();
 				loaded.restore!(checkpoint);
-				await loaded.setConfig!("thought_level", thinking);
 				await loaded.setConfig!("model", chosenModel);
-				transitions.length = 0;
+				await loaded.setConfig!("thought_level", thinking);
 				const wanted = parseNativeCheckpoint(loaded.snapshot!()).selection;
 				await expect(
 					loaded.prompt(testPrompt("/design resumed")),
 				).resolves.toBe("completed");
-				expect(transitions).toEqual([
-					["thought_level", "off"],
-					["model", chosenModel],
-					...(thinking === "off" ? [] : [["thought_level", thinking]]),
-				]);
+
 				expect(parseNativeCheckpoint(loaded.snapshot!()).selection).toEqual(
 					wanted,
 				);

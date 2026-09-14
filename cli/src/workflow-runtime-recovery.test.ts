@@ -27,7 +27,7 @@ const workflow = Workflow.parse({
 	commands: {},
 	vault: { dirs: [], template_kinds: [] },
 });
-/** Fake routing rejects an incompatible model/thought pair instead of silently clamping it. */
+/** The fake models initialize their own capabilities; explicit unsupported settings still fail. */
 const harness = (native: boolean) => {
 	let model = "A";
 	let thinking = "high";
@@ -69,11 +69,9 @@ const harness = (native: boolean) => {
 			}
 			if (id === "model") {
 				const target = value.slice("test/".length);
-				if (!levels[target].includes(thinking)) {
-					throw new Error("Unsupported model/thought combination");
-				}
 				if (!control.ignoreModel) {
 					model = target;
+					[thinking] = levels[target];
 				}
 			} else {
 				if (control.rejectThought && value === "max") {
@@ -128,7 +126,6 @@ const harness = (native: boolean) => {
 			.filter(({ id }) => id !== "phase")
 			.map(({ value }) => value);
 	const selectB = async () => {
-		await runtime.setConfig!("thought_level", "off");
 		await runtime.setConfig!("model", "test/B");
 		await runtime.setConfig!("thought_level", "max");
 		routing.setConfig.mockClear();
@@ -198,17 +195,15 @@ describe("workflow routing recovery", () => {
 		},
 	);
 	it.each(["restart", "abandon"])(
-		"uses validated off/model/thought order for generic %s",
+		"restores model-specific thinking for generic %s",
 		async (decision) => {
 			const h = harness(false);
 			await h.prompt("original effect");
 			await h.selectB();
 			await h.prompt(decision);
-			expect(h.routing.setConfig.mock.calls).toEqual([
-				["thought_level", "off"],
-				["model", "test/B"],
-				["thought_level", "max"],
-			]);
+			expect(h.routing.snapshot().messages).toEqual(
+				decision === "restart" ? ["original effect"] : [],
+			);
 			expect(h.selection()).toEqual(["test/B", "max"]);
 		},
 	);
@@ -236,7 +231,7 @@ describe("workflow routing recovery", () => {
 		const recovering = h.prompt("abandon");
 		await entered.promise;
 		expect(h.routing.getConfig().map(({ value }) => value)).toEqual([
-			"test/A",
+			"test/B",
 			"off",
 		]);
 		expect(h.selection()).toEqual(["test/B", "max"]);
@@ -248,7 +243,7 @@ describe("workflow routing recovery", () => {
 		await recovering;
 		expect(h.selection()).toEqual(["test/B", "max"]);
 	});
-	it.each(["rejectThought", "hideOff", "ignoreModel"] as const)(
+	it.each(["rejectThought", "ignoreModel"] as const)(
 		"rolls back transcript and latest selectors if generic recovery fails: %s",
 		async (failure) => {
 			const h = harness(false);
@@ -263,14 +258,21 @@ describe("workflow routing recovery", () => {
 			expect(h.selection()).toEqual(["test/B", "max"]);
 			expect(h.routing.prompt).toHaveBeenCalledTimes(1);
 			expect(h.runtime.snapshot!()).toMatchObject({ routingInterrupted: true });
-			if (failure === "hideOff") {
-				expect(h.routing.setConfig).not.toHaveBeenCalled();
-			}
+
 			h.control[failure] = false;
 			await h.prompt("abandon");
 			expect(h.selection()).toEqual(["test/B", "max"]);
 		},
 	);
+	it("restores model-specific thinking without requiring an off capability", async () => {
+		const h = harness(false);
+		await h.prompt("original effect");
+		await h.selectB();
+		h.control.hideOff = true;
+		await h.prompt("abandon");
+		expect(h.selection()).toEqual(["test/B", "max"]);
+		expect(h.routing.snapshot().messages).toEqual([]);
+	});
 	it("preserves thinking-only changes without unnecessary model switches", async () => {
 		const h = harness(false);
 		await h.prompt("original effect");

@@ -1,6 +1,19 @@
-import { type createEmbeddedRuntime } from "@d3r/adapter-pi/embedded";
+import {
+	defaultThinkingLevel,
+	modelConfigOptions,
+	modelKey as nativeModelKey,
+	thinkingLevels as nativeThoughtLevels,
+	type createEmbeddedRuntime,
+} from "@d3r/adapter-pi/embedded";
 import { type RuntimeConfigOption } from "@d3r/core/runtime";
 import { type LoadedModelConfig } from "./model-config.ts";
+
+export {
+	defaultThinkingLevel,
+	modelKey as nativeModelKey,
+	SELECT_MODEL,
+	thinkingLevels as nativeThoughtLevels,
+} from "@d3r/adapter-pi/embedded";
 
 /** Keep provider-specific types behind the adapter's public boundary. */
 export type NativeModel = Parameters<typeof createEmbeddedRuntime>[0]["model"];
@@ -9,13 +22,7 @@ export interface NativeSelection {
 	readonly model: string | null;
 	readonly thinking: string;
 }
-/** The picker sentinel never identifies an executable model. */
-export const SELECT_MODEL = "select-model";
-/** Stable identity shared with the embedded adapter's model picker. */
-export const nativeModelKey = (
-	model: Pick<NativeModel, "provider" | "id">,
-): string =>
-	`${encodeURIComponent(model.provider)}/${encodeURIComponent(model.id)}`;
+
 /** Portable thought levels; extended levels require explicit model support. */
 export const THOUGHT_LEVELS = [
 	"off",
@@ -26,17 +33,7 @@ export const THOUGHT_LEVELS = [
 	"xhigh",
 	"max",
 ] as const;
-/** Menu construction reads catalog metadata only; it never resolves credentials. */
-export const nativeThoughtLevels = (model?: NativeModel): readonly string[] =>
-	!model?.reasoning
-		? ["off"]
-		: THOUGHT_LEVELS.filter((level) => {
-				const mapped = model.thinkingLevelMap?.[level];
-				return (
-					mapped !== null &&
-					(!["xhigh", "max"].includes(level) || mapped !== undefined)
-				);
-			});
+
 /** Reject unavailable identities and unsupported levels without silently substituting a model. */
 export const validateSelection = (
 	models: readonly NativeModel[],
@@ -47,7 +44,7 @@ export const validateSelection = (
 	);
 	if (
 		(selection.model !== null && !model) ||
-		!nativeThoughtLevels(model).includes(selection.thinking)
+		!nativeThoughtLevels(model).some((level) => level === selection.thinking)
 	) {
 		throw new Error(
 			"Unavailable model or unsupported thought level; select a usable model and thought level in Zed",
@@ -72,7 +69,14 @@ export const initialSelection = (
 	}
 	const selection = {
 		model: nativeModelKey({ provider: selected.provider, id: selected.model }),
-		thinking: selected.thinkingLevel ?? "off",
+		thinking:
+			selected.thinkingLevel ??
+			defaultThinkingLevel(
+				models.find(
+					(model) =>
+						model.provider === selected.provider && model.id === selected.model,
+				),
+			),
 	};
 	validateSelection(models, selection);
 	return selection;
@@ -81,29 +85,9 @@ export const initialSelection = (
 export const nativeModelConfig = (
 	models: readonly NativeModel[],
 	selection: NativeSelection,
-): RuntimeConfigOption[] => [
-	{
-		id: "model",
-		name: "Model",
-		category: "model",
-		value: selection.model ?? SELECT_MODEL,
-		options: [
-			...(selection.model === null
-				? [{ value: SELECT_MODEL, name: "Select a model in Zed (no default)" }]
-				: []),
-			...models.map((model) => ({
-				value: nativeModelKey(model),
-				name: `${model.name} (${model.provider})`,
-			})),
-		],
-	},
-	{
-		id: "thought_level",
-		name: "Thought level",
-		category: "thought_level",
-		value: selection.thinking,
-		options: nativeThoughtLevels(
-			models.find((model) => nativeModelKey(model) === selection.model),
-		).map((level) => ({ value: level, name: level })),
-	},
-];
+): RuntimeConfigOption[] =>
+	modelConfigOptions(
+		models,
+		models.find((model) => nativeModelKey(model) === selection.model),
+		selection.thinking,
+	);

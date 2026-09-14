@@ -645,7 +645,7 @@ describe("native dependency composition", () => {
 		expect(child.systemPrompt).toContain("Pinned workspace instructions.");
 		expect(child.systemPrompt).not.toContain("CHANGED");
 		expect(child.model.id).toBe("first");
-		expect(child.thinkingLevel).toBe("high");
+		expect(child.thinkingLevel).toBe("off");
 		expect(parseNativeCheckpoint(loaded.snapshot!()).inner?.orchestrated).toBe(
 			true,
 		);
