@@ -340,6 +340,7 @@ export const parseNativeCheckpoint = (value: unknown): NativeCheckpoint => {
 		!isAncestorVaultRoot(cwd, parsed.resources.vaultRoot) ||
 		parsed.resources.skills.some(
 			(skill) =>
+				!isWithinRoot(join(cwd, ".github", "skills"), skill.path) &&
 				![home, cwd].some((root) =>
 					isWithinRoot(join(root, ".agents", "skills"), skill.path),
 				),

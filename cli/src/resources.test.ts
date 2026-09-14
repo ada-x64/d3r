@@ -203,6 +203,61 @@ describe("native agent resources", () => {
 		]);
 	});
 
+	it("overlays workspace GitHub skills over globals and beneath workspace .agents skills", async () => {
+		const entries = [
+			[home, ".agents", "shared", "global"],
+			[home, ".agents", "github-wins", "global"],
+			[cwd, ".github", "shared", "github"],
+			[cwd, ".github", "github-wins", "github"],
+			[cwd, ".github", "github-only", "github"],
+			[cwd, ".agents", "shared", "workspace"],
+		];
+		await Promise.all(
+			entries.map(([root, directory, name, body]) =>
+				put(
+					join(root, directory, "skills", "nested", name, "SKILL.md"),
+					skill(name, body),
+				),
+			),
+		);
+		await Promise.all([
+			put(
+				join(home, ".github", "skills", "ignored", "SKILL.md"),
+				"not a global skill",
+			),
+			put(
+				join(cwd, ".github", "agents", "invalid.agent.md"),
+				"not a native agent",
+			),
+			put(
+				join(cwd, ".github", "copilot-instructions.md"),
+				"DO NOT LOAD COPILOT INSTRUCTIONS",
+			),
+		]);
+		const result = await load();
+		expect(result.skills.map(({ name, prompt }) => [name, prompt])).toEqual([
+			["github-only", "github"],
+			["github-wins", "github"],
+			["shared", "workspace"],
+		]);
+		expect(result.skills[1].path).toBe(
+			join(cwd, ".github", "skills", "nested", "github-wins", "SKILL.md"),
+		);
+		expect(result.instructions).not.toContain("COPILOT");
+	});
+
+	it("rejects duplicate GitHub skill IDs within the workspace tree", async () => {
+		await Promise.all(
+			["first", "second"].map((folder) =>
+				put(
+					join(cwd, ".github", "skills", folder, "SKILL.md"),
+					skill("same-id", folder),
+				),
+			),
+		);
+		await expect(load()).rejects.toThrow(/duplicate skill ID same-id/);
+	});
+
 	it("discovers an ancestor vault without loading its other agent resources", async () => {
 		const parent = join(base, "parent");
 		const vault = join(parent, ".agents", "vault");
@@ -213,6 +268,10 @@ describe("native agent resources", () => {
 			put(join(parent, ".agents", "agents", "invalid.md"), "invalid agent"),
 			put(
 				join(parent, ".agents", "skills", "invalid", "SKILL.md"),
+				"invalid skill",
+			),
+			put(
+				join(parent, ".github", "skills", "invalid", "SKILL.md"),
 				"invalid skill",
 			),
 			put(join(parent, ".agents", "workflow.yaml"), "invalid workflow"),
@@ -251,24 +310,27 @@ describe("native agent resources", () => {
 		expect(result.systemPrompt).toBe("workspace system");
 	});
 
-	it("does not load extensions or execute skill scripts", async () => {
-		const marker = join(cwd, "marker");
-		await put(
-			join(cwd, ".agents", "extensions", "evil.ts"),
-			`throw new Error('must never import');`,
-		);
-		await put(
-			join(cwd, ".agents", "skills", "example", "run.js"),
-			`require('fs').writeFileSync(${JSON.stringify(marker)}, 'bad')`,
-		);
-		await put(
-			join(cwd, ".agents", "skills", "example", "SKILL.md"),
-			skill("example", "Run run.js only if explicitly requested"),
-		);
-		const result = await load();
-		expect(result.skills[0].prompt).toContain("only if explicitly requested");
-		await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
-	});
+	it.each([".agents", ".github"])(
+		"does not load extensions or execute %s skill scripts",
+		async (directory) => {
+			const marker = join(cwd, "marker");
+			await put(
+				join(cwd, ".agents", "extensions", "evil.ts"),
+				`throw new Error('must never import');`,
+			);
+			await put(
+				join(cwd, directory, "skills", "example", "run.js"),
+				`require('fs').writeFileSync(${JSON.stringify(marker)}, 'bad')`,
+			);
+			await put(
+				join(cwd, directory, "skills", "example", "SKILL.md"),
+				skill("example", "Run run.js only if explicitly requested"),
+			);
+			const result = await load();
+			expect(result.skills[0].prompt).toContain("only if explicitly requested");
+			await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+		},
+	);
 
 	it("supports flat Markdown, VS Code agent filenames and one-level agent directories", async () => {
 		await Promise.all([
@@ -354,23 +416,37 @@ describe("native agent resources", () => {
 		await expect(load()).rejects.toThrow(/Duplicate agent ID/);
 	});
 
-	it("refuses escaping skill symlinks", async () => {
-		await mkdir(join(cwd, ".agents", "skills"), { recursive: true });
-		await symlink(
-			home,
-			join(cwd, ".agents", "skills", "outside"),
-			process.platform === "win32" ? "junction" : "dir",
-		);
-		await expect(load()).rejects.toThrow(/Symlink/);
-	});
+	it.each([".agents", ".github"])(
+		"refuses escaping %s skill symlinks",
+		async (directory) => {
+			await mkdir(join(cwd, directory, "skills"), { recursive: true });
+			await symlink(
+				home,
+				join(cwd, directory, "skills", "outside"),
+				process.platform === "win32" ? "junction" : "dir",
+			);
+			await expect(load()).rejects.toThrow(/Symlink/);
+		},
+	);
 
 	it("loads one overlay when home and cwd coincide", async () => {
 		await put(join(cwd, "AGENTS.md"), "unique instruction");
+		await Promise.all(
+			[".github", ".agents"].map((directory) =>
+				put(
+					join(cwd, directory, "skills", "shared", "SKILL.md"),
+					skill("shared", directory),
+				),
+			),
+		);
 		const result = await loadAgentResources(
 			{ home: cwd, cwd },
 			{ resolveCorePackage: () => join(core, "package.json") },
 		);
 		expect(result.instructions.match(/unique instruction/g)).toHaveLength(1);
+		expect(result.skills.map(({ name, prompt }) => [name, prompt])).toEqual([
+			["shared", ".agents"],
+		]);
 	});
 
 	it("resolves text-only file URIs through negotiated editor buffers", async () => {

@@ -95,6 +95,25 @@ D3R loads inert resources from global `~/.agents/` and workspace `.agents/`:
 - `mcp.json`: optional MCP server configuration.
 - `vault/`: workflow documents and templates, discovered as described below.
 
+D3R also discovers workspace `.github/skills/**/SKILL.md` files. Skills with the
+same name resolve in this order (highest priority first):
+
+1. Workspace `.agents/skills/`
+2. Workspace `.github/skills/`
+3. Global `~/.agents/skills/`
+
+Duplicates within one skill directory tree remain an error. Only skills are
+loaded from `.github`, not workflow files, Copilot instructions, or custom agent
+definitions. Parent repositories and `~/.github/skills/` are not searched.
+
+This discovery belongs to D3R, not Zed:
+[Zed's skills](https://zed.dev/docs/ai/skills#agent-path-boundaries) apply to
+the built-in Zed Agent, not external ACP agents. The router and workers with
+`read_skill` see the skill catalog and load a skill's body on demand. Resources
+are pinned when a D3R session is created, including across reloads; start a new
+thread to pick up newly added or changed skills. For WSL sessions, the files
+must be visible in the D3R process's WSL workspace/home.
+
 Built-in role definitions and workflow chains come from the installed core
 package, not copied prompt definitions. Workspace agent/skill IDs replace global
 IDs. Referenced resources are bounded and validated; executable extensions and

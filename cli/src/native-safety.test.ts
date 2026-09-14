@@ -223,6 +223,17 @@ describe("native restore preflight", () => {
 					},
 				},
 				{ ...before, resources: { ...before.resources, vaultRoot: HOME } },
+				...[
+					join(HOME, ".github", "skills", "example", "SKILL.md"),
+					join(CWD, ".github", "agents", "example", "SKILL.md"),
+					join(CWD, ".github", "skills-other", "example", "SKILL.md"),
+				].map((path) => ({
+					...before,
+					resources: {
+						...before.resources,
+						skills: [{ ...before.resources.skills[0], path }],
+					},
+				})),
 				{ ...before, selection: { model: "offline/missing", thinking: "off" } },
 				{
 					...before,

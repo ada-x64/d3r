@@ -303,29 +303,35 @@ const readAgentResources = async (
 		if (prompt !== undefined) {
 			systemPrompt = prompt;
 		}
-		const seen = new Set<string>();
-		for (const path of await discover(join(root, ".agents", "skills"), root, {
-			kind: "skills",
-		})) {
-			const parsed = markdown(await read(path, root), path);
-			const metadata = z
-				.object({
-					name: z.string().min(1).optional(),
-					description: z.string().min(1),
-				})
-				.passthrough()
-				.parse(parsed.metadata);
-			const name = metadata.name ?? basename(dirname(path));
-			if (!name.trim() || seen.has(name)) {
-				throw new Error(`Empty or duplicate skill ID ${name} in ${root}`);
+		// Repository compatibility skills override globals; workspace .agents stays authoritative.
+		for (const directory of [
+			...(root === resolve(cwd) ? [join(root, ".github", "skills")] : []),
+			join(root, ".agents", "skills"),
+		]) {
+			const seen = new Set<string>();
+			for (const path of await discover(directory, root, { kind: "skills" })) {
+				const parsed = markdown(await read(path, root), path);
+				const metadata = z
+					.object({
+						name: z.string().min(1).optional(),
+						description: z.string().min(1),
+					})
+					.passthrough()
+					.parse(parsed.metadata);
+				const name = metadata.name ?? basename(dirname(path));
+				if (!name.trim() || seen.has(name)) {
+					throw new Error(
+						`Empty or duplicate skill ID ${name} in ${directory}`,
+					);
+				}
+				seen.add(name);
+				skills.set(name, {
+					name,
+					description: metadata.description,
+					prompt: parsed.prompt,
+					path,
+				});
 			}
-			seen.add(name);
-			skills.set(name, {
-				name,
-				description: metadata.description,
-				prompt: parsed.prompt,
-				path,
-			});
 		}
 	}
 	signal.throwIfAborted();
