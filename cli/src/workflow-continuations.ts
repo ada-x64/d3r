@@ -110,7 +110,7 @@ export const describeWorkflowState = (
 	}: { phase: string; resumable: boolean; standaloneRole?: string },
 ): string => {
 	if (!engine) {
-		return `No active workflow. Selected phase: ${phase}. Any configured phase may start independently; no prior phase or vault documents are required.`;
+		return `No active workflow. Preferred phase: ${phase} (routing preference, not a requirement). Choose direct tools, a worker, or any configured phase to fit the user's current request; no prior phase or vault documents are required. Routine vault maintenance needs no phase or semi/auto mode.`;
 	}
 	const evidence = engine.records
 		.filter((record) => record.outcome || record.error)
@@ -133,10 +133,10 @@ export const describeWorkflowState = (
 			? "The unfinished roles have retained conversations and settled tool results. The user's answer, correction, or explicit continue can resume only those roles; completed roles are not replayed. Use the latest instructions and inspect existing changes when needed."
 			: "",
 		engine.status === "interrupted" && !resumable
-			? "This workflow lacks a resumable checkpoint. Discuss its recovery rather than rerunning completed steps. This does not disable unrelated inspection or explicitly requested operational commands."
+			? "This workflow lacks a resumable checkpoint. Discuss its recovery rather than rerunning completed steps. This does not disable unrelated inspection, requested vault maintenance, or explicitly requested operational commands."
 			: "",
 		["waiting", "blocked", "interrupted"].includes(engine.status)
-			? "Return control to the user for workflow decisions. Do not advance, restart, or abandon the workflow without their direction. A paused workflow does not disable explicitly requested operational commands."
+			? "Return control to the user for workflow decisions. Do not advance, restart, or abandon the workflow without their direction. A paused workflow does not disable requested vault maintenance or explicitly requested operational commands."
 			: "",
 	]
 		.filter(Boolean)

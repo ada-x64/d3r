@@ -403,7 +403,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			finding,
 		);
 		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
-			"No active workflow. Selected phase: delegate.",
+			"No active workflow. Preferred phase: delegate (routing preference, not a requirement).",
 		);
 		expect(parseState(await resumed.checkpoint(sessionId)).inner).toMatchObject(
 			{

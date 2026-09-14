@@ -205,9 +205,9 @@ before initialization; ordinary tool permissions and path checks still apply.
 Newly initialized native sessions use one persistent orchestrator (the router)
 for the continuous conversation. Ordinary messages and slash commands both go to
 that router, which receives authoritative workflow state every turn. Discuss or
-clarify normally; when you intend an action, the router calls a structured
-workflow tool to run the chosen phase or worker role. Printing a command is not
-execution.
+clarify normally; the router chooses direct tools, a worker role, or a phase to
+fit your request. Phase and role work starts through structured workflow tools.
+Printing a command is not execution.
 
 The built-in phase shortcuts express intent:
 
@@ -219,10 +219,23 @@ The built-in phase shortcuts express intent:
 
 **Any configured phase can start independently.** You can go straight to
 `develop` with an adequate conversation brief; no earlier phase or formal vault
-schema, design, or plan documents are prerequisites. The Phase picker selects
-intent while idle, not a launch: your next message still goes through the
-router, and only a phase-tool call starts the phase. It cannot replace an
-unfinished phase or role task.
+schema, design, or plan documents are prerequisites. The Phase picker supplies a
+**routing preference**, not a required workflow or a tool restriction. The
+router prefers it when it fits, but your current request takes precedence: it
+can choose a different phase, one worker, direct tools, or simply answer without
+asking you to change the picker. `Routing` leaves that choice to the router.
+Selecting a phase while idle does not launch it; only a phase-tool call does.
+This flexibility does not replace unfinished work or skip an active phase's
+checkpoints.
+
+Routine requests such as **"clean up the vault" use vault tools directly** in
+the router, even with `Design` selected. They do not need a phase, research
+agents, a task topic, or a `semi`/`auto` declaration. The router inspects the
+relevant documents and instructions, clarifies unclear cleanup criteria, and
+makes scoped changes using file snapshots. Enabled vault operations require no
+additional approval after workspace/vault trust. Unrelated cleanup can also run
+while a worker is paused without resuming or abandoning that worker. This is
+routing guidance, not a deterministic natural-language intent classifier.
 
 The router has these workflow tools:
 

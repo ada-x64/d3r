@@ -2089,7 +2089,7 @@ describe("independent role orchestration", () => {
 		await restored.prompt("What is selected?", async ({ run }) => {
 			const status = await run({ action: "status" });
 			expect(status.text).toContain("No active workflow");
-			expect(status.text).toContain("Selected phase: design");
+			expect(status.text).toContain("Preferred phase: design");
 		});
 		expect(restored.runtime.getConfig!()).toEqual(config);
 		expect(restored.saved()).toMatchObject({ phase: "design", engine: null });
