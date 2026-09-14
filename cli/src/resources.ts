@@ -95,6 +95,7 @@ export const resolveWorkspaceResource = async (
 const RESOURCE_LIMITS = {
 	entries: 5000,
 	depth: 20,
+	ancestors: 256,
 	bytes: 8_388_608,
 	aliases: 50,
 };
@@ -122,7 +123,29 @@ const markdown = (
 const installedCorePackage = (): string =>
 	createRequire(import.meta.url).resolve("@d3r/core/package.json");
 
-/** Discover only the exact home/workspace supplied by the session owner. */
+/** Instruction scope follows directory ancestry, not repository or vault boundaries. */
+const instructionRoots = (home: string, cwd: string): string[] => {
+	const ancestors: string[] = [];
+	let cursor = resolve(cwd);
+	for (;;) {
+		if (ancestors.length >= RESOURCE_LIMITS.ancestors) {
+			throw new Error("Instruction discovery ancestry limit exceeded");
+		}
+		ancestors.push(cursor);
+		const parent = dirname(cursor);
+		if (parent === cursor) {
+			break;
+		}
+		cursor = parent;
+	}
+	const global = resolve(home);
+	return [
+		...(ancestors.includes(global) ? [] : [global]),
+		...ancestors.toReversed(),
+	];
+};
+
+/** Inherit ancestor instructions while keeping other overlays at the exact home/workspace. */
 // oxlint-disable-next-line max-statements -- This shell owns the ordered core/global/workspace overlay lifecycle.
 const readAgentResources = async (
 	{ home, cwd }: { home: string; cwd: string },
@@ -287,15 +310,7 @@ const readAgentResources = async (
 				commands: { ...workflow.commands, ...layer.commands },
 			});
 		}
-		for (const path of [
-			join(root, "AGENTS.md"),
-			join(root, ".agents", "agents.md"),
-		]) {
-			const text = await optional(path, root);
-			if (text?.trim()) {
-				instructions.push(`# ${path}\n\n${text.trim()}`);
-			}
-		}
+
 		const prompt = await optional(
 			join(root, ".agents", "system-prompt.md"),
 			root,
@@ -334,13 +349,32 @@ const readAgentResources = async (
 			}
 		}
 	}
+	for (const root of instructionRoots(home, cwd)) {
+		for (const path of [
+			join(root, "AGENT.md"),
+			join(root, "AGENTS.md"),
+			...([resolve(home), resolve(cwd)].includes(root)
+				? [join(root, ".agents", "agents.md")]
+				: []),
+		]) {
+			const text = await optional(path, root);
+			if (text?.trim()) {
+				instructions.push(`# ${path}\n\n${text.trim()}`);
+			}
+		}
+	}
 	signal.throwIfAborted();
 	return {
 		agents: [...agents.values()].toSorted((a, b) =>
 			a.spec.name.localeCompare(b.spec.name),
 		),
 		workflow,
-		instructions: instructions.join("\n\n"),
+		instructions: instructions.length
+			? [
+					"Inherited instructions apply to the router and every worker role. Files are listed from broad to specific scope; more specific directory instructions take precedence. Within the same directory, later files take precedence. Home instructions outside the workspace ancestry are global defaults. Source paths identify instruction scope, not additional filesystem access.",
+					...instructions,
+				].join("\n\n")
+			: "",
 		...(systemPrompt !== undefined ? { systemPrompt } : {}),
 		skills: [...skills.values()].toSorted((a, b) =>
 			a.name.localeCompare(b.name),

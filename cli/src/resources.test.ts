@@ -258,12 +258,12 @@ describe("native agent resources", () => {
 		await expect(load()).rejects.toThrow(/duplicate skill ID same-id/);
 	});
 
-	it("discovers an ancestor vault without loading its other agent resources", async () => {
+	it("inherits ancestor instructions and discovers its vault without loading other agent resources", async () => {
 		const parent = join(base, "parent");
 		const vault = join(parent, ".agents", "vault");
 		await Promise.all([
 			mkdir(vault, { recursive: true }),
-			put(join(parent, "AGENTS.md"), "DO NOT LOAD PARENT"),
+			put(join(parent, "AGENTS.md"), "Inherited parent instructions"),
 			put(join(parent, ".agents", "system-prompt.md"), "DO NOT LOAD SYSTEM"),
 			put(join(parent, ".agents", "agents", "invalid.md"), "invalid agent"),
 			put(
@@ -280,34 +280,113 @@ describe("native agent resources", () => {
 		]);
 		const result = await load();
 		expect(result.vaultRoot).toBe(vault);
-		expect(result.instructions).toBe("");
+		expect(result.instructions).toContain("Inherited parent instructions");
+		expect(result.instructions).not.toContain("DO NOT LOAD");
 		expect(result.systemPrompt).toBeUndefined();
 		expect(result.skills).toEqual([]);
 		expect(result.agents.map(({ spec }) => spec.name)).toEqual(["one"]);
 		expect(Object.keys(result.workflow.commands)).toEqual(["build"]);
 	});
 
-	it("combines exact-root instruction files without parent discovery", async () => {
-		await Promise.all([
-			put(join(base, "parent", "AGENTS.md"), "DO NOT LOAD PARENT"),
-			put(
-				join(base, "parent", ".agents", "agents.md"),
-				"DO NOT LOAD PARENT EITHER",
-			),
-			put(join(home, "AGENTS.md"), "global instructions"),
-			put(join(home, ".agents", "agents.md"), "global agent instructions"),
-			put(join(cwd, "AGENTS.md"), "workspace instructions"),
-			put(join(cwd, ".agents", "agents.md"), "workspace agent instructions"),
-			put(join(home, ".agents", "system-prompt.md"), "global system"),
-			put(join(cwd, ".agents", "system-prompt.md"), "workspace system"),
-		]);
-		const result = await load();
-		expect(result.instructions).toContain("global instructions");
-		expect(result.instructions).toContain("global agent instructions");
-		expect(result.instructions).toContain("workspace instructions");
-		expect(result.instructions).toContain("workspace agent instructions");
-		expect(result.instructions).not.toContain("DO NOT LOAD");
-		expect(result.systemPrompt).toBe("workspace system");
+	describe("inherited instructions", () => {
+		it("inherits both instruction filenames from ancestors in broad-to-specific order", async () => {
+			await Promise.all([
+				put(join(base, "AGENT.md"), "Broad ancestor instruction"),
+				put(join(base, "parent", "AGENT.md"), "Parent singular instruction"),
+				put(join(base, "parent", "AGENTS.md"), "Parent plural instruction"),
+				put(
+					join(base, "parent", "sibling", "AGENTS.md"),
+					"DO NOT LOAD SIBLING",
+				),
+				put(join(cwd, "child", "AGENT.md"), "DO NOT LOAD DESCENDANT"),
+				put(
+					join(base, "parent", ".agents", "agents.md"),
+					"DO NOT LOAD PARENT EITHER",
+				),
+				put(join(home, "AGENTS.md"), "global instructions"),
+				put(join(home, ".agents", "agents.md"), "global agent instructions"),
+				put(join(cwd, "AGENT.md"), "workspace singular instructions"),
+				put(join(cwd, "AGENTS.md"), "workspace instructions"),
+				put(join(cwd, ".agents", "agents.md"), "workspace agent instructions"),
+				put(join(home, ".agents", "system-prompt.md"), "global system"),
+				put(join(cwd, ".agents", "system-prompt.md"), "workspace system"),
+			]);
+			const result = await load();
+			expect(result.instructions).toContain("global instructions");
+			expect(result.instructions).toContain("global agent instructions");
+			expect(result.instructions).toContain("workspace instructions");
+			expect(result.instructions).toContain("workspace agent instructions");
+			expect(result.instructions).not.toContain("DO NOT LOAD");
+			const ordered = [
+				"global instructions",
+				"global agent instructions",
+				"Broad ancestor instruction",
+				"Parent singular instruction",
+				"Parent plural instruction",
+				"workspace singular instructions",
+				"workspace instructions",
+				"workspace agent instructions",
+			];
+			const positions = ordered.map((text) =>
+				result.instructions.indexOf(text),
+			);
+			expect(positions.every((position) => position >= 0)).toBe(true);
+			expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+			expect(result.instructions).toContain(
+				`# ${join(base, "parent", "AGENT.md")}`,
+			);
+			expect(result.instructions).toContain(
+				"more specific directory instructions take precedence",
+			);
+			expect(result.systemPrompt).toBe("workspace system");
+		});
+
+		it("loads home instructions once at their ancestral scope when workspace is inside home", async () => {
+			const ancestorHome = join(base, "parent");
+			await Promise.all([
+				put(join(base, "AGENT.md"), "Broad ancestor rule"),
+				put(join(ancestorHome, "AGENTS.md"), "Home ancestor rule"),
+				put(join(ancestorHome, ".agents", "agents.md"), "Home legacy rule"),
+				put(join(cwd, "AGENTS.md"), "Specific workspace rule"),
+			]);
+			const result = await loadAgentResources(
+				{ home: ancestorHome, cwd },
+				{ resolveCorePackage: () => join(core, "package.json") },
+			);
+			expect(result.instructions).toMatch(
+				/Broad ancestor rule[\s\S]*Home ancestor rule[\s\S]*Home legacy rule[\s\S]*Specific workspace rule/,
+			);
+			expect(result.instructions.match(/Home ancestor rule/g)).toHaveLength(1);
+			expect(result.instructions.match(/Home legacy rule/g)).toHaveLength(1);
+		});
+
+		it("reports an unreadable ancestor instruction rather than omitting its rules", async () => {
+			const path = join(base, "parent", "AGENT.md");
+			await put(path, "Do not silently skip these rules");
+			await expect(
+				loadAgentResources(
+					{ home, cwd },
+					{
+						resolveCorePackage: () => join(core, "package.json"),
+						readText: async (file) => {
+							if (file === path) {
+								throw Object.assign(new Error(`Cannot read ${path}`), {
+									code: "EACCES",
+								});
+							}
+							return readFile(file, "utf8");
+						},
+					},
+				),
+			).rejects.toThrow(`Cannot read ${path}`);
+		});
+
+		it("rejects a symlinked ancestor instruction without following it", async () => {
+			const target = join(home, "unrelated.md");
+			await put(target, "Not inherited instructions");
+			await symlink(target, join(base, "parent", "AGENTS.md"), "file");
+			await expect(load()).rejects.toThrow(/Symlink/);
+		});
 	});
 
 	it.each([".agents", ".github"])(

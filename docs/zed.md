@@ -85,7 +85,8 @@ the authenticated model catalog, including supported thought levels.
 D3R loads inert resources from global `~/.agents/` and workspace `.agents/`:
 
 - `models.json`: model presets and optional default selection.
-- `agents.md`, plus `AGENTS.md` at the supplied root: instructions.
+- `agents.md`: legacy instructions at the supplied home/workspace root.
+  `AGENT.md` and `AGENTS.md` are also inherited as described below.
 - `system-prompt.md`: additional native system instructions.
 - `agents/*.md`, `agents/*.agent.md`, or `agents/<id>/agent.md`: role
   definitions using D3R's `AgentSpec` frontmatter (`name`, `description`,
@@ -94,6 +95,26 @@ D3R loads inert resources from global `~/.agents/` and workspace `.agents/`:
 - `workflow.yaml`: optional workflow command overrides.
 - `mcp.json`: optional MCP server configuration.
 - `vault/`: workflow documents and templates, discovered as described below.
+
+D3R walks from the session workspace up to the filesystem root for **both
+`AGENT.md` and `AGENTS.md`**, crossing repository and vault boundaries. Each
+file's path and text are included in the system prompt of the router and every
+worker, including the implementor; workers do not need to rediscover ancestor
+instructions through tools. Files are ordered broadest to most specific, with
+nearer-directory rules taking precedence. When both names exist in one
+directory, `AGENTS.md` takes precedence over `AGENT.md`; legacy
+`.agents/agents.md` is last and is read only at home and the exact workspace
+root. Home instructions are loaded once, as global defaults if home is outside
+the workspace ancestry. Sibling and descendant directories are not scanned by
+this ancestor lookup.
+
+Only these instruction files are read from ancestors; this does not grant tools
+access to parent directories or load their agents, skills, model presets, or MCP
+configuration. Missing files are skipped, while unreadable or invalid files
+produce errors rather than silently dropping project rules. Existing bounded
+text reads, cancellation, and path checks still apply. Instructions are pinned
+with the session; restart D3R and start a new thread to pick up newly discovered
+or changed files.
 
 D3R also discovers workspace `.github/skills/**/SKILL.md` files. Skills with the
 same name resolve in this order (highest priority first):
@@ -129,13 +150,14 @@ silently selecting another vault. If none exists, the suggested location remains
 `<workspace>/.agents/vault`; discovery does not create it.
 
 Only that vault directory, not its parent repository, is added to tool access
-after the workspace trust request explicitly names it. Ancestor instructions,
-skills, models, and MCP configuration are not loaded by this search. External
-vault files use disk IO; workspace editor buffers remain authoritative for
-explicit reads and edits. The vault location is pinned per session: if discovery
-finds a different location on reload, start a new thread instead of silently
-redirecting the saved workflow. This includes older threads that pinned the
-former worktree-local path when a shared ancestor vault exists.
+after the workspace trust request explicitly names it. Ancestor instruction
+lookup is separate from vault discovery; ancestor skills, models, and MCP
+configuration are not loaded by either search. External vault files use disk IO;
+workspace editor buffers remain authoritative for explicit reads and edits. The
+vault location is pinned per session: if discovery finds a different location on
+reload, start a new thread instead of silently redirecting the saved workflow.
+This includes older threads that pinned the former worktree-local path when a
+shared ancestor vault exists.
 
 ## Vault-relative tools
 
