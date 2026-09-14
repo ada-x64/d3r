@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	journeyReport as reportCall,
 	JOURNEY_SUMMARY,
@@ -286,11 +287,20 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(final.continuations ?? []).toEqual([]);
 			expect(final).not.toHaveProperty("summary");
 			expect(roleRequests(j.requests, "summary")).toEqual([]);
-			expect(
-				f.updates.filter(
-					({ update }) => update.sessionUpdate === "agent_message_chunk",
-				),
-			).toHaveLength(1);
+			expectTextOnce(
+				agentText(f.updates),
+				reporting === "fresh report"
+					? "## Correction reviewed"
+					: "## Correction needs a fresh report",
+			);
+			for (const hidden of [
+				oldSummary,
+				terminalText,
+				"The correction file is ready.",
+				"Corrected implementation reviewed.",
+			]) {
+				expect(agentText(f.updates)).not.toContain(hidden);
+			}
 			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 				expect.stringMatching(/^Trust workspace/),
 			]);
@@ -508,14 +518,10 @@ describe("native ACP shipped-workflow journeys", () => {
 		}
 		expect(completed.continuations ?? []).toEqual([]);
 		expect(completed).not.toHaveProperty("summary");
-		expect(agentText(resumed.updates.slice(start))).toContain(
+		expectTextOnce(
+			agentText(resumed.updates.slice(start)),
 			"Preserved the user's draft edit and saved corrected.txt",
 		);
-		expect(
-			resumed.updates
-				.slice(start)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
 		expect(roleRequests(j.requests, "summary")).toEqual([]);
 		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
 			true,

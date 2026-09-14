@@ -92,53 +92,61 @@ export const nativeJourneySuite = () => {
 				_request: RequestPermissionRequest,
 			): Promise<JourneyDecision> => true,
 		};
-		const streamSimple: Models["streamSimple"] = (model, context, settings) => {
-			const role = context.systemPrompt?.startsWith(
-				"You summarize completed D3R workflows.",
-			)
-				? "summary"
-				: (/^You are (\w+)\./.exec(context.systemPrompt ?? "")?.[1] ??
-					"router");
-			requests.push({
-				role,
-				model: structuredClone(model),
-				context: {
-					systemPrompt: context.systemPrompt,
-					messages: structuredClone(context.messages),
-					tools: context.tools?.map(({ name, description, parameters }) => ({
-						name,
-						description,
-						parameters: structuredClone(parameters),
-					})),
-				},
-			});
-			const content =
-				role === "summary" && !Object.hasOwn(scripts, role)
-					? [{ type: "text" as const, text: JOURNEY_SUMMARY }]
-					: ((role === "router" &&
-						routerShortcuts &&
-						context.systemPrompt?.startsWith(
-							"You are D3R's native workflow orchestrator in Zed.",
-						)
-							? journeyRouterShortcut(context)
-							: undefined) ?? scripts[role]?.shift());
-			if (!content) {
-				throw new Error(`Unexpected offline request for ${role}`);
-			}
-			return streamResponse(
-				role,
-				typeof content === "function" ? content(context) : content,
-				settings,
-			);
-		};
+		const streamFor =
+			(role: string): Models["streamSimple"] =>
+			(model, context, settings) => {
+				requests.push({
+					role,
+					model: structuredClone(model),
+					context: {
+						systemPrompt: context.systemPrompt,
+						messages: structuredClone(context.messages),
+						tools: context.tools?.map(({ name, description, parameters }) => ({
+							name,
+							description,
+							parameters: structuredClone(parameters),
+						})),
+					},
+				});
+				const content =
+					role === "summary" && !Object.hasOwn(scripts, role)
+						? [{ type: "text" as const, text: JOURNEY_SUMMARY }]
+						: ((role === "router" && routerShortcuts
+								? journeyRouterShortcut(context)
+								: undefined) ?? scripts[role]?.shift());
+				if (!content) {
+					throw new Error(`Unexpected offline request for ${role}`);
+				}
+				return streamResponse(
+					role,
+					typeof content === "function" ? content(context) : content,
+					settings,
+				);
+			};
 		const connect = async () => {
 			const deps = await createNativeDeps(
 				{ home, version: "journey-test" },
 				{
 					getWebProviderConfig: getWebConfig,
-					createEmbeddedRuntime: (options) => (input) => {
-						runtimes.push({ options, input });
-						return createRuntime(options)(input);
+					createEmbeddedRuntime: (options) => {
+						const label = options.budgetLabel;
+						if (!label) {
+							throw new Error("Missing offline runtime budget label");
+						}
+						let role = label;
+						if (label === "routing") {
+							role = "router";
+						} else if (label === "workflow summary") {
+							role = "summary";
+						}
+						const create = createRuntime({
+							...options,
+							models: { ...options.models, streamSimple: streamFor(role) },
+						});
+						return (input) => {
+							runtimes.push({ options, input });
+							return create(input);
+						};
 					},
 					createModelRuntime: async ({ stateDir }) => {
 						await mkdir(stateDir, { recursive: true, mode: 0o700 });
@@ -146,7 +154,11 @@ export const nativeJourneySuite = () => {
 							getAvailable: async () => models,
 							getProviders: () => [],
 							logout: async () => {},
-							streamSimple,
+							streamSimple: () => {
+								throw new Error(
+									"Provider IO must be bound to an embedded runtime",
+								);
+							},
 						};
 					},
 				},

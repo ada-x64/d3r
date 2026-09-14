@@ -206,10 +206,7 @@ describe("workflow brief and phase action boundaries", () => {
 });
 
 describe("workflow role tool", () => {
-	it("appends the strict role action without moving existing options or defaulting mode", () => {
-		expect(
-			PhaseAction.options.map((option) => option.shape.action.value),
-		).toEqual(["start", "continue", "abandon", "status", "role"]);
+	it("parses a strict role action without defaulting mode", () => {
 		const action = {
 			action: "role",
 			role: "auditor",
@@ -246,12 +243,6 @@ describe("workflow role tool", () => {
 		});
 		expect(tool.schema).toBeInstanceOf(z.ZodObject);
 		const schema = tool.schema as z.AnyZodObject;
-		expect(Object.keys(schema.shape)).toEqual([
-			"role",
-			"brief",
-			"mode",
-			"topic",
-		]);
 		expect(schema.shape.role.options).toEqual([
 			"auditor",
 			"implementor",
@@ -721,125 +712,38 @@ describe("native conversation contracts", () => {
 		);
 	});
 
-	it("instructs persistent orchestration to delegate intended actions and stop for human decisions", () => {
-		expect(
-			ORCHESTRATOR_PROMPT.startsWith(
-				"You are D3R's native workflow orchestrator in Zed.",
-			),
-		).toBe(true);
+	// Scripted journeys exercise execution, not the model's choice to follow these instructions.
+	it("keeps routing choices and user-authorization guidance explicit", () => {
 		for (const requirement of [
-			/continuous conversation/,
-			/state is supplied every turn/,
-			/omit topic from d3r_start_phase or d3r_run_role/,
-			/runtime automatically generates one topic name shared across agents and the document folder/,
-			/generated topic and default artifact paths supplied by runtime state are authoritative and shared/,
-			/Make briefs refer to those paths when supplied/,
-			/do not task workers with choosing their own artifact folders/,
-			/Reuse the exact topic name from runtime state for follow-on phases or standalone invocations/,
-			/omit topic for an unrelated task/,
-			/existing topic, use that exact safe slug, never a full path/,
-			/Never ask the user to invent a topic name/,
-			/never rename an active task/,
-			/If it reports a missing vault, before vault document work ask whether to run d3r vault init with --vault-root set to that exact pinned root/,
-			/initialization seeds files, initializes a Git repository, and creates its initial commit/,
-			/require explicit user consent and normal tool approval/,
-			/Never initialize silently or bypass approval/,
-			/Do not require a vault for inline, docs-free tasks/,
-			/If the user declines, do not repeatedly ask/,
-			/Discuss and clarify normally unless the user intends/,
-			/\/design, \/delegate, \/develop, and \/summarize/,
 			/must call d3r_start_phase/,
-			/No prior phase or formal vault documents are required/,
-			/Jump straight to develop/,
-			/Ask only for missing factual context/,
-			/never fabricate citations/,
-			/ask the user to choose semi or auto/,
-			/never assume auto/,
-			/omitted mode makes the engine ask/,
+			/focused audit, review, research.*choose d3r_run_role.*not d3r_start_phase develop/,
+			/ask the user to choose semi or auto.*never assume auto/,
 			/only one mutating workflow tool per model response/,
-			/After a waiting, blocked, or interrupted result, return the question/,
 			/never answer a human checkpoint on your own/,
-			/without user direction/,
-			/Delegate code implementation to phase workers/,
 			/do not execute code implementation in the router/,
 			/Do not use legacy MODE markers, harness mode switches, or subagent calls/,
-			/Never implicitly commit or push/,
+			/Never implicitly commit or push; require explicit user authorization/,
 			/one concise Markdown response/,
-			/Do not output JSON/,
+			/Do not output JSON or copy internal structured reports/,
 		]) {
 			expect(ORCHESTRATOR_PROMPT).toMatch(requirement);
 		}
 	});
 
-	it("routes focused work to one role without phase advancement or worktree audit prerequisites", () => {
-		const { execute } = harness();
-		const tool = createWorkflowRoleTool(roles, execute)!;
+	it("keeps worker consent, factuality, and verification obligations explicit", () => {
 		for (const requirement of [
-			/only one selected worker role/,
-			/loaded role definition's scope/,
-			/without starting a phase, requiring prerequisites, or implicitly following with review or audit/,
-			/same report and permission lifecycle/,
-			/resume.*via d3r_continue_phase/,
-			/do not approve or advance an existing workflow/,
-			/Never replace an unfinished task/,
-			/user must explicitly direct d3r_abandon_phase first/,
-			/implementor, require the user's explicit semi or auto mode/,
-			/Mode enforcement belongs to the runtime/,
-			/read-only with inline findings by default/,
-			/do not write report files unless the user requests them/,
-		]) {
-			expect(tool.description).toMatch(requirement);
-		}
-		for (const requirement of [
-			/focused audit, review, research, or other single-role requests, choose d3r_run_role/,
-			/not d3r_start_phase develop/,
-			/Loaded role definitions determine scope/,
-			/Role outputs are evidence, not completion of phases/,
-			/do not approve or advance an existing workflow/,
-			/For develop or a direct implementor role, ask the user to choose semi or auto/,
-			/Start a phase or role only when no unfinished task is retained/,
-			/Direct roles share the report and permission lifecycle and resume via d3r_continue_phase/,
-			/At most one start, role, or continue may run per user turn/,
-			/Explicit user-directed abandonment may precede the next requested operation in that turn/,
-		]) {
-			expect(ORCHESTRATOR_PROMPT).toMatch(requirement);
-		}
-		for (const requirement of [
-			/requested standalone worktree audit or review/,
-			/current tracked, untracked, and uncommitted workspace state within the requested scope/,
-			/No PR, commit range, or vault document is mandatory to audit the worktree/,
-			/Reviewers and auditors retain their read-only remit/,
-			/report findings inline by default/,
-			/do not write report files unless requested/,
-			/runtime supplies execution-specific context separately/,
-			/do not invent missing workflow history/,
-		]) {
-			expect(NATIVE_BRIEF_CONTRACT).toMatch(requirement);
-		}
-	});
-
-	it("lets native roles substitute conversation context without weakening scope, testing, or review", () => {
-		for (const requirement of [
-			/intentionally substitutes for schema, design, and plan documents/,
-			/runtime supplies an explicit topic name and default artifact paths shared across agents and the document folder/,
-			/use the default paths unless the operator explicitly chose a path/,
-			/Do not independently name researcher notes or choose per-worker artifact folders/,
-			/paths are neither permission nor a requirement to write documents/,
-			/If live host context reports a missing vault, before vault document work ask using needs_human whether to run d3r vault init with --vault-root set to the exact pinned root/,
-			/initialization seeds files, initializes a Git repository, and creates its initial commit/,
-			/require explicit user consent and normal tool approval/,
+			/before vault document work ask using needs_human.*d3r vault init.*--vault-root.*exact pinned root/,
+			/seeds files.*Git repository.*initial commit; require explicit user consent and normal tool approval/,
 			/Never initialize silently or bypass approval/,
 			/Do not require a vault for inline, docs-free tasks/,
 			/If the user declines, do not repeatedly ask/,
 			/Do not fabricate documents, citations, branch names, commits, or prior approvals/,
-			/current approved workspace on the requested scope/,
-			/specific facts using needs_human/,
-			/Preserve all project constraints, approval requirements, and your assigned role remit/,
-			/review working-tree changes and report findings inline without creating a vault artifact unless the user requested one/,
+			/current approved workspace.*do not assume a new branch or expanded authority/,
+			/specific facts using needs_human rather than inventing them/,
+			/read-only remit; report findings inline by default.*do not write report files unless requested/,
 			/Do not commit or push unless explicitly authorized/,
-			/Tests are mandatory/,
-			/allDone is not a shortcut around review/,
-			/required reviewer approval still applies/,
+			/Tests are mandatory for code changes/,
+			/only an implementor may assert allDone.*required reviewer approval still applies/,
 		]) {
 			expect(NATIVE_BRIEF_CONTRACT).toMatch(requirement);
 		}

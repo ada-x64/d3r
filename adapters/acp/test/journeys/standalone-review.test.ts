@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	reply,
 	journeyReport as reportCall,
@@ -266,16 +267,11 @@ describe("native ACP shipped-workflow journeys", () => {
 			resultText(j.requests.at(-1)!.context, "develop-after-review"),
 		).toContain("## Phase: develop\nStatus: completed\nMode: auto");
 		for (const summary of Object.values(reports)) {
-			expect(agentText(f.updates.slice(start))).toContain(summary);
+			expectTextOnce(agentText(f.updates.slice(start)), summary);
 		}
 		expect(agentText(f.updates.slice(start))).not.toMatch(
 			/Worker-only|"status"|Workflow complete/,
 		);
-		expect(
-			f.updates
-				.slice(start)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
 		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 			expect.stringMatching(/^Trust workspace/),
 		]);

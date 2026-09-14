@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	JOURNEY_INSPECTION_TOOLS,
 	journeyCall as call,
@@ -180,7 +181,7 @@ describe("native ACP shipped-workflow journeys", () => {
 				expect(worker).not.toHaveProperty("outcome");
 				expect(JSON.stringify(waiting.continuations)).toContain("policy-read");
 			}
-			expect(agentText(f.updates)).not.toContain("72");
+			expect(agentText(f.updates)).not.toMatch(/\b72[ -]hours?\b/i);
 			expect(j.reads.map(({ path }) => path)).toEqual([
 				resolve(j.cwd, "policy.txt"),
 			]);
@@ -276,17 +277,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(resultText(recovery.at(-1)!.context, "resume-audit")).toContain(
 				"## Role: auditor\nStatus: completed\nMode: standalone",
 			);
-			expect(agentText(resumed.updates.slice(start))).toContain(finding);
+			expectTextOnce(agentText(resumed.updates.slice(start)), finding);
 			expect(agentText(resumed.updates.slice(start))).not.toMatch(
 				/Worker-only|"status"|## Phase:|Workflow complete/,
 			);
-			expect(
-				resumed.updates
-					.slice(start)
-					.filter(
-						({ update }) => update.sessionUpdate === "agent_message_chunk",
-					),
-			).toHaveLength(1);
 			expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 				expect.stringMatching(/^Trust workspace/),
 				expect.stringMatching(/^Trust workspace/),

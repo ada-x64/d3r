@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	journeyReport as reportCall,
 	JOURNEY_MODEL,
@@ -152,13 +153,8 @@ describe("native ACP shipped-workflow journeys", () => {
 			"## Phase: develop\nStatus: completed\nMode: auto",
 		);
 		for (const report of Object.values(reports)) {
-			expect(agentText(f.updates.slice(start))).toContain(report);
+			expectTextOnce(agentText(f.updates.slice(start)), report);
 		}
-		expect(
-			f.updates
-				.slice(start)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
 		expect(agentText(f.updates.slice(start))).toMatch(
 			/^## Offline helper ready/,
 		);
@@ -340,14 +336,13 @@ describe("native ACP shipped-workflow journeys", () => {
 		]) {
 			expect(resultText(final, id), id).toContain(text);
 		}
-		expect(agentText(f.updates.slice(start))).toContain(
+		expectTextOnce(
+			agentText(f.updates.slice(start)),
 			"Approved the exact offline marker contents.",
 		);
-		expect(
-			f.updates
-				.slice(start)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
+		expect(agentText(f.updates.slice(start))).not.toMatch(
+			/Marker created\.|Review complete\./,
+		);
 		expect(
 			j.requests.some(({ role }) => role === "designer" || role === "summary"),
 		).toBe(false);
@@ -489,11 +484,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			"Retention period: undecided",
 		);
 		expect(agentText(f.updates)).toContain(question);
-		expect(
-			f.updates.filter(
-				({ update }) => update.sessionUpdate === "agent_message_chunk",
-			),
-		).toHaveLength(1);
+		expectTextOnce(agentText(f.updates), "## Retention decision needed");
+		expect(agentText(f.updates)).not.toContain(
+			"Waiting for the user's retention decision.",
+		);
 		expect(roleRequests(j.requests, "designer")).toEqual([]);
 		expect(j.permissions.map(({ toolCall }) => toolCall.title)).toEqual([
 			expect.stringMatching(/^Trust workspace/),

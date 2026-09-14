@@ -53,6 +53,7 @@ export const JOURNEY_SUMMARY =
 export const journeyStream = (
 	content: JourneyMessage["content"],
 	beforeEvent?: (index: number) => Promise<void>,
+	textDeltas: (text: string) => string[] = (text) => [text],
 ): JourneyStream => {
 	const message: JourneyMessage = {
 		role: "assistant",
@@ -79,14 +80,14 @@ export const journeyStream = (
 			if (part.type !== "text" && part.type !== "thinking") {
 				return [];
 			}
-			return [
-				{
-					type: part.type === "text" ? "text_delta" : "thinking_delta",
-					contentIndex,
-					delta: part.type === "text" ? part.text : part.thinking,
-					partial: message,
-				},
-			];
+			const deltas =
+				part.type === "text" ? textDeltas(part.text) : [part.thinking];
+			return deltas.map((delta) => ({
+				type: part.type === "text" ? "text_delta" : "thinking_delta",
+				contentIndex,
+				delta,
+				partial: message,
+			}));
 		}),
 		{ type: "done", reason: message.stopReason, message },
 	];
@@ -441,6 +442,12 @@ export const journeyText = (updates: readonly SessionNotification[]) =>
 				: [],
 		)
 		.join("");
+
+/** Detect duplicate outcomes without depending on provider or ACP chunk boundaries. */
+export const expectTextOnce = (text: string, expected: string): void => {
+	expect(text).toContain(expected);
+	expect(text.indexOf(expected)).toBe(text.lastIndexOf(expected));
+};
 
 /** Inspect the content ACP clients render, rather than rawInput or rawOutput. */
 export const journeyToolText = ({ content }: Pick<ToolCallUpdate, "content">) =>

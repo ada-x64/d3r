@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	JOURNEY_INSPECTION_TOOLS,
 	journeyCall as call,
@@ -11,6 +12,7 @@ import {
 	journeyTools as toolUpdates,
 	journeyCheckpoint as parseState,
 	journeyReport,
+	journeyStream,
 	reply,
 	roleRequests,
 	lastRequest,
@@ -28,6 +30,77 @@ import { nativeJourneySuite } from "./harness.ts";
 
 describe("native ACP shipped-workflow journeys", () => {
 	const { open } = nativeJourneySuite();
+
+	it("runs a hyphenated worker with split text deltas without leaking or duplicating its response", async () => {
+		const role = "fact-finder";
+		const goal = "Inspect the local retention policy without changing it.";
+		const policy = "Retention period: 24 hours.\n";
+		const finding = "The local policy retains jobs for 24 hours.";
+		const scripts: JourneyScripts = {
+			router: [
+				call(
+					"d3r_run_role",
+					{
+						role,
+						brief: {
+							goal,
+							context: "Read policy.txt; do not edit files.",
+							acceptanceCriteria: ["Report the recorded retention period."],
+						},
+					},
+					"inspect",
+				),
+				phaseReply("inspect", "Retention checked"),
+			],
+			[role]: [
+				call("read_file", { path: "policy.txt" }),
+				...done(finding, {}, "Worker-only inspection response"),
+			],
+		};
+		const j = await open(scripts, {
+			routerShortcuts: false,
+			streamResponse: (_role, content) =>
+				journeyStream(content, undefined, (text) => [...text]),
+		});
+		await writeFiles(j.cwd, {
+			"policy.txt": policy,
+			".agents/agents/fact-finder.md":
+				"---\nname: fact-finder\ntier: low\ndescription: Inspect local policy\ncapabilities: [read]\n---\nInspect the recorded facts without making changes.",
+		});
+		const f = await j.connect();
+		const { sessionId } = await f.session();
+		await expectStop(f.prompt(sessionId, goal));
+		const { context } = lastRequest(j.requests, role);
+		expect(JSON.stringify(context.messages)).toContain(goal);
+		expect(result(context, "read_file")).toMatchObject({ isError: false });
+		expect(resultText(context, "read_file")).toContain(policy.trim());
+		expect(result(context, "d3r_report")).toMatchObject({ isError: false });
+		const completed = await f.state(sessionId);
+		expect(completed.inner).toMatchObject({
+			standaloneRole: role,
+			engine: {
+				status: "completed",
+				records: [
+					expect.objectContaining({
+						role,
+						outcome: { status: "completed", summary: finding },
+					}),
+				],
+			},
+		});
+		expectTextOnce(agentText(f.updates), finding);
+		expect(agentText(f.updates)).toMatch(/^## Retention checked/);
+		expect(agentText(f.updates)).not.toContain("Worker-only");
+		await expect(readFile(resolve(j.cwd, "policy.txt"), "utf8")).resolves.toBe(
+			policy,
+		);
+		expect(new Set(j.requests.map((request) => request.role))).toEqual(
+			new Set(["router", role]),
+		);
+		expect(Object.values(scripts).every((steps) => steps.length === 0)).toBe(
+			true,
+		);
+	});
 
 	// oxlint-disable-next-line max-statements -- Real worktree evidence, role isolation, and subsequent discussion form one journey.
 	it("runs a standalone auditor read-only, reloads completed-role Phase picker changes and starts only the next requested phase", async () => {
@@ -326,15 +399,10 @@ describe("native ACP shipped-workflow journeys", () => {
 			"## Role: auditor\nStatus: completed\nMode: standalone\nThis is an independent role task, not completion or approval of a phase.",
 		);
 		expect(agentText(f.updates)).toMatch(/^## Worktree audit/);
-		expect(agentText(f.updates)).toContain(finding);
+		expectTextOnce(agentText(f.updates), finding);
 		expect(agentText(f.updates)).not.toMatch(
 			/Worker-only|"status"|```json|## Phase:|Workflow complete/,
 		);
-		expect(
-			f.updates.filter(
-				({ update }) => update.sessionUpdate === "agent_message_chunk",
-			),
-		).toHaveLength(1);
 		const beforePicker = {
 			requests: j.requests.length,
 			runtimes: j.runtimes.length,
@@ -503,13 +571,8 @@ describe("native ACP shipped-workflow journeys", () => {
 			/^## Inline task ready/,
 		);
 		for (const report of Object.values(reports)) {
-			expect(agentText(resumed.updates.slice(nextUpdates))).toContain(report);
+			expectTextOnce(agentText(resumed.updates.slice(nextUpdates)), report);
 		}
-		expect(
-			resumed.updates
-				.slice(nextUpdates)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
 		for (const { context } of roleRequests(j.requests, "router")) {
 			expect(context.tools?.map(({ name }) => name).toSorted()).toEqual(
 				[

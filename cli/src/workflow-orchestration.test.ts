@@ -486,24 +486,31 @@ describe("workflow topics and host context", () => {
 		expect(h.saved().topic).toBeUndefined();
 		expect(h.createAgent).not.toHaveBeenCalled();
 		const controller = new AbortController();
+		const outcomes: PromiseSettledResult<RuntimeToolResult>[] = [];
 		await expect(
 			h.prompt(
 				"Cancel before accepting work",
 				async ({ run }) => {
 					controller.abort();
-					await expect(run(start("audit"))).rejects.toThrow();
-					await expect(
-						run({
-							action: "role",
-							role: "first",
-							brief,
-							topic: "not-accepted",
-						}),
-					).rejects.toThrow();
+					outcomes.push(
+						...(await Promise.allSettled([
+							run(start("audit")),
+							run({
+								action: "role",
+								role: "first",
+								brief,
+								topic: "not-accepted",
+							}),
+						])),
+					);
 				},
 				controller.signal,
 			),
 		).resolves.toBe("cancelled");
+		expect(outcomes).toEqual([
+			{ status: "rejected", reason: expect.any(Error) },
+			{ status: "rejected", reason: expect.any(Error) },
+		]);
 		expect(h.saved().topic).toBeUndefined();
 		expect(h.createAgent).not.toHaveBeenCalled();
 		const topic = WorkflowTopicName.parse("existing-search-cancellation");
@@ -892,18 +899,22 @@ describe("persistent workflow orchestration", () => {
 			),
 		);
 		const controller = new AbortController();
+		const outcomes: PromiseSettledResult<RuntimeToolResult>[] = [];
 		await expect(
 			h.prompt(
 				"Cancel before tools",
 				async ({ run }) => {
 					controller.abort();
-					await Promise.all(
-						actions.map((action) => expect(run(action)).rejects.toThrow()),
+					outcomes.push(
+						...(await Promise.allSettled(actions.map((action) => run(action)))),
 					);
 				},
 				controller.signal,
 			),
 		).resolves.toBe("cancelled");
+		expect(outcomes).toEqual(
+			actions.map(() => ({ status: "rejected", reason: expect.any(Error) })),
+		);
 		expect(h.saved().engine).toBeNull();
 		expect(h.createAgent).not.toHaveBeenCalled();
 		await h.runtime.dispose();

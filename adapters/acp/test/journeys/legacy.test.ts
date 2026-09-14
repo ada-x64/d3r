@@ -1,5 +1,6 @@
 import {
 	expectStop,
+	expectTextOnce,
 	type JourneyScripts,
 	JOURNEY_MODEL,
 	journeyStream,
@@ -358,11 +359,6 @@ describe("native ACP shipped-workflow journeys", () => {
 		);
 		expect(journeyText(f.updates.slice(completionStart))).toBe(markdown);
 		expect(
-			f.updates
-				.slice(completionStart)
-				.filter(({ update }) => update.sessionUpdate === "agent_message_chunk"),
-		).toHaveLength(1);
-		expect(
 			f.updates.some(
 				({ update }) => update.sessionUpdate === "agent_thought_chunk",
 			),
@@ -423,14 +419,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		const resumed = await j.connect();
 		await resumed.load(sessionId);
 		await expect(resumed.checkpoint(sessionId)).resolves.toEqual(checkpoint);
-		expect(
-			resumed.updates.filter(
-				({ update }) =>
-					update.sessionUpdate === "agent_message_chunk" &&
-					update.content.type === "text" &&
-					update.content.text === markdown,
-			),
-		).toHaveLength(1);
+		expectTextOnce(journeyText(resumed.updates), markdown);
 		expect(j.requests).toHaveLength(effects.requests);
 		expect(j.runtimes).toHaveLength(effects.runtimes);
 		expect(j.permissions).toHaveLength(effects.permissions);
