@@ -231,7 +231,8 @@ describe("native session file store", () => {
 		await release();
 		const releaseAgain = await createSessionStore(dir).acquire(id);
 		await releaseAgain();
-		expect(await readdir(dir)).toEqual([]);
+		expect(await readdir(dir)).toEqual([`${id}.lock`]);
+		expect(await readdir(join(dir, `${id}.lock`))).toEqual([]);
 	});
 
 	it.skipIf(process.platform === "win32")(

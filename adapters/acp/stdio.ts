@@ -67,6 +67,12 @@ export const runNativeStdio = async (
 		}
 		server.connection.close();
 	};
+	const disconnected = () => {
+		// EOF or a signal may already have started asynchronous cleanup.
+		if (!server.connection.signal.aborted) {
+			failed();
+		}
+	};
 	const interrupt = () => {
 		code = SIGNAL_EXIT.SIGINT;
 		server.connection.close();
@@ -77,6 +83,7 @@ export const runNativeStdio = async (
 	};
 	input.on("error", failed);
 	output.on("error", failed);
+	output.on("close", disconnected);
 	signals.on("SIGINT", interrupt);
 	signals.on("SIGTERM", terminate);
 	try {
@@ -86,6 +93,7 @@ export const runNativeStdio = async (
 	} finally {
 		input.off("error", failed);
 		output.off("error", failed);
+		output.off("close", disconnected);
 		signals.off("SIGINT", interrupt);
 		signals.off("SIGTERM", terminate);
 		input.pause();

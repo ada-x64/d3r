@@ -9,6 +9,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { contentBlock } from "./params.ts";
+import { acquireSessionLock } from "./session-lock.ts";
 
 /** A durable intent prevents restoring stale state while an effectful mutation is unsettled. */
 export type SessionMutation = "prompt" | "config" | "restore";
@@ -219,9 +220,9 @@ const syncDirectory = async (dir: string): Promise<void> => {
 		await directory.close();
 	}
 };
-/** Private, atomic files with exclusive session leases; callers must release leases on shutdown.
- * The directory is trusted host configuration. After an ungraceful process death, stale
- * .lock files require operator removal after confirming no process owns the session.
+/** Private atomic sessions on trusted local storage, with owner-aware exclusive leases.
+ * Proven-dead owners can be reclaimed; legacy or unverifiable locks require operator recovery.
+ * An empty .lock directory is an available registry, not an active lease.
  */
 export const createSessionStore = (
 	dir: string,
@@ -282,31 +283,15 @@ export const createSessionStore = (
 	return {
 		acquire: async (id) => {
 			const path = pathFor(id, ".lock");
-			await ready();
 			try {
-				const file = await open(path, "wx", FILE_MODE);
-				await file.close();
+				await ready();
+				return await acquireSessionLock(path);
 			} catch (error) {
-				if (hasCode(error, "EEXIST")) {
-					throw RequestError.invalidRequest(
-						undefined,
-						"Session is already open or locked",
-					);
+				if (error instanceof RequestError) {
+					throw error;
 				}
 				throw RequestError.internalError(undefined, "Could not lock session");
 			}
-			let released = false;
-			return async () => {
-				if (released) {
-					return;
-				}
-				released = true;
-				await unlink(path).catch((error: unknown) => {
-					if (!hasCode(error, "ENOENT")) {
-						throw new Error("Could not unlock session");
-					}
-				});
-			};
 		},
 		get: async (id) => {
 			const stored = await read(id);

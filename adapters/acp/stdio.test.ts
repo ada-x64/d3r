@@ -1,17 +1,21 @@
 import { RequestError } from "@agentclientprotocol/sdk";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { PassThrough, Writable } from "node:stream";
 import { type RuntimePrompt, type RuntimeSession } from "@d3r/core/runtime";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runNativeStdio } from "./stdio.ts";
+import { createSessionStore, type SessionStore } from "./store.ts";
+import { deferred, runtime, waitForAbort } from "./test-support.ts";
 
 /** Independently specified shell statuses for the wrapper's signal contract. */
 const SIGNAL_EXIT = { SIGINT: 130, SIGTERM: 143 } as const;
 /** Split inside the JSON prefix to exercise partial reads rather than complete frames. */
 const FRAME_SPLIT = 7;
 /** Exercise actual byte framing, not SDK-normalized request objects. */
-const fixture = (createSession: () => RuntimeSession) => {
+const fixture = (createSession: () => RuntimeSession, store?: SessionStore) => {
 	const stdin = new PassThrough();
 	const stdout = new PassThrough();
 	const signals = new EventEmitter();
@@ -23,6 +27,7 @@ const fixture = (createSession: () => RuntimeSession) => {
 		version: "stdio-test",
 		agentInfo: { name: "native-test", title: "Native test" },
 		createSession,
+		store,
 		stdin,
 		stdout,
 		signals,
@@ -38,16 +43,81 @@ const fixture = (createSession: () => RuntimeSession) => {
 			.split("\n")
 			.filter(Boolean)
 			.map((line) => JSON.parse(line));
-	const request = async (id: string, method: string, params: unknown) => {
+	const send = (id: string, method: string, params: unknown) => {
 		const text = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
 		stdin.write(text.slice(0, FRAME_SPLIT));
 		stdin.write(text.slice(FRAME_SPLIT));
+	};
+	const request = async (id: string, method: string, params: unknown) => {
+		send(id, method, params);
 		await vi.waitFor(() =>
 			expect(messages().some((message) => message.id === id)).toBe(true),
 		);
 		return messages().find((message) => message.id === id)!;
 	};
-	return { stdin, stdout, signals, running, request, messages };
+	return { stdin, stdout, signals, running, send, request, messages };
+};
+
+/** Hold both prompt settlement and disposal so disconnect cannot release a lease early. */
+const pendingFixture = async () => {
+	const dir = await mkdtemp(join(tmpdir(), "d3r-stdio-"));
+	const store = createSessionStore(dir);
+	const calls: RuntimePrompt[] = [];
+	const cleanup = deferred<void>();
+	const disposal = deferred<void>();
+	const settled = vi.fn();
+	const done = vi.fn();
+	const dispose = vi.fn(() => disposal.promise);
+	const f = fixture(
+		() => ({
+			...runtime(),
+			dispose,
+			prompt: async (request) => {
+				calls.push(request);
+				await waitForAbort(request.signal).catch(() => {});
+				await cleanup.promise;
+				settled();
+				return "completed";
+			},
+		}),
+		store,
+	);
+	const close = async () => {
+		cleanup.resolve();
+		disposal.resolve();
+		f.signals.emit("SIGTERM");
+		await f.running;
+		await rm(dir, { recursive: true, force: true });
+	};
+	void f.running.then(done);
+	try {
+		await f.request("initialize", "initialize", { protocolVersion: 1 });
+		const created = await f.request("new", "session/new", {
+			cwd: resolve("workspace"),
+			mcpServers: [],
+		});
+		const sessionId = created.result?.sessionId as string;
+		f.send("prompt", "session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "hi" }],
+		});
+		await vi.waitFor(() => expect(calls).toHaveLength(1));
+		return {
+			...f,
+			store,
+			sessionId,
+			signal: calls[0].signal,
+			cleanup,
+			disposal,
+			settled,
+			done,
+			dispose,
+			close,
+		};
+	} catch (error) {
+		await close();
+		throw error;
+	}
 };
 
 /** CLI composition owns exit codes; the wrapper owns transport and resource shutdown. */
@@ -103,40 +173,54 @@ describe("native stdio wrapper", () => {
 		}
 	});
 
-	it.each(["SIGINT", "SIGTERM"] as const)(
-		"aborts and disposes on %s without calling process.exit",
-		async (signal) => {
-			const calls: RuntimePrompt[] = [];
-			const dispose = vi.fn(async () => {});
-			const f = fixture(() => ({
-				dispose,
-				prompt: async (request) => {
-					calls.push(request);
-					await new Promise<void>((done) =>
-						request.signal.addEventListener("abort", () => done(), {
-							once: true,
-						}),
-					);
-					return "completed";
-				},
-			}));
+	it.each([
+		{ cause: "stdout close", code: 1 },
+		{ cause: "stdin close", code: 1 },
+		{ cause: "EOF", code: 0 },
+		{ cause: "SIGINT", code: SIGNAL_EXIT.SIGINT },
+		{ cause: "SIGTERM", code: SIGNAL_EXIT.SIGTERM },
+	] as const)(
+		"aborts on $cause, waits for cleanup before unlocking and ignores late closes",
+		async ({ cause, code }) => {
+			const f = await pendingFixture();
 			try {
-				await f.request("initialize", "initialize", { protocolVersion: 1 });
-				const created = await f.request("new", "session/new", {
-					cwd: resolve("workspace"),
-					mcpServers: [],
+				const outputClosed = once(f.stdout, "close");
+				if (cause === "stdout close") {
+					expect(f.stdin.destroyed).toBe(false);
+					expect(f.stdin.writableEnded).toBe(false);
+					f.stdout.destroy();
+				} else if (cause === "stdin close") {
+					f.stdin.destroy();
+				} else if (cause === "EOF") {
+					f.stdin.end();
+				} else {
+					f.signals.emit(cause);
+				}
+				await vi.waitFor(() => expect(f.signal.aborted).toBe(true));
+				f.stdout.destroy();
+				await outputClosed;
+				expect(f.settled).not.toHaveBeenCalled();
+				expect(f.dispose).not.toHaveBeenCalled();
+				expect(f.done).not.toHaveBeenCalled();
+				await expect(f.store.acquire(f.sessionId)).rejects.toMatchObject({
+					code: RequestError.invalidRequest().code,
 				});
-				f.stdin.write(
-					`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "session/prompt", params: { sessionId: created.result?.sessionId, prompt: [{ type: "text", text: "hi" }] } })}\n`,
-				);
-				await vi.waitFor(() => expect(calls).toHaveLength(1));
-				f.signals.emit(signal);
-				await expect(f.running).resolves.toBe(SIGNAL_EXIT[signal]);
-				expect(calls[0].signal.aborted).toBe(true);
-				expect(dispose).toHaveBeenCalledTimes(1);
+				f.cleanup.resolve();
+				await vi.waitFor(() => expect(f.dispose).toHaveBeenCalledTimes(1));
+				expect(f.settled).toHaveBeenCalledTimes(1);
+				expect(f.done).not.toHaveBeenCalled();
+				await expect(f.store.acquire(f.sessionId)).rejects.toMatchObject({
+					code: RequestError.invalidRequest().code,
+				});
+				f.disposal.resolve();
+				await expect(f.running).resolves.toBe(code);
+				const release = await f.store.acquire(f.sessionId);
+				await release();
+				expect(f.signals.listenerCount("SIGINT")).toBe(0);
+				expect(f.signals.listenerCount("SIGTERM")).toBe(0);
+				expect(f.stdout.listenerCount("close")).toBe(0);
 			} finally {
-				f.signals.emit("SIGTERM");
-				await f.running;
+				await f.close();
 			}
 		},
 	);

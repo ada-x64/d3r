@@ -750,10 +750,28 @@ or missing required child checkpoint does not authorize a fresh role replay;
 unknown-write and checkpoint failures fail closed. A clean cancellation with
 complete retained checkpoints is different from this recovery-required state.
 
-A crash can leave a stale session lock. Confirm no D3R process owns the session
-before manually removing its lock. Incomplete sessions are refused rather than
-automatically replayed; start a new session and inspect the workspace. Keep a
-backup before manually editing persisted state.
+New session locks record their owning process in private claims inside a
+`<session-id>.lock` directory. On trusted local filesystems, loading a session
+reclaims claims only when their owners are provably gone. Linux/WSL checks boot
+identity, PID namespace visibility, and process start ticks to handle reboot and
+PID reuse. There is no age-based expiry: a slow or idle live owner keeps its
+lease. Unknown or foreign ownership requires manual inspection, not takeover.
+Empty `.lock` directories are normal reusable registries and do not block
+resume.
+
+EOF, stream errors, or a closed output pipe initiate cancellation and wait for
+started work and cleanup before releasing ownership. If a Windows/WSL bridge
+keeps the old D3R process and its pipes alive, automatic takeover is unsafe;
+close that agent connection or stop the old process before retrying. The lock
+error identifies a live owner by PID when verifiable.
+
+Older empty `.lock` **files** contain no owner information and still need a
+one-time manual cleanup after confirming the previous D3R process has stopped.
+Use the current D3R version to read the new directory-based locks. Recovering a
+lock does not recover an incomplete mutation: those sessions remain refused
+rather than automatically replayed or rolled back to an older checkpoint.
+Inspect the workspace before repeating work, and keep a backup before manually
+editing persisted state.
 
 Text-only failed/cancelled model turns roll back their model context. Once a
 tool starts, its results and effects are retained conservatively. Already
