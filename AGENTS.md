@@ -45,3 +45,17 @@ sections before making or evaluating changes. Reuse instruction text already
 provided; if essential guidance is inaccessible or contradictory, identify the
 specific gap rather than guessing. Do not copy the full rule catalogue into role
 prompts, task briefs, or generated artifacts.
+
+## Human review
+
+Crit is the standing default for human review of saved documents and scoped
+commits, via an available harness integration or the installed CLI. This is a
+presentation preference, not an extra browser checkpoint for every AI review. AI
+reviewers remain read-only report producers; human approval neither replaces
+that gate or a worker report nor authorizes commits, pushes, or unrelated work.
+
+Follow [`docs/crit.md`](docs/crit.md) for target selection, CLI usage, approval,
+cancellation, and privacy. Keep reviews local and unshared unless the user
+explicitly requests exposure or upload. Honor explicit inline-only requests;
+otherwise, if Crit is unavailable, explain and use Markdown. Do not auto-install
+or download tools, or substitute `npx difit`.

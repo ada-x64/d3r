@@ -44,6 +44,7 @@ export const nativeJourneySuite = () => {
 			readTextFile,
 			getWebConfig = () => ({ providerId: "exa" }),
 			createRuntime = createEmbeddedRuntime,
+			createCritReviewTool,
 			streamResponse = (_role: string, content: JourneyMessage["content"]) =>
 				journeyStream(content),
 		}: {
@@ -52,6 +53,7 @@ export const nativeJourneySuite = () => {
 			models?: NativeModel[];
 			getWebConfig?: NativeDependencies["getWebProviderConfig"];
 			createRuntime?: NativeDependencies["createEmbeddedRuntime"];
+			createCritReviewTool?: NativeDependencies["createCritReviewTool"];
 			streamResponse?: (
 				role: string,
 				content: JourneyMessage["content"],
@@ -128,6 +130,7 @@ export const nativeJourneySuite = () => {
 				{ home, version: "journey-test" },
 				{
 					getWebProviderConfig: getWebConfig,
+					...(createCritReviewTool ? { createCritReviewTool } : {}),
 					createEmbeddedRuntime: (options) => {
 						const label = options.budgetLabel;
 						if (!label) {

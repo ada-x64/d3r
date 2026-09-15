@@ -37,6 +37,9 @@ too many and the build order graph turns into noise.
   `process/designs/<topic>/` directory. Names each task, scopes it explicitly
   (in and out), records the build-order graph, and lists open questions tagged
   `[for: schemer]` or `[for: human]`.
+- For Crit human review, save `plan.md` and return its exact workspace or vault
+  path to the caller. The caller owns review launch; this role gains no command
+  execution capability.
 
 ## Process
 

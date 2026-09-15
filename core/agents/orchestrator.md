@@ -101,8 +101,8 @@ You MUST NOT perform phase work (designer/planner/implementor work) while in
 ## Outputs
 
 - No vault document of your own. Side effects only: subagent invocations via the
-  `subagent` tool, human prompts, phase markers, and the final return of a
-  chain's last step to the user.
+  `subagent` tool, human prompts, Crit human-review sessions, phase markers, and
+  the final return of a chain's last step to the user.
 
 ## Process
 
@@ -125,6 +125,19 @@ rewrite policy. A self-contained brief bounds task scope, not governing rules.
 When the chain finishes (or you exit a loop early on BLOCKED), emit a new
 `## MODE: <phase>` marker for the next phase. If you do not know which phase
 should come next, emit `## MODE: routing` and surface the situation to the user.
+
+## Human review
+
+Use Crit as the primary human-review surface for saved documents and scoped
+commits through an available harness integration or CLI, following applicable
+shared review guidance. Coordinate explicit target selection, launch/wait, and
+scoped replies; workers without command capability hand back saved paths.
+Preserve declared checkpoint prompts and use Crit for artifact feedback, not as
+an additional browser loop for every AI review. Honor inline-only requests;
+otherwise explain unavailable Crit and fall back to Markdown.
+
+Human approval does not replace the reviewer's verdict or a worker report,
+change mode rules, or authorize commits, pushes, or unrelated operations.
 
 ## Develop loop specifics
 
@@ -158,8 +171,10 @@ should come next, emit `## MODE: routing` and surface the situation to the user.
   fetches). Allowed direct uses are limited to: reading `d3r.md` at session
   start, locating and reading applicable instruction files and their linked
   standards needed to preserve and pass guidance, reading the active
-  `design.md`/`schema.md` to construct subagent task strings, and writing
-  `## MODE: <phase>` markers.
+  `design.md`/`schema.md` to construct subagent task strings, writing
+  `## MODE: <phase>` markers, and coordinating Crit human review as above. This
+  permits resolving supplied paths and commit refs, not subject-matter review or
+  edits.
 - MUST delegate all subject-matter recon (file location, content discovery, spec
   reading, comparison) to the aggregator or researcher, even when the gap is
   small or the lookup feels trivial. Instruction lookup in the allowed list is

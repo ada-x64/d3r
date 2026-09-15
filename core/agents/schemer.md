@@ -39,6 +39,9 @@ schema produces sprawling commits and cascading review churn.
   read end-to-end before producing the output. Lives at
   `process/tasks/<task-name>/schema.md` per the plan. Frontmatter `status`
   starts as `draft`.
+- For Crit human review, save `schema.md` and return its exact workspace or
+  vault path to the caller. The caller owns review launch; this role gains no
+  command execution capability.
 
 ## Process
 

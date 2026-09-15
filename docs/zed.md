@@ -573,6 +573,48 @@ Blocked-role restart can instead use the same-task reconstruction described
 above. Older initialized native sessions still use the legacy abandon/restart
 behavior.
 
+## Human review with Crit
+
+Crit is the default presentation for human review of saved documents and scoped
+commits. The native router exposes `crit_review`; workers do not gain command
+capabilities or a new browser checkpoint merely because they perform AI review.
+See [Human review with Crit](crit.md) for target selection, CLI fallback, Pi
+skill installation, feedback handling, and privacy.
+
+The tool accepts explicit workspace/vault files, a base/head range, or an
+explicitly requested broader branch review. The `branch` target uses Crit's
+auto-detection and may include both committed and uncommitted changes; it is not
+an uncommitted-only worktree diff. Commit refs in a `range` target are resolved
+to immutable SHAs before Crit starts. It prefers `~/go/bin/crit`, then `crit` on
+the inherited `PATH`; it does not source `.zshrc`, install packages, or invoke a
+shell. Files must already be saved; editor-only changes are not included in a
+document review.
+
+Launching Crit uses the existing command-approval scope, including an explicitly
+remembered thread grant. Crit writes its own local review state and can honor
+configured hooks, so this is not a sandboxed read. The startup URL appears in
+the active tool card; open it and click **Finish Review** when ready. The one
+pending call waits without additional model requests or polling, and stopping
+the D3R turn cancels that waiting client. No global Crit stop is issued.
+
+New launches select loopback and disable sharing/public-URL defaults. Only a
+validated local startup URL is displayed. Keep Crit quiet mode disabled so the
+CLI announces that URL; a missing announcement reports a startup timeout.
+Existing matching Crit daemons retain their own configuration; do not reuse a
+known exposed review without authorization. Windows/WSL browser reachability
+still depends on local port forwarding.
+
+A successful, uncancelled positive approval marker approves only the selected
+review target. Empty comments, exit zero, or a cancelled call do not approve.
+Negative status can also mean interrupted review, so D3R returns it as
+not-approved rather than inventing a human decision. Feedback goes back to the
+router for a Markdown summary and scoped follow-up; it is not an executable
+command or an AI worker report. Crit approval does not commit, push, publish,
+advance an unresolved workflow checkpoint, or authorize unrelated changes.
+
+Honor explicit inline-only requests. If Crit is unavailable, explain and use
+Markdown; never auto-download a replacement or substitute `npx difit`.
+
 ## Request budgets and extensions
 
 **Implementation has no D3R request-count or cumulative token allowance.** The

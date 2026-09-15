@@ -581,6 +581,7 @@ describe("native ACP shipped-workflow journeys", () => {
 					"vault_edit",
 					"web_search",
 					"web_fetch",
+					"crit_review",
 					"d3r_start_phase",
 					"d3r_run_role",
 					"d3r_continue_phase",

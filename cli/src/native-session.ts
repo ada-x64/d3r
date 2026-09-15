@@ -424,15 +424,23 @@ export const createLazyNativeSession = ({
 			if (roleTool) {
 				phaseTools.push(roleTool);
 			}
+			const routerTools = [
+				...phaseTools,
+				deps.createCritReviewTool({
+					home: saved.sources.home,
+					roots: [input.cwd, ...(trustedInput.additionalDirectories ?? [])],
+					excludedDirectories: [stateDir],
+				}),
+			];
 			if (
-				tools.some((tool) => phaseTools.some(({ name }) => name === tool.name))
+				tools.some((tool) => routerTools.some(({ name }) => name === tool.name))
 			) {
 				throw new Error("Phase tool names are reserved");
 			}
 			const routing = create(
 				saved.selection,
 				nativeSystemPrompt(saved.resources, undefined, orchestrated),
-				{ tools: [...tools, ...phaseTools], maxTurns: null },
+				{ tools: [...tools, ...routerTools], maxTurns: null },
 			);
 			runtime = routing;
 			const phaseRuntime = deps.createWorkflowRuntime({

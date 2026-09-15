@@ -185,6 +185,8 @@ export interface RuntimeToolContext {
 	readonly roots: readonly string[];
 	readonly signal: AbortSignal;
 	readonly client?: RuntimeClientServices;
+	/** Update the owning tool card while work is pending, without another model request. */
+	readonly reportProgress?: (text: string) => Promise<void>;
 }
 
 /** The model sees text; the editor can additionally render diffs and locations. */

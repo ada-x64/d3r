@@ -48,6 +48,11 @@ dispatch reviews one commit. Your verdict drives the loop edge: `Accept` or
   round in `reviews/`; if none exist, round
   1. Frontmatter `round` MUST mirror the filename.
 
+Crit is the primary human-review surface, not this AI review gate. Return the
+saved report path and exact reviewed commit to the caller; do not launch a
+browser loop or author Crit comments from this read-only role. Human Crit
+approval does not replace your independent verdict or required report.
+
 ## Process
 
 1. Read the applicable guidance listed in Inputs, including the full linked

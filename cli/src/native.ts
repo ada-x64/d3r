@@ -15,6 +15,7 @@ import { parseNativeCheckpoint } from "./native-resources.ts";
 import { createLazyNativeSession } from "./native-session.ts";
 import { loadAgentResources, resolveWorkspaceResource } from "./resources.ts";
 import { createWorkspaceTools } from "./runtime-tools.ts";
+import { createCritReviewTool } from "./crit-review.ts";
 import { createWorkflowRuntime } from "./workflow-runtime.ts";
 import { parseWebProviderConfig } from "./utils/env.ts";
 
@@ -51,6 +52,7 @@ export interface NativeDependencies {
 	>;
 	readonly connectMcpTools: typeof connectMcpTools;
 	readonly createWorkspaceTools: typeof createWorkspaceTools;
+	readonly createCritReviewTool: typeof createCritReviewTool;
 	readonly createEmbeddedRuntime: typeof createEmbeddedRuntime;
 	readonly createWorkflowRuntime: typeof createWorkflowRuntime;
 	readonly resolveWorkspaceResource: typeof resolveWorkspaceResource;
@@ -91,6 +93,7 @@ export const createNativeDeps = async (
 		getWebProviderConfig: () => parseWebProviderConfig(process.env),
 		connectMcpTools,
 		createWorkspaceTools,
+		createCritReviewTool,
 		createEmbeddedRuntime,
 		createWorkflowRuntime,
 		resolveWorkspaceResource,

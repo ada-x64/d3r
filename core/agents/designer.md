@@ -38,6 +38,9 @@ downstream.
   back to `remember.md`, `research.md`, the discussion transcript, or an
   applicable standard by path/section. Every design decision records its
   rationale and at least one alternative considered.
+- For Crit human review, save `design.md` and return its exact workspace or
+  vault path to the caller. The caller owns review launch; this role gains no
+  command execution capability.
 
 ## Process
 

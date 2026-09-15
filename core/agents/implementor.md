@@ -60,6 +60,11 @@ must stand on its own.
   commit was landed, the verify result, any deviation, and - when work cannot
   proceed - a top-level `## BLOCKED` section that exits the Develop loop early.
 
+For human review, return the exact repository and commit ID/range to the caller
+for Crit via an available harness integration or CLI. Save any review artifacts
+first. Crit approval does not replace AI review or grant commit/push authority;
+the execution and mode rules below remain unchanged.
+
 ## Process
 
 1. Read the applicable guidance listed in Inputs, including the full linked

@@ -202,6 +202,14 @@ export const createToolBridge = (
 						roots: [input.cwd, ...(input.additionalDirectories ?? [])],
 						signal: activeSignal,
 						client: input.client,
+						reportProgress: async (text) => {
+							activeSignal.throwIfAborted();
+							if (call.result) {
+								throw new Error("Tool progress is no longer active");
+							}
+							await toolActivity(call, "in_progress", { text });
+							activeSignal.throwIfAborted();
+						},
 					}),
 				);
 			} catch {

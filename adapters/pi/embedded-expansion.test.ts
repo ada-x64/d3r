@@ -208,6 +208,7 @@ describe("embedded runtime expansion", () => {
 				roots: [CWD, root],
 				signal: expect.any(AbortSignal),
 				client: { requestPermission: permission },
+				reportProgress: expect.any(Function),
 			},
 		);
 		expect(eventsForTool.at(-1)).toMatchObject({
