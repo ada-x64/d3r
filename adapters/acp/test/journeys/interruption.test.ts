@@ -270,6 +270,9 @@ describe("native ACP shipped-workflow journeys", () => {
 					pause: { kind: "failure" },
 				});
 				expect(agentText(f.updates)).toMatch(/missing or invalid d3r_report/i);
+				for (const id of ["current-queue", "corrected-queue"]) {
+					expect(JSON.stringify(final.continuations)).toContain(id);
+				}
 				expect(
 					j.requests.some(
 						({ role }) => role === "reviewer" || role === "auditor",
@@ -284,7 +287,9 @@ describe("native ACP shipped-workflow journeys", () => {
 				`Status: ${reporting === "fresh report" ? "completed" : "blocked"}`,
 			);
 			expect(phaseResult).not.toContain(oldSummary);
-			expect(final.continuations ?? []).toEqual([]);
+			expect(
+				final.continuations?.map(({ recordId }) => recordId) ?? [],
+			).toEqual(reporting === "fresh report" ? [] : [worker.id]);
 			expect(final).not.toHaveProperty("summary");
 			expect(roleRequests(j.requests, "summary")).toEqual([]);
 			expectTextOnce(
@@ -646,9 +651,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			const retained = parseState(await resumed.checkpoint(sessionId)).inner!;
 			expect(retained.engine).toEqual(parseState(checkpoint).inner!.engine);
 			expect(retained.input).toEqual(parseState(checkpoint).inner!.input);
-			await expectStop(
-				resumed.prompt(sessionId, failure === "failed" ? "continue" : "status"),
-			);
+			await expectStop(resumed.prompt(sessionId, "status"));
 			expect(j.requests.slice(beforeReload).map(({ role }) => role)).toEqual([
 				"router",
 				"router",
@@ -659,15 +662,13 @@ describe("native ACP shipped-workflow journeys", () => {
 				parseState(await resumed.checkpoint(sessionId)).inner!.engine,
 			).toEqual(retained.engine);
 			expect(
-				result(
-					j.requests.at(-1)!.context,
-					failure === "failed" ? "d3r_continue_phase" : "d3r_phase_status",
-				),
-			).toMatchObject({ isError: failure === "failed" });
+				result(j.requests.at(-1)!.context, "d3r_phase_status"),
+			).toMatchObject({ isError: false });
 			await expect(readFile(resolve(j.cwd, "queue.txt"))).rejects.toMatchObject(
 				{ code: "ENOENT" },
 			);
 			scripts.implementor = [
+				call("list_directory", { path: "." }, "current-workspace"),
 				write,
 				reportCall("Created queue.txt for durable offline jobs."),
 				reply("Implementation ready."),
@@ -682,20 +683,47 @@ describe("native ACP shipped-workflow journeys", () => {
 				...done("Audited the durable queue.", {}, "Audit complete."),
 			];
 			const recoveryUpdates = resumed.updates.length;
-			if (failure === "failed") {
-				await expectStop(resumed.prompt(sessionId, "abandon"));
-				await expectStop(resumed.prompt(sessionId, request));
-			}
 			const recoveryRequests = j.requests.length;
-			await expectStop(
-				resumed.prompt(sessionId, failure === "failed" ? "auto" : "continue"),
-			);
+			const correction =
+				"Continue the same implementation in auto mode. The obstruction is gone; inspect the workspace before retrying queue.txt.";
+			await expectStop(resumed.prompt(sessionId, correction));
 			expect(await readFile(resolve(j.cwd, "queue.txt"), "utf8")).toBe(content);
 			expect(agentText(resumed.updates.slice(recoveryUpdates))).toContain(
 				JOURNEY_SUMMARY,
 			);
 			const recovery = j.requests.slice(recoveryRequests);
 			expect(roleRequests(recovery, "summary")).toEqual([]);
+			expect(
+				result(lastRequest(recovery, "router").context, "d3r_continue_phase"),
+			).toMatchObject({ isError: false });
+			const restarted = roleRequests(recovery, "implementor")[0].context;
+			expect(JSON.stringify(restarted.messages)).toContain(correction);
+			if (failure === "failed") {
+				for (const id of ["write_file", "publish-queue"]) {
+					expect(result(restarted, id), id).toMatchObject({ isError: true });
+				}
+			}
+			const implemented = lastRequest(recovery, "implementor").context;
+			expect(result(implemented, "current-workspace")).toMatchObject({
+				isError: false,
+			});
+			expect(resultText(implemented, "current-workspace")).not.toContain(
+				"queue.txt",
+			);
+			expect(result(implemented, "publish-queue")).toMatchObject({
+				isError: false,
+			});
+			const actions = toolUpdates(resumed.updates.slice(recoveryUpdates))
+				.filter(({ sessionUpdate }) => sessionUpdate === "tool_call")
+				.map(({ title }) => title);
+			expect(actions).toContain("d3r_continue_phase");
+			for (const action of [
+				"d3r_abandon_phase",
+				"d3r_start_phase",
+				"d3r_run_role",
+			]) {
+				expect(actions).not.toContain(action);
+			}
 
 			const progression = recovery
 				.filter(({ role }) => role !== "router")
@@ -706,12 +734,27 @@ describe("native ACP shipped-workflow journeys", () => {
 			expect(progression).toEqual(["implementor", "reviewer", "auditor"]);
 			for (const { role, context } of recovery) {
 				expect(JSON.stringify(context.messages)).toContain(request);
-				if (failure === "cancelled" && role !== "router") {
+				if (role !== "router") {
 					expect(JSON.stringify(context.messages)).not.toContain(replacement);
 				}
 			}
 			const completed = parseState(await resumed.checkpoint(sessionId)).inner!;
-			expect(completed.engine).toMatchObject({ status: "completed" });
+			expect(completed).toMatchObject({
+				topic: retained.topic,
+				engine: {
+					command: "develop",
+					mode: "auto",
+					status: "completed",
+					workflow: retained.engine!.workflow,
+				},
+			});
+			const worker = retained.engine!.records.find(
+				({ role }) => role === "implementor",
+			)!;
+			expect(
+				completed.engine!.records.find(({ id }) => id === worker.id),
+			).toMatchObject({ role: "implementor", status: "completed" });
+			expect(completed.continuations ?? []).toEqual([]);
 			expect(JSON.stringify(completed.input)).not.toContain(replacement);
 			for (const record of retained.engine!.records.filter(
 				({ status }) => status === "completed",

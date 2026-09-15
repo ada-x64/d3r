@@ -169,9 +169,7 @@ describe("native ACP shipped-workflow journeys", () => {
 			await expect(readdir(parent)).rejects.toMatchObject({ code: "ENOENT" });
 			const loaded = await resumed.state(sessionId);
 			const retained = loaded.inner!.engine;
-			await expectStop(
-				resumed.prompt(sessionId, failure === "failed" ? "continue" : "status"),
-			);
+			await expectStop(resumed.prompt(sessionId, "status"));
 			expect(j.requests.slice(beforeReload).map(({ role }) => role)).toEqual([
 				"router",
 				"router",
@@ -179,11 +177,8 @@ describe("native ACP shipped-workflow journeys", () => {
 			const unchanged = await resumed.state(sessionId);
 			expect(unchanged.inner!.engine).toEqual(retained);
 			expect(
-				journeyResult(
-					j.requests.at(-1)!.context,
-					failure === "failed" ? "d3r_continue_phase" : "d3r_phase_status",
-				),
-			).toMatchObject({ isError: failure === "failed" });
+				journeyResult(j.requests.at(-1)!.context, "d3r_phase_status"),
+			).toMatchObject({ isError: false });
 			scripts.implementor = [
 				call("vault_read", { path: note }, "stale-read"),
 				callWith(
@@ -315,15 +310,8 @@ describe("native ACP shipped-workflow journeys", () => {
 					"Audit complete.",
 				),
 			];
-			if (failure === "failed") {
-				await expectStop(resumed.prompt(sessionId, "abandon"));
-				await expectStop(resumed.prompt(sessionId, request));
-			}
 			const recoveryRequests = j.requests.length;
-			const recovery = resumed.prompt(
-				sessionId,
-				failure === "failed" ? "auto" : "continue",
-			);
+			const recovery = resumed.prompt(sessionId, "continue");
 			try {
 				await Promise.race([
 					edit.reached.promise,
@@ -347,14 +335,21 @@ describe("native ACP shipped-workflow journeys", () => {
 			const resumedImplementor = j.requests
 				.slice(recoveryRequests)
 				.find(({ role }) => role === "implementor")!.context;
+			expect(journeyPage(resumedImplementor, "before-denial").text).toBe(
+				original,
+			);
 			if (failure === "cancelled") {
-				expect(journeyPage(resumedImplementor, "before-denial").text).toBe(
-					original,
-				);
 				expect(
 					journeyResult(resumedImplementor, "publish-log"),
 				).toBeUndefined();
+			} else {
+				expect(journeyResult(resumedImplementor, "publish-log")).toMatchObject({
+					isError: true,
+				});
 			}
+			const recovered = await resumed.state(sessionId);
+			expect(recovered.inner?.topic).toBe(loaded.inner?.topic);
+			expect(recovered.inner?.engine?.mode).toBe(retained?.mode);
 			expect(j.requests.some(({ role }) => role === "summary")).toBe(false);
 			const implementor = lastRequest(j.requests, "implementor").context;
 			const reviewer = lastRequest(j.requests, "reviewer").context;

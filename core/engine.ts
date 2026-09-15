@@ -528,18 +528,31 @@ export const parseEngineState = (input: unknown): EngineState => {
 /** Continuations cannot replay completed siblings or cross unfinished work outside their batch. */
 const resumableRecords = (
 	state: EngineState,
-	status: "interrupted" | "waiting",
+	status: "interrupted" | "waiting" | "blocked",
 ): ExecutionRecord[] => {
 	const first = state.records.findIndex(
 		(record) => record.kind === "agent" && record.status === status,
 	);
 	if (first === -1) {
-		throw new Error(`No ${status} agents to resume`);
+		throw new Error(
+			`No ${status} agents to ${status === "blocked" ? "restart" : "resume"}`,
+		);
 	}
 	const { batch } = state.records[first];
 	if (
 		state.records.some((record, index) => {
 			if (record.batch === batch) {
+				if (status === "blocked" && record.kind === "agent") {
+					if (record.status === "skipped") {
+						return false;
+					}
+					if (record.status === "waiting") {
+						return (
+							record.outcome?.status !== "needs_human" ||
+							record.error !== undefined
+						);
+					}
+				}
 				return (
 					record.kind !== "agent" ||
 					(record.status !== status && record.status !== "completed")
@@ -550,8 +563,13 @@ const resumableRecords = (
 				: !["pending", "skipped"].includes(record.status);
 		})
 	) {
+		const label = {
+			blocked: "Blocked",
+			interrupted: "Interrupted",
+			waiting: "Reported",
+		}[status];
 		throw new Error(
-			`${status === "interrupted" ? "Interrupted" : "Reported"} batch cannot bypass unfinished or later settled work`,
+			`${label} batch cannot bypass unfinished or later settled work`,
 		);
 	}
 	return state.records.filter((record) => record.status === status);
@@ -590,6 +608,24 @@ export const resumeReportedBatch = (input: EngineState): EngineState => {
 			"Reported batch requires needs_human reports without errors",
 		);
 	}
+	records.forEach((record) => {
+		record.status = "running";
+		delete record.outcome;
+		delete record.error;
+	});
+	state.activeBatch = records[0].batch;
+	state.status = "running";
+	state.pause = null;
+	return parseEngineState(state);
+};
+
+/** Call only after an explicit user restart; blocked agents must report anew without answering siblings. */
+export const restartBlockedBatch = (input: EngineState): EngineState => {
+	const state = parseEngineState(input);
+	if (state.status !== "blocked" || state.pause?.kind !== "failure") {
+		throw new Error("Engine is not paused on a blocked batch");
+	}
+	const records = resumableRecords(state, "blocked");
 	records.forEach((record) => {
 		record.status = "running";
 		delete record.outcome;

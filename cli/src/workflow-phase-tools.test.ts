@@ -388,8 +388,14 @@ describe("workflow phase tools", () => {
 		expect(tool("d3r_continue_phase").description).toMatch(
 			/pending checkpoint or resumable cancellation/,
 		);
-		expect(tool("d3r_continue_phase").description).toContain(
-			"not a blanket retry",
+		expect(tool("d3r_continue_phase").description).toMatch(
+			/restart blocked roles.*user's.*(?:correction|retry)/i,
+		);
+		expect(tool("d3r_continue_phase").description).toMatch(
+			/same task.*completed siblings.*existing working diff/i,
+		);
+		expect(tool("d3r_continue_phase").description).toMatch(
+			/Do not .*replay completed work.*answer a human checkpoint.*retry automatically/i,
 		);
 		expect(tool("d3r_abandon_phase").description).toContain(
 			"retains existing workspace effects",

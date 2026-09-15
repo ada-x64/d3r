@@ -24,8 +24,6 @@ import {
 	interruptEngine,
 	recordOutcome,
 	restoreEngine,
-	resumeInterruptedBatch,
-	resumeReportedBatch,
 	settleBatch,
 	WorkflowOutcome,
 	type ExecutionRecord,
@@ -51,6 +49,7 @@ import {
 	snapshotWorkflowJson,
 	validateContinuations,
 	canResumeWorkflow,
+	resumeWorkflow,
 	describeWorkflowState,
 } from "./workflow-continuations.ts";
 import {
@@ -386,7 +385,6 @@ export const createWorkflowRuntime = (
 	): Promise<void> => {
 		const toolCallId = `${namespace}:role:${++sequence}:${record.id}`;
 		let child: RuntimeSession | null = null;
-		let settled = false;
 		let completedBeforeCancellation = false;
 		let resourceStop:
 			| "context_limit"
@@ -479,7 +477,6 @@ export const createWorkflowRuntime = (
 						parentToolCallId: chunk.parentToolCallId ?? toolCallId,
 					}),
 			});
-			settled = true;
 			completedBeforeCancellation =
 				orchestrated && reason === "completed" && !request.signal.aborted;
 			if (reason === "cancelled") {
@@ -517,17 +514,14 @@ export const createWorkflowRuntime = (
 					: "Role setup or execution failed; effects may have occurred. Workflow paused.";
 			}
 		} finally {
+			const retainAttempt =
+				result.accepting &&
+				(!completedBeforeCancellation ||
+					result.error ||
+					result.outcome?.status !== "completed");
 			result.accepting = false;
 			if (child) {
-				if (
-					orchestrated &&
-					((settled &&
-						(request.signal.aborted ||
-							(!result.error && result.outcome?.status === "needs_human"))) ||
-						resourceStop !== undefined) &&
-					child.snapshot &&
-					child.restore
-				) {
+				if (orchestrated && retainAttempt && child.snapshot && child.restore) {
 					try {
 						retained = snapshotWorkflowJson(child.snapshot());
 					} catch {
@@ -802,10 +796,23 @@ export const createWorkflowRuntime = (
 					};
 				}
 				if (canResume()) {
-					engine =
-						engine!.status === "interrupted"
-							? resumeInterruptedBatch(engine!)
-							: resumeReportedBatch(engine!);
+					const resumed = resumeWorkflow(engine!);
+					if (engine!.status === "blocked") {
+						input.push(...outputs(engine), {
+							type: "text",
+							text: [
+								"User-directed restart of blocked roles in the same task. Keep the existing working diff and completed steps; do not replay historical tool calls. Inspect current files and changes before deciding what remains.",
+								...resumed.records
+									.filter(({ status }) => status === "running")
+									.map((record) =>
+										continuations.some(({ recordId }) => recordId === record.id)
+											? `${record.role} (${record.id}): reuse the saved worker conversation.`
+											: `${record.role} (${record.id}): no worker transcript was retained. Use a fresh same-role conversation with the original brief, prior outcomes, and latest correction; reconstruct remaining work by inspecting the current working diff, not by repeating the old plan.`,
+									),
+							].join("\n"),
+						});
+					}
+					engine = resumed;
 				} else if (
 					engine!.status === "waiting" &&
 					["mode", "human", "semi"].includes(engine!.pause!.kind)

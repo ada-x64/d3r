@@ -2,14 +2,19 @@ import {
 	expectStop,
 	type JourneyScripts,
 	JOURNEY_MODEL,
+	JOURNEY_INIT_TIMEOUT,
 	journeyStream,
 	journeyFailureStream,
 	JOURNEY_PRIVATE_DIAGNOSTIC,
 	JOURNEY_DIAGNOSTIC_LEAK,
 	journeyCall as call,
 	journeyResult,
+	journeyResultText,
+	journeyPhaseReply as phaseReply,
 	journeyDone as done,
+	callWith,
 	journeyText,
+	journeyUserText,
 	journeyToolText,
 	journeyCheckpoint,
 	journeyTools,
@@ -19,8 +24,10 @@ import {
 } from "./helpers.ts";
 
 import { type RequestPermissionRequest } from "@agentclientprotocol/sdk";
+import { execFile } from "node:child_process";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { type NativeModel } from "../../../../cli/src/native-models.ts";
 import { deferred } from "../../test-support.ts";
@@ -214,6 +221,11 @@ describe("native ACP shipped-workflow journeys", () => {
 		};
 		const safeError =
 			"Role schemer: Model request failed (provider `fixture`; model `offline`; HTTP 429; code `insufficient_quota`). The provider reported an account quota or billing limit. Check usage allowance and billing with the provider. Tools started in this invocation and may have had effects. Review prior tool results before repeating work.";
+		const summary =
+			"Inspected tasks.md and its current diff; the operator edit is preserved.";
+		const request = "/delegate Save the durable queue tasks";
+		const correction =
+			"Continue the same schemer now that billing is fixed. Inspect tasks.md and its current diff; preserve my edit.";
 		const scripts: JourneyScripts = {
 			planner: done(
 				"Plan the durable queue without repeating completed writes.",
@@ -221,12 +233,45 @@ describe("native ACP shipped-workflow journeys", () => {
 			schemer: [
 				call("write_file", { path: "tasks.md", content: artifact }),
 				[],
+				call("read_file", { path: "tasks.md" }, "current-file"),
+				...done(summary),
 			],
 			router: [
-				reply("Review the retained file and billing before restarting."),
+				call("d3r_start_phase", {
+					phase: "delegate",
+					brief: {
+						goal: request,
+						context: "Keep the queue local.",
+						acceptanceCriteria: ["Preserve completed writes."],
+					},
+				}),
+				phaseReply("d3r_start_phase", "Delegation blocked"),
+				// The schemer is read/write-only; the router supplies the requested command evidence.
+				call(
+					"run_command",
+					{
+						command: "git",
+						args: [
+							"--no-pager",
+							"--no-optional-locks",
+							"diff",
+							"--no-ext-diff",
+							"--no-color",
+							"--",
+							"tasks.md",
+						],
+					},
+					"current-diff",
+				),
+				callWith("d3r_continue_phase", (context) => ({
+					instructions: `${correction}\nCurrent diff:\n${journeyResultText(context, "current-diff")}`,
+				})),
+				phaseReply("d3r_continue_phase", "Delegation recovered"),
+				reply(summary),
 			],
 		};
 		const j = await open(scripts, {
+			routerShortcuts: false,
 			streamResponse: (role, content) =>
 				role === "schemer" && content.length === 0
 					? journeyFailureStream(
@@ -250,10 +295,7 @@ describe("native ACP shipped-workflow journeys", () => {
 		};
 		const f = await j.connect();
 		const { sessionId } = await f.session();
-		const pending = f.prompt(
-			sessionId,
-			"/delegate Save the durable queue tasks",
-		);
+		const pending = f.prompt(sessionId, request);
 		try {
 			const permission = await Promise.race([
 				asked.promise,
@@ -313,10 +355,18 @@ describe("native ACP shipped-workflow journeys", () => {
 			failure,
 		});
 		const checkpoint = await f.checkpoint(sessionId);
-		expect(journeyCheckpoint(checkpoint).inner!.engine).toMatchObject({
+		const blocked = journeyCheckpoint(checkpoint).inner!;
+		expect(blocked.engine).toMatchObject({
 			status: "blocked",
 			pause: { kind: "failure", message: safeError },
 		});
+		const planner = blocked.engine!.records.find(
+			({ role }) => role === "planner",
+		)!;
+		const schemer = blocked.engine!.records.find(
+			({ role }) => role === "schemer",
+		)!;
+		expect(planner.status).toBe("completed");
 		const saved = await f.saved(sessionId);
 		expect(saved!.records).toContainEqual({ kind: "update", update: written });
 		expect(
@@ -326,6 +376,15 @@ describe("native ACP shipped-workflow journeys", () => {
 			requests: j.requests.length,
 			permissions: j.permissions.length,
 		};
+		// Index the real approved write so the recovering role can inspect the operator's diff, without a fixture commit.
+		const git = (...args: string[]) =>
+			promisify(execFile)(
+				"git",
+				["--no-pager", "--no-optional-locks", ...args],
+				{ cwd: j.cwd, timeout: JOURNEY_INIT_TIMEOUT },
+			);
+		await git("init", "--quiet");
+		await git("add", "--", "tasks.md");
 		// A replayed identical write would erase this external edit even if the final file still existed.
 		const external = `${artifact}\nOperator reviewed this file; preserve this edit.\n`;
 		await writeFile(resolve(j.cwd, "tasks.md"), external);
@@ -348,35 +407,80 @@ describe("native ACP shipped-workflow journeys", () => {
 		expect(j.requests).toHaveLength(beforeReload.requests);
 		expect(j.permissions).toHaveLength(beforeReload.permissions);
 		const recoveryStart = resumed.updates.length;
-		await expectStop(resumed.prompt(sessionId, "continue"));
-		expect(journeyText(resumed.updates.slice(recoveryStart))).toContain(
+		await expectStop(resumed.prompt(sessionId, correction));
+		const recovery = j.requests.slice(beforeReload.requests);
+		expect(new Set(recovery.map(({ role }) => role))).toEqual(
+			new Set(["router", "schemer"]),
+		);
+		const routed = lastRequest(recovery, "router").context;
+		for (const id of ["current-diff", "d3r_continue_phase"]) {
+			expect(journeyResult(routed, id), id).toMatchObject({ isError: false });
+		}
+		const restarted = roleRequests(recovery, "schemer")[0].context;
+		for (const fact of [
+			request,
 			safeError,
+			correction,
+			planner.outcome!.summary,
+		]) {
+			expect(JSON.stringify(restarted.messages)).toContain(fact);
+		}
+		expect(journeyResult(restarted, "write_file")).toEqual(writeResult);
+		const finished = lastRequest(recovery, "schemer").context;
+		for (const id of ["current-file", "d3r_report"]) {
+			expect(journeyResult(finished, id), id).toMatchObject({ isError: false });
+		}
+		expect(journeyResultText(finished, "current-file")).toContain(
+			"Keep completed writes across provider failures.",
 		);
-		expect(
-			j.requests.slice(beforeReload.requests).map(({ role }) => role),
-		).toEqual(["router", "router"]);
-		expect(
-			journeyResult(j.requests.at(-1)!.context, "d3r_continue_phase"),
-		).toMatchObject({ isError: true });
+		expect(journeyResultText(finished, "current-file")).toContain(
+			"Operator reviewed this file; preserve this edit.",
+		);
+		const diff = journeyResultText(routed, "current-diff");
+		expect(diff).toContain("+Operator reviewed this file; preserve this edit.");
+		expect(journeyUserText(restarted)).toContain(diff);
 		const recovered = await resumed.state(sessionId);
-		expect(recovered.inner!.engine).toEqual(
-			journeyCheckpoint(checkpoint).inner!.engine,
-		);
-		await expectStop(resumed.prompt(sessionId, "abandon"));
-		await expectStop(
-			resumed.prompt(sessionId, "What should I review before trying again?"),
-		);
+		expect(recovered.inner).toMatchObject({
+			topic: blocked.topic,
+			engine: {
+				command: "delegate",
+				mode: blocked.engine!.mode,
+				workflow: blocked.engine!.workflow,
+				status: "completed",
+			},
+		});
+		expect(recovered.inner!.engine!.records).toContainEqual(planner);
 		expect(
-			j.requests.slice(beforeReload.requests).map(({ role }) => role),
-		).toEqual(["router", "router", "router", "router", "router"]);
+			recovered.inner!.engine!.records.find(({ id }) => id === schemer.id),
+		).toMatchObject({
+			role: "schemer",
+			status: "completed",
+			outcome: { summary },
+		});
+		expect(recovered.inner!.continuations ?? []).toEqual([]);
+		expect(journeyText(resumed.updates.slice(recoveryStart))).toContain(
+			summary,
+		);
+		const actions = journeyTools(resumed.updates.slice(recoveryStart))
+			.filter(({ sessionUpdate }) => sessionUpdate === "tool_call")
+			.map(({ title }) => title);
+		expect(actions).toContain("d3r_continue_phase");
+		for (const action of [
+			"d3r_abandon_phase",
+			"d3r_start_phase",
+			"d3r_run_role",
+			"write_file",
+		]) {
+			expect(actions).not.toContain(action);
+		}
+		const beforeDiscussion = j.requests.length;
+		await expectStop(resumed.prompt(sessionId, "What recovered?"));
+		expect(j.requests.slice(beforeDiscussion).map(({ role }) => role)).toEqual([
+			"router",
+		]);
 		expect(JSON.stringify(j.requests.at(-1)!.context.messages)).toContain(
 			safeError,
 		);
-		expect(
-			journeyTools(resumed.updates.slice(recoveryStart))
-				.filter(({ sessionUpdate }) => sessionUpdate === "tool_call")
-				.map(({ title }) => title),
-		).toEqual(["d3r_continue_phase", "d3r_abandon_phase"]);
 		expect(
 			j.permissions.filter(({ toolCall }) => toolCall.title === "write_file"),
 		).toHaveLength(1);

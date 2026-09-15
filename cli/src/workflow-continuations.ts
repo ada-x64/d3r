@@ -2,6 +2,7 @@ import {
 	type EngineState,
 	resumeInterruptedBatch,
 	resumeReportedBatch,
+	restartBlockedBatch,
 } from "@d3r/core/engine";
 import { z } from "zod";
 
@@ -26,7 +27,7 @@ export const WorkflowJsonValue: z.ZodType<WorkflowJson> = z.lazy(() =>
 );
 /** Match the engine's bounded graph rather than allowing unlimited saved children. */
 const MAX_CONTINUATIONS = 10_000;
-/** Interrupted and clarification-seeking roles retain transcripts, not live sessions. */
+/** Paused roles retain transcripts, not live sessions; older blocked tasks may lack one. */
 export const WorkflowContinuations = z
 	.array(
 		z
@@ -65,6 +66,7 @@ export const validateContinuations = (
 						record.id === recordId &&
 						record.kind === "agent" &&
 						(record.status === "interrupted" ||
+							record.status === "blocked" ||
 							(record.status === "waiting" &&
 								record.outcome?.status === "needs_human" &&
 								!record.error)),
@@ -74,26 +76,42 @@ export const validateContinuations = (
 		throw new Error("Invalid interrupted role continuations");
 	}
 };
-/** Resuming is an explicit decision and requires evidence for every unfinished role. */
+/** Select the pure transition without changing task identity or replaying completed roles. */
+export const resumeWorkflow = (engine: EngineState): EngineState => {
+	switch (engine.status) {
+		case "blocked": {
+			return restartBlockedBatch(engine);
+		}
+		case "interrupted": {
+			return resumeInterruptedBatch(engine);
+		}
+		default: {
+			return resumeReportedBatch(engine);
+		}
+	}
+};
+
+/** A blocked task can restart with a fresh worker; other continuations require retained transcripts. */
 export const canResumeWorkflow = (
 	engine: EngineState | null,
 	rows: readonly WorkflowContinuation[],
 ): boolean => {
 	if (
 		!engine ||
-		(engine.status !== "interrupted" &&
+		(engine.status !== "blocked" &&
+			engine.status !== "interrupted" &&
 			!(engine.status === "waiting" && engine.pause?.kind === "report"))
 	) {
 		return false;
 	}
 	try {
-		const resumed =
-			engine.status === "interrupted"
-				? resumeInterruptedBatch(engine)
-				: resumeReportedBatch(engine);
-		return resumed.records
-			.filter(({ status }) => status === "running")
-			.every(({ id }) => rows.some(({ recordId }) => recordId === id));
+		const resumed = resumeWorkflow(engine);
+		return (
+			engine.status === "blocked" ||
+			resumed.records
+				.filter(({ status }) => status === "running")
+				.every(({ id }) => rows.some(({ recordId }) => recordId === id))
+		);
 	} catch {
 		return false;
 	}
@@ -120,6 +138,10 @@ export const describeWorkflowState = (
 				`### ${record.role ?? "Step"} (${record.status})\n${record.error ?? record.outcome?.summary ?? ""}`,
 		)
 		.join("\n\n");
+	const recovery =
+		engine.status === "blocked"
+			? "Blocked roles can be restarted with d3r_continue_phase using the user's correction or retry request. No abandonment, new topic, or mode selection is required. Reuse retained worker conversations where available; otherwise create a fresh same-role conversation from the brief and prior outcomes, and inspect the current working diff before continuing. Completed siblings and pending human decisions are preserved; do not replay historical tool calls."
+			: "The unfinished roles have retained conversations and settled tool results. The user's answer, correction, or explicit continue can resume only those roles; completed roles are not replayed. Use the latest instructions and inspect existing changes when needed.";
 	return [
 		standaloneRole
 			? `## Role: ${standaloneRole}\nStatus: ${engine.status}\nMode: ${engine.mode ?? "standalone"}\nThis is an independent role task, not completion or approval of a phase.`
@@ -129,9 +151,7 @@ export const describeWorkflowState = (
 		evidence.length > EVIDENCE_LIMITS.characters
 			? "[Role evidence truncated for this status report.]"
 			: "",
-		resumable
-			? "The unfinished roles have retained conversations and settled tool results. The user's answer, correction, or explicit continue can resume only those roles; completed roles are not replayed. Use the latest instructions and inspect existing changes when needed."
-			: "",
+		resumable ? recovery : "",
 		engine.status === "interrupted" && !resumable
 			? "This workflow lacks a resumable checkpoint. Discuss its recovery rather than rerunning completed steps. This does not disable unrelated inspection, requested vault maintenance, or explicitly requested operational commands."
 			: "",

@@ -2,6 +2,7 @@
 import { AgentSpec, Workflow } from "@d3r/core";
 import { type EngineState } from "@d3r/core/engine";
 import {
+	createRuntimeFailure,
 	type RuntimeActivity,
 	type RuntimeContent,
 	type RuntimePrompt,
@@ -1175,8 +1176,9 @@ describe("persistent workflow orchestration", () => {
 		expect(textOf(h.saved().history)).toContain(correction);
 	});
 
-	it("round-trips mixed needs_human and blocked or interrupted evidence without permitting replay", async () => {
+	it("restarts only the blocked sibling beside needs_human but rejects mixed interruption", async () => {
 		await Promise.all(
+			// oxlint-disable-next-line max-statements -- Keep mixed evidence, reload, and selective recovery in one scenario.
 			["blocked", "interrupted"].map(async (sibling) => {
 				const h = harness();
 				const controller = new AbortController();
@@ -1220,6 +1222,7 @@ describe("persistent workflow orchestration", () => {
 					),
 				).resolves.toBe(sibling === "interrupted" ? "cancelled" : "completed");
 				const saved = h.saved();
+				expect(h.children.map(({ name }) => name)).toEqual(["first", "second"]);
 				expect(saved.engine).toMatchObject({ status: sibling });
 				expect(
 					saved.engine!.records.map(({ role, status }) => ({ role, status })),
@@ -1229,36 +1232,67 @@ describe("persistent workflow orchestration", () => {
 					{ role: "last", status: "pending" },
 				]);
 				expect(saved.continuations).toEqual(
-					saved
-						.engine!.records.filter(
-							({ status }) => status === "waiting" || status === "interrupted",
-						)
-						.map(({ id, role }) => ({
-							recordId: id,
-							checkpoint: h.children.find(({ name }) => name === role)!.state,
-						})),
+					saved.engine!.records.slice(0, 2).map(({ id, role }) => ({
+						recordId: id,
+						checkpoint: h.children.find(({ name }) => name === role)!.state,
+					})),
 				);
 				await h.runtime.dispose();
 				const restored = harness();
 				restored.runtime.restore!(JSON.stringify(saved));
 				expect(restored.saved()).toEqual(saved);
 				expect(restored.createAgent).not.toHaveBeenCalled();
-				await restored.prompt(
-					"The queue is known now; continue if safe",
-					async ({ run }) => {
-						const status = await run({ action: "status" });
-						expect(status.text).toContain("Which search queue is in scope?");
-						expect(
-							await run({
-								action: "continue",
-								instructions: "Use the foreground queue",
-							}),
-						).toMatchObject({ isError: true });
-					},
+				const results: RuntimeToolResult[] = [];
+				const correction =
+					"The index is available; retry only the stopped role";
+				await restored.prompt(correction, async ({ run }) => {
+					results.push(await run({ action: "status" }));
+					results.push(
+						await run({
+							action: "continue",
+							instructions:
+								"Use the recovered index; leave the queue question unanswered",
+						}),
+					);
+				});
+				expect(results[0].text).toContain("Which search queue is in scope?");
+				if (sibling === "interrupted") {
+					expect(results[1].isError).toBe(true);
+					expect(restored.saved().engine).toEqual(saved.engine);
+					expect(restored.saved().continuations).toEqual(saved.continuations);
+					expect(restored.createAgent).not.toHaveBeenCalled();
+					return;
+				}
+				expect(results[1].isError).not.toBe(true);
+				expect(restored.children.map(({ name }) => name)).toEqual(["second"]);
+				const [retried] = restored.children;
+				expect(retried.session.restore).toHaveBeenCalledExactlyOnceWith(
+					saved.continuations![1].checkpoint,
 				);
-				expect(restored.saved().engine).toEqual(saved.engine);
-				expect(restored.saved().continuations).toEqual(saved.continuations);
-				expect(restored.createAgent).not.toHaveBeenCalled();
+				expect(retried.state.effects).toEqual([
+					"second inspected the workspace",
+					"second effect",
+				]);
+				expect(
+					textOf(retried.session.prompt.mock.calls[0][0].content),
+				).toContain(correction);
+				const waiting = restored.saved();
+				expect(waiting.topic).toBe(saved.topic);
+				expect(waiting.engine).toMatchObject({
+					command: saved.engine!.command,
+					workflow: saved.engine!.workflow,
+					mode: saved.engine!.mode,
+					status: "waiting",
+					pause: { kind: "report" },
+				});
+				expect(waiting.engine!.records[0]).toEqual(saved.engine!.records[0]);
+				expect(waiting.engine!.records[1]).toMatchObject({
+					id: saved.engine!.records[1].id,
+					status: "completed",
+					outcome: { summary: "second finished" },
+				});
+				expect(waiting.engine!.records[2]).toEqual(saved.engine!.records[2]);
+				expect(waiting.continuations).toEqual([saved.continuations![0]]);
 			}),
 		);
 	});
@@ -1723,41 +1757,122 @@ describe("persistent workflow orchestration", () => {
 		},
 	);
 
-	it("discards a failed role restore without prompting it or automatically replaying stale work", async () => {
-		const { h, turn, release } = await partialBatch();
-		release();
-		await turn;
-		const resumed = harness();
-		resumed.control.restoreFailure = "second";
-		resumed.runtime.restore!(JSON.stringify(h.runtime.snapshot!()));
-		await resumed.prompt("Resume with my correction", async ({ run }) => {
-			const result = await run({
-				action: "continue",
-				instructions: "Keep the settled edit",
+	it.each(["ordinary", "context_limit"] as const)(
+		"blocks a failed role restore (%s) until an explicit fresh same-role restart after reload",
+		// oxlint-disable-next-line max-statements -- One lifecycle distinguishes failed setup from a later user-directed fresh attempt.
+		async (failure) => {
+			const { h, turn, release } = await partialBatch();
+			release();
+			await turn;
+			const saved = h.saved();
+			expect(saved.continuations).toMatchObject([
+				{
+					checkpoint: {
+						effects: ["Partial edit settled before cancellation"],
+					},
+				},
+			]);
+			const resumed = harness();
+			resumed.control.restoreFailure = "second";
+			if (failure === "context_limit") {
+				const createAgent = resumed.createAgent.getMockImplementation()!;
+				resumed.createAgent.mockImplementationOnce((name, report) => {
+					const child = createAgent(name, report);
+					child.restore.mockImplementationOnce(() => {
+						throw createRuntimeFailure({
+							stage: "model_request",
+							category: "context_limit",
+							toolsStarted: false,
+						});
+					});
+					return child;
+				});
+			}
+			resumed.runtime.restore!(JSON.stringify(saved));
+			const results: RuntimeToolResult[] = [];
+			await resumed.prompt("Resume with my correction", async ({ run }) => {
+				results.push(
+					await run({
+						action: "continue",
+						instructions: "Keep the settled edit",
+					}),
+				);
 			});
-			expect(result.text).toContain("Status: blocked");
-		});
-		expect(resumed.children.map(({ name }) => name)).toEqual(["second"]);
-		const [child] = resumed.children;
-		expect(child.session.restore).toHaveBeenCalledTimes(1);
-		expect(child.session.prompt).not.toHaveBeenCalled();
-		expect(child.session.dispose).toHaveBeenCalledTimes(1);
-		expect(resumed.saved().continuations).toEqual([]);
-		const reloaded = harness();
-		reloaded.runtime.restore!(JSON.stringify(resumed.runtime.snapshot!()));
-		await reloaded.prompt("Try continuing again", async ({ run }) => {
-			expect(
-				await run({ action: "continue", instructions: "Try again" }),
-			).toMatchObject({ isError: true });
-		});
-		expect(reloaded.createAgent).not.toHaveBeenCalled();
-		expect(
-			reloaded.saved().engine?.records.find(({ role }) => role === "first"),
-		).toMatchObject({
-			status: "completed",
-			outcome: { summary: "first finished" },
-		});
-	});
+			expect(results[0].text).toContain("Status: blocked");
+			expect(resumed.children.map(({ name }) => name)).toEqual(["second"]);
+			const [child] = resumed.children;
+			expect(child.session.restore).toHaveBeenCalledExactlyOnceWith(
+				saved.continuations![0].checkpoint,
+			);
+			expect(child.session.prompt).not.toHaveBeenCalled();
+			expect(child.session.snapshot).not.toHaveBeenCalled();
+			expect(child.session.dispose).toHaveBeenCalledTimes(1);
+			const blocked = resumed.saved();
+			expect(blocked.engine?.status).toBe("blocked");
+			expect(blocked.continuations).toEqual([]);
+			expect(blocked.engine!.records[0]).toEqual(saved.engine!.records[0]);
+			const reloaded = harness();
+			reloaded.runtime.restore!(JSON.stringify(blocked));
+			expect(reloaded.createAgent).not.toHaveBeenCalled();
+			expect(reloaded.saved().engine).toEqual(blocked.engine);
+			reloaded.control.role = async (report, _request, state) => {
+				state.effects.push("Inspected the current diff");
+				report({
+					status: "needs_human",
+					summary: "Confirm the remaining search scope",
+				});
+				return "completed";
+			};
+			const correction =
+				"Preserve existing edits; retry only the failed inspection";
+			await reloaded.prompt(correction, async ({ run }) => {
+				results.push(
+					await run({ action: "continue", instructions: correction }),
+				);
+			});
+			expect(results[1].isError).not.toBe(true);
+			expect(reloaded.children.map(({ name }) => name)).toEqual(["second"]);
+			const [fresh] = reloaded.children;
+			expect(fresh.session.restore).not.toHaveBeenCalled();
+			expect(fresh.session.prompt).toHaveBeenCalledTimes(1);
+			expect(fresh.state.effects).toEqual(["Inspected the current diff"]);
+			const context = textOf(fresh.session.prompt.mock.calls[0][0].content);
+			for (const fact of [
+				brief.goal,
+				brief.context,
+				...brief.acceptanceCriteria,
+				...brief.constraints,
+				"first finished",
+				correction,
+			]) {
+				expect(context).toContain(fact);
+			}
+			expect(context).toMatch(/fresh same-role conversation/i);
+			expect(context).toMatch(/inspect(?:ing)?[^\n.]*working diff/i);
+			const waiting = reloaded.saved();
+			expect(waiting.topic).toBe(saved.topic);
+			expect(waiting.engine).toMatchObject({
+				command: saved.engine!.command,
+				workflow: saved.engine!.workflow,
+				mode: saved.engine!.mode,
+				status: "waiting",
+				pause: { kind: "report" },
+			});
+			expect(waiting.engine!.records[0]).toEqual(saved.engine!.records[0]);
+			expect(waiting.engine!.records[1]).toMatchObject({
+				id: saved.engine!.records[1].id,
+				status: "waiting",
+				outcome: {
+					status: "needs_human",
+					summary: "Confirm the remaining search scope",
+				},
+			});
+			expect(waiting.engine!.records[2]).toEqual(saved.engine!.records[2]);
+			expect(waiting.continuations).toEqual([
+				{ recordId: saved.engine!.records[1].id, checkpoint: fresh.state },
+			]);
+		},
+	);
 
 	it("bounds status evidence as readable text while preserving complete persisted reports", async () => {
 		const graph = Workflow.parse({

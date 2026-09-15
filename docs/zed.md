@@ -305,7 +305,7 @@ The router has these workflow tools:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `d3r_start_phase`    | A configured `phase`, structured `brief`, optional `mode` (`semi` or `auto`), and optional `topic`; starts only when no unfinished task is retained.                                        |
 | `d3r_run_role`       | A `role` from the pinned loaded worker-role enum (excluding `orchestrator`), the same `brief`, and optional `mode` and `topic`; runs exactly one role. Omitted if no workers are available. |
-| `d3r_continue_phase` | `instructions` containing the user's checkpoint answer, correction, or explicit resume direction; continues only a pending checkpoint or safely resumable role batch.                       |
+| `d3r_continue_phase` | `instructions` containing the user's answer, correction, or retry request; continues a pending checkpoint or resumes/restarts unfinished roles in the same task.                            |
 | `d3r_abandon_phase`  | A user-directed `reason`; releases the retained unfinished phase or role task when execution is not running. Existing effects remain.                                                       |
 | `d3r_phase_status`   | No parameters; reads current state without starting or changing work.                                                                                                                       |
 
@@ -391,10 +391,10 @@ the workspace or host.
 
 Role tasks share the report, permission, and checkpoint lifecycle, including
 `d3r_continue_phase`, `d3r_phase_status`, and `d3r_abandon_phase` for
-clarification, safely resumable cancellation, and abandonment. After rebuilding,
-restart the actual `d3r acp` server used by Zed to load the new code. Reloading
-an initialized orchestrated session then exposes the direct-role tool; retained
-legacy native sessions need a new session instead.
+clarification, blocked-role restart, resumable cancellation, and abandonment.
+After rebuilding, restart the actual `d3r acp` server used by Zed to load the
+new code. Reloading an initialized orchestrated session then exposes the
+direct-role tool; retained legacy native sessions need a new session instead.
 
 ### Checkpoints and corrections
 
@@ -407,18 +407,34 @@ trigger an automatic answer, retry, or abandonment.
 A role's valid `needs_human` report presents its question and retains its
 conversation checkpoint. Clean cancellation can also retain checkpoints after
 started tools and role cleanup settle. Your answer, correction, or explicit
-continue resumes only the unfinished roles when all required child checkpoints
-are available. Completed parallel siblings and their outcomes remain retained;
-prior commands and mutations are not automatically replayed. Resumed roles must
-inspect current state before further effects and report again.
+continue resumes those unfinished roles when their required child checkpoints
+are available.
 
-This is **not a blanket failure retry**. Unknown-write outcomes, failed effect
-settlement or checkpointing, and missing required child checkpoints fail closed;
-D3R cannot safely resume by recreating a role without its retained evidence.
-Inspect the workspace and discuss recovery instead of assuming every blocked or
-interrupted run supports continuation.
+**Blocked roles are restartable through the same `d3r_continue_phase` tool.** A
+clear request such as "The blocker is fixed; continue the implementor and
+preserve my working diff" is enough. There is no separate abandon/recreate
+confirmation, exact keyword, new topic, or repeated mode choice. The runtime
+restarts only blocked agents in the current batch, retaining the task, original
+brief, topic, mode, prior outcomes, and completed siblings. A sibling waiting
+for a human answer stays waiting; restarting another role does not answer it.
 
-Running or unresolved phase/role tasks cannot be replaced. To switch away from a
+Blocked attempts now retain worker conversations when a valid snapshot is
+available after execution. A restart uses that conversation and settled tool
+results, plus your latest instructions. For older blocked tasks without a worker
+snapshot, the runtime opens a **fresh conversation for the same role** with the
+brief, prior outcomes, and correction. It explicitly instructs that worker to
+inspect the current working diff and determine what remains, rather than replay
+the old plan. Existing files are not reset or rewritten by the restart
+mechanism. Every restarted role must report anew.
+
+This is user-directed recovery, not an automatic retry loop. A failed restore or
+checkpoint capture is not silently treated as a valid retained conversation. An
+interrupted batch without its required transcripts, an unresolved human
+checkpoint, or an exhausted workflow loop is not a blocked-agent restart. Those
+cases still need their own recovery or scope decision; this operation does not
+extend loops, skip review, or bypass an incomplete persisted intent.
+
+Restarting a blocked role is not replacing its task. To switch away from a
 retained unfinished task, explicitly ask to abandon it when execution is not
 running, then start the desired phase or role. A user-directed abandon can
 precede the next operation in the same turn; it does not consume the
@@ -544,8 +560,10 @@ queued messages survive reconnect or reload.
 True live **Steer** is available for Zed's native agent, not exposed to external
 ACP agents such as D3R. A new correction can resume retained unfinished roles as
 described above, but neither Send nor Send Immediately guarantees continuation
-when a safe child checkpoint is unavailable. Older initialized native sessions
-still use the legacy abandon/restart behavior.
+for an interrupted task when a required child checkpoint is unavailable.
+Blocked-role restart can instead use the same-task reconstruction described
+above. Older initialized native sessions still use the legacy abandon/restart
+behavior.
 
 ## Request budgets and extensions
 
@@ -851,10 +869,11 @@ Session history supports list, load (replay), resume (without replay), close,
 and delete. Native state lives under `~/.agents/d3r/private/sessions/`. It
 includes pinned instructions/workflows and conversation checkpoints, not MCP
 launch configuration or saved permission grants. New orchestrated sessions also
-retain eligible unfinished-role checkpoints for reported questions and clean
-cancellation. Snapshots restore state without executing historical tools;
-resuming work requires a new user-directed workflow action and all required
-child checkpoints.
+retain eligible unfinished-role checkpoints for reported questions, blocked
+attempts, and clean cancellation. Snapshots restore state without executing
+historical tools. Resuming work requires a user-directed workflow action;
+blocked tasks without a worker transcript can restart through fresh same-role
+reconstruction, while other continuation paths require their child checkpoints.
 
 An accepted task's topic is immutable through continuation, corrections, and
 reload; continue, abandon, and status do not accept a replacement topic. After
@@ -868,9 +887,11 @@ cannot silently fall back to an older checkpoint after a crash. Already-issued
 editor writes remain owned until their outcome is known; cancellation cannot
 certify a still-pending write as completed. Ordinary cancellation waits for
 started backend/tool work and cleanup before acknowledging completion. A failed
-or missing required child checkpoint does not authorize a fresh role replay;
-unknown-write and checkpoint failures fail closed. A clean cancellation with
-complete retained checkpoints is different from this recovery-required state.
+or missing child checkpoint never authorizes replaying historical tools. A
+blocked task in a complete journal can be restarted at your direction with
+current-workspace inspection; this does not make an incomplete journal or an
+active session lock recoverable. Clean cancellation still requires retained
+worker checkpoints for continuation.
 
 New session locks record their owning process in private claims inside a
 `<session-id>.lock` directory. On trusted local filesystems, loading a session
