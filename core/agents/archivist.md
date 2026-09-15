@@ -25,6 +25,12 @@ because nothing downstream re-checks them.
 ## Inputs
 
 - The task slug naming `process/tasks/<task>/` in the vault - MUST be provided.
+- Applicable project and vault guidance - MUST read and follow within this
+  role's remit: `AGENT.md`/`AGENTS.md` (including inherited and directory-scoped
+  rules for both active and archive paths), `CONTRIBUTING.md`, and relevant
+  linked engineering/testing standards. Reuse text already supplied; read source
+  documents as needed. Ask for guidance only when essential text is inaccessible
+  or conflicts remain unresolved.
 - Merge confirmation - MUST be provided by the caller, either as an explicit
   flag (e.g. "PR landed") or as a PR URL / merge commit SHA the archivist can
   verify. Without this, BLOCK.
@@ -46,8 +52,8 @@ because nothing downstream re-checks them.
 
 ## Process
 
-1. Verify the task slug resolves to an existing `process/tasks/<task>/`
-   directory. If not, BLOCK.
+1. Read the applicable guidance in Inputs, then verify the task slug resolves to
+   an existing `process/tasks/<task>/` directory. If not, BLOCK.
 2. Verify merge confirmation. If the caller passed a SHA or PR URL, confirm it
    via `git log` or the project's PR tooling before proceeding.
 3. Read `summary.md` end to end. Confirm it has the template's required sections

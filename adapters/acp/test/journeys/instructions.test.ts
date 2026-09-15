@@ -9,6 +9,7 @@ import {
 	journeyDone as done,
 	journeyPhaseReply as phaseReply,
 	journeyResult as result,
+	journeyResultText as resultText,
 	journeyText,
 	lastRequest,
 	reply,
@@ -22,7 +23,12 @@ describe("native ACP instruction journey", () => {
 	const { open } = nativeJourneySuite();
 
 	// oxlint-disable-next-line max-statements -- Inheritance, implementation, confinement and reload form one resource-pin journey.
-	it("inherits broad-to-specific instructions in develop and retains the trusted pin after reload", async () => {
+	it("inherits the charter, reads linked standards before implementation, and retains the pin after reload", async () => {
+		const charterText = await readFile(
+			new URL("../../../../AGENTS.md", import.meta.url),
+			"utf8",
+		);
+		const charter = charterText.trim();
 		const workspace = "repo/worktrees/topic";
 		const goal =
 			"Create marker.txt using the inherited instructions, then review and audit it.";
@@ -37,13 +43,24 @@ describe("native ACP instruction journey", () => {
 				reply("Still using the original inherited instructions."),
 			],
 			implementor: [
-				callWith("write_file", ({ systemPrompt }) => ({
-					path: "marker.txt",
-					content:
-						[...(systemPrompt ?? "").matchAll(/^Marker: ([a-z-]+)$/gm)].at(
-							-1,
-						)?.[1] ?? "missing-instructions",
-				})),
+				call("read_file", { path: "CONTRIBUTING.md" }, "conventions-read"),
+				call(
+					"read_file",
+					{ path: "docs/data-oriented-design.md" },
+					"standards-read",
+				),
+				call("read_file", { path: "docs/testing.md" }, "testing-read"),
+				callWith("write_file", (context) => {
+					const prefix =
+						/Marker prefix: ([a-z-]+)/.exec(
+							resultText(context, "standards-read"),
+						)?.[1] ?? "missing-standard-";
+					const marker =
+						[
+							...(context.systemPrompt ?? "").matchAll(/^Marker: ([a-z-]+)$/gm),
+						].at(-1)?.[1] ?? "missing-instructions";
+					return { path: "marker.txt", content: prefix + marker };
+				}),
 				call("read_file", { path: "../../unrelated.txt" }, "parent-read"),
 				...done("Created the instructed marker.", { allDone: true }),
 			],
@@ -52,7 +69,10 @@ describe("native ACP instruction journey", () => {
 		};
 		const j = await open(scripts, { workspace, routerShortcuts: false });
 		const layers = [
-			["AGENTS.md", "Write the last Marker value to marker.txt.\nMarker: root"],
+			[
+				"AGENTS.md",
+				`${charter}\n\nWrite the last Marker value with the prefix required by the linked standards to marker.txt.\nMarker: root`,
+			],
 			["repo/AGENT.md", "Marker: repo-singular"],
 			["repo/AGENTS.md", "Marker: repo-plural"],
 			["repo/worktrees/AGENTS.md", "Marker: closer"],
@@ -65,6 +85,12 @@ describe("native ACP instruction journey", () => {
 		const excluded = "PARENT_ONLY_DO_NOT_LOAD";
 		await writeFiles(j.root, {
 			...Object.fromEntries([...layers, ...legacy]),
+			[`${workspace}/CONTRIBUTING.md`]:
+				"Read docs/data-oriented-design.md and docs/testing.md before changing the marker.",
+			[`${workspace}/docs/data-oriented-design.md`]:
+				"Marker prefix: checked-\nKeep the output as plain text.",
+			[`${workspace}/docs/testing.md`]:
+				"Verify the marker contains the standards prefix followed by the most specific Marker value.",
 			"repo/.git/config": "[core]\n\tbare = false\n",
 			"repo/.agents/vault/notes/fixture.md": "Ancestor vault boundary.",
 			"repo/unrelated.txt": excluded,
@@ -88,6 +114,11 @@ describe("native ACP instruction journey", () => {
 		for (const role of ["router", "implementor", "reviewer", "auditor"]) {
 			const prompt =
 				roleRequests(j.requests, role)[0].context.systemPrompt ?? "";
+			expect(prompt).toContain(charter);
+			expect(prompt).toMatch(/linked engineering\/testing standards/);
+			expect(prompt).not.toMatch(
+				/do not deep-read|too large to skim|~500 lines/,
+			);
 			let previous = -1;
 			for (const token of layers.flatMap(([path, text]) => [
 				resolve(j.root, path),
@@ -106,7 +137,7 @@ describe("native ACP instruction journey", () => {
 		expect(result(implemented, "write_file")).toMatchObject({ isError: false });
 		expect(result(implemented, "parent-read")).toMatchObject({ isError: true });
 		await expect(readFile(resolve(j.cwd, "marker.txt"), "utf8")).resolves.toBe(
-			"topic",
+			"checked-topic",
 		);
 		expect(journeyText(f.updates)).toContain("Inherited instructions applied");
 		expect(
@@ -119,7 +150,17 @@ describe("native ACP instruction journey", () => {
 					: [],
 			),
 		);
-		expect(new Set(reads)).toEqual(new Set(["parent-read"]));
+		expect(new Set(reads)).toEqual(
+			new Set([
+				"conventions-read",
+				"standards-read",
+				"testing-read",
+				"parent-read",
+			]),
+		);
+		for (const id of ["conventions-read", "standards-read", "testing-read"]) {
+			expect(result(implemented, id)).toMatchObject({ isError: false });
+		}
 
 		const changed = "Marker: changed-parent";
 		await writeFiles(j.root, { "repo/AGENT.md": changed });

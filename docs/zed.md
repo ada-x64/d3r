@@ -125,6 +125,18 @@ text reads, cancellation, and path checks still apply. Instructions are pinned
 with the session; restart D3R and start a new thread to pick up newly discovered
 or changed files.
 
+Keep the project's concise engineering charter in its `AGENTS.md`, with detailed
+standards in linked documents. D3R's own charter lives in this repository's
+`AGENTS.md`; it is not imposed on unrelated projects. Core role prompts require
+applicable instructions and relevant linked engineering/testing standards,
+without duplicating that policy. A self-contained task brief defines scope, not
+an exemption from standards. Native sessions reuse the inherited text in every
+role; agents read missing relevant sections through their existing tools. Links
+are not automatically expanded into the system prompt, and do not grant
+additional filesystem access. Implementors run project-required checks even when
+a task's verification instructions omit them; reviewers retain their read-only
+remit.
+
 D3R also discovers workspace `.github/skills/**/SKILL.md` files. Skills with the
 same name resolve in this order (highest priority first):
 
@@ -307,16 +319,17 @@ roles do not require a mode. `semi` pauses between agent batches; `auto` can run
 the whole phase without those pauses, while still respecting required human
 checkpoints, reviews, and tool approvals.
 
-Core role files are unchanged. The native handoff contract substitutes the
-conversation brief for document-specific schema/design/plan requirements when
-those documents are absent. Roles work in the current approved workspace and
-requested scope, without inventing documents, branches, commits, or approvals.
-They can review working-tree changes and report findings inline without a vault
-artifact unless one was requested. Project constraints, role remit, mandatory
-tests, review gates, and approvals still apply; commits and pushes require
-explicit user authorization. The workflow tools themselves do not request
-separate permission: underlying worker tools authorize real effects. The router
-delegates implementation rather than doing the workers' implementation itself.
+Core roles follow project guidance within their assigned remits. The native
+handoff contract substitutes the conversation brief for document-specific
+schema/design/plan requirements when those documents are absent. Roles work in
+the current approved workspace and requested scope, without inventing documents,
+branches, commits, or approvals. They can review working-tree changes and report
+findings inline without a vault artifact unless one was requested. Project
+constraints, role remit, mandatory tests, review gates, and approvals still
+apply; commits and pushes require explicit user authorization. The workflow
+tools themselves do not request separate permission: underlying worker tools
+authorize real effects. The router delegates implementation rather than doing
+the workers' implementation itself.
 
 ### Shared topics and artifact paths
 
@@ -349,8 +362,8 @@ Explicit operator paths take precedence; the plan's explicit child-task names
 also take precedence over the default `taskDirectory`. This is shared context,
 not filesystem path rewriting: it does not move existing artifacts, assert that
 files exist, or grant permission or require anyone to create documents. Inline,
-docs-free work remains supported, with unchanged core role definitions and
-approval requirements.
+docs-free work remains supported, without changing role capabilities or approval
+requirements.
 
 ### Standalone role requests
 

@@ -24,6 +24,11 @@ you note follow-ups for the next reader and stop there.
 ## Inputs
 
 - The task slug naming `process/tasks/<task>/` in the vault - MUST be provided.
+- Applicable project and vault guidance - MUST read and follow within this
+  role's remit: `AGENT.md`/`AGENTS.md` (including inherited and directory-scoped
+  rules), `CONTRIBUTING.md`, and relevant linked engineering/testing standards.
+  Reuse text already supplied; read source documents as needed. Ask for guidance
+  only when essential text is inaccessible or conflicts remain unresolved.
 - The commit range the task contributed (e.g. `<base>..<head>`, or a branch
   name) - MUST be provided. Resolve `<head>` to a concrete SHA.
 - `process/tasks/<task>/design.md`, `schema.md` - MUST all be read; they are the
@@ -50,7 +55,8 @@ you note follow-ups for the next reader and stop there.
 
 ## Process
 
-1. Read `design.md`, `schema.md` end to end - they are the contract.
+1. Read `design.md`, `schema.md` end to end for task intent, and the applicable
+   guidance in Inputs for project/vault rules; task artifacts do not replace it.
 2. Read `reviews/*`, `audit.md`, and `implementation-log.md` if present, in that
    order. Build a working list of every deviation that was raised, accepted, or
    recorded.

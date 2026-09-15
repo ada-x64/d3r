@@ -24,6 +24,11 @@ too many and the build order graph turns into noise.
 - `design.md` - MUST be provided; the source of truth for what to build.
 - `remember.md`, `research.md` - SHOULD be available as sibling documents for
   cross-reference; not re-read in full.
+- Applicable project and vault guidance - MUST read and follow within this
+  role's remit: `AGENT.md`/`AGENTS.md` (including inherited and directory-scoped
+  rules), `CONTRIBUTING.md`, and relevant linked engineering/testing standards.
+  Reuse text already supplied; read source documents as needed. Ask for guidance
+  only when essential text is inaccessible or conflicts remain unresolved.
 
 ## Outputs
 
@@ -35,11 +40,12 @@ too many and the build order graph turns into noise.
 
 ## Process
 
-1. Read `design.md` end to end.
+1. Read `design.md` end to end and the applicable guidance in Inputs.
 2. Identify the natural decomposition: the smallest set of tasks that each
    implements a coherent slice of the design and can be reviewed independently.
-3. For each task, write its scope and explicit non-scope. The non-scope is what
-   prevents the schemer from sprawling.
+3. For each task, write its scope and explicit non-scope. Carry applicable
+   standards references and verification expectations into its scope without
+   copying the shared charter. Non-scope bounds the work, not governing policy.
 4. Record the build order as a dependency graph (box-drawing form by default;
    Mermaid only if the graph is complex per the template).
 5. List open questions, tagging each as resolvable by the schemer or requiring

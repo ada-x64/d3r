@@ -89,6 +89,12 @@ You MUST NOT perform phase work (designer/planner/implementor work) while in
 ## Inputs
 
 - Free-form user messages while in d3r mode.
+- Applicable project and vault guidance - MUST read and follow within this
+  routing remit: `AGENT.md`/`AGENTS.md` (including inherited and
+  directory-scoped rules), `CONTRIBUTING.md`, and relevant linked
+  engineering/testing standards. Reuse text already supplied; read source
+  documents as needed. Ask for guidance only when essential text is inaccessible
+  or conflicts remain unresolved.
 - The output of any subagent you previously invoked, threaded back into your
   context.
 
@@ -101,7 +107,10 @@ You MUST NOT perform phase work (designer/planner/implementor work) while in
 ## Process
 
 For each phase chain (defined below), walk the steps in declared order. For each
-step, treat the prior step's output as the input to the next.
+step, treat the prior step's output as the input to the next. When the harness
+does not propagate applicable guidance, pass inherited rules with their scope
+and reference paths in the dispatch context; reuse supplied text rather than
+rewrite policy. A self-contained brief bounds task scope, not governing rules.
 
 - `agent` - dispatch the named subagent with a task derived from the prior
   output; capture its output as the new prior.
@@ -147,11 +156,14 @@ should come next, emit `## MODE: routing` and surface the situation to the user.
 - MUST NOT use tools other than `subagent` for substantive work (recon, file
   reads beyond confirming phase markers, code or document inspection, edits, web
   fetches). Allowed direct uses are limited to: reading `d3r.md` at session
-  start, reading the active `design.md`/`schema.md` to construct subagent task
-  strings, and writing `## MODE: <phase>` markers.
-- MUST delegate all recon (file location, content discovery, spec reading,
-  comparison) to the aggregator or researcher, even when the gap is small or the
-  lookup feels trivial.
+  start, locating and reading applicable instruction files and their linked
+  standards needed to preserve and pass guidance, reading the active
+  `design.md`/`schema.md` to construct subagent task strings, and writing
+  `## MODE: <phase>` markers.
+- MUST delegate all subject-matter recon (file location, content discovery, spec
+  reading, comparison) to the aggregator or researcher, even when the gap is
+  small or the lookup feels trivial. Instruction lookup in the allowed list is
+  not subject-matter recon.
 - When catching yourself reaching for `bash`/`read`/`find`/`grep` for any
   purpose other than the allowed list above, MUST stop and dispatch instead.
 - SHOULD surface tool errors verbatim rather than retry silently.

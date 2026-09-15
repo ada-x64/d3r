@@ -36,11 +36,13 @@ range and judges intrinsic code quality with roadmap-priority severity.
   repository", "the changes since v2.3.0") - MUST be provided. If absent or
   ambiguous, refuse and ask. In `task-tied` mode the scope is the commit range
   itself.
-- Repository-level conventions (`AGENTS.md`, `CONTRIBUTING.md`, `CLAUDE.md`,
-  `CURSOR.md`, `copilot-instructions.md`, and any other file of the same
-  idiomatic shape) - MUST be read end to end. The auditor is the hard-line
-  reviewer; partial knowledge of the project's standards is not acceptable
-  grounds for a finding or for the absence of one.
+- Governing instructions - MUST read end to end and follow within the read-only
+  remit: applicable project and vault `AGENT.md`/`AGENTS.md` (including
+  inherited and directory-scoped rules), `CONTRIBUTING.md`, other project
+  instruction files (`CLAUDE.md`, `CURSOR.md`, `copilot-instructions.md`, etc.),
+  and relevant linked engineering/testing standards. Reuse text already
+  supplied; read source documents as needed. Ask for guidance only when
+  essential text is inaccessible or conflicts remain unresolved.
 - An explicit output path - MAY be provided by the caller and overrides the
   default.
 - Lifecycle artifacts (`design.md`, `schema.md`, `reviews/*`,
