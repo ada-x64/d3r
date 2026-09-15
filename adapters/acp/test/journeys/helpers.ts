@@ -320,7 +320,6 @@ export const JOURNEY_INSPECTION_TOOLS = [
 	"vault_mv",
 	"vault_rm",
 	"d3r_report",
-	"d3r_request_extension",
 ].toSorted();
 
 /** ACP grants must select an offered option; cancellation is not a rejection selection. */

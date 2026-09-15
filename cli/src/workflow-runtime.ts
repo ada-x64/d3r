@@ -40,6 +40,7 @@ import {
 import {
 	standaloneWorkflow,
 	executionWorkflow,
+	isDocumentRole,
 	STANDALONE_COMMAND,
 } from "./workflow-role.ts";
 import {
@@ -387,6 +388,12 @@ export const createWorkflowRuntime = (
 		let child: RuntimeSession | null = null;
 		let settled = false;
 		let completedBeforeCancellation = false;
+		let resourceStop:
+			| "context_limit"
+			| "token_limit"
+			| "request_limit"
+			| undefined = undefined;
+		const preserveResourceStop = orchestrated && !isDocumentRole(record.role!);
 		let retained: Json | undefined = undefined;
 		const savedChild = continuations.find(
 			({ recordId }) => recordId === record.id,
@@ -478,7 +485,13 @@ export const createWorkflowRuntime = (
 			if (reason === "cancelled") {
 				controller!.abort();
 			}
-			if (reason !== "completed") {
+			if (
+				preserveResourceStop &&
+				!result.error &&
+				(reason === "token_limit" || reason === "request_limit")
+			) {
+				resourceStop = reason;
+			} else if (reason !== "completed") {
 				result.error ??= [
 					"token_limit",
 					"request_limit",
@@ -490,17 +503,28 @@ export const createWorkflowRuntime = (
 			}
 		} catch (error) {
 			result.failure = readRuntimeFailure(error);
-			result.error ??= result.failure
-				? `Role ${record.role}: ${formatRuntimeFailure(result.failure)}`
-				: "Role setup or execution failed; effects may have occurred. Workflow paused.";
+			if (
+				result.accepting &&
+				preserveResourceStop &&
+				!result.error &&
+				result.failure?.stage === "model_request" &&
+				result.failure.category === "context_limit"
+			) {
+				resourceStop = "context_limit";
+			} else {
+				result.error ??= result.failure
+					? `Role ${record.role}: ${formatRuntimeFailure(result.failure)}`
+					: "Role setup or execution failed; effects may have occurred. Workflow paused.";
+			}
 		} finally {
 			result.accepting = false;
 			if (child) {
 				if (
 					orchestrated &&
-					settled &&
-					(request.signal.aborted ||
-						(!result.error && result.outcome?.status === "needs_human")) &&
+					((settled &&
+						(request.signal.aborted ||
+							(!result.error && result.outcome?.status === "needs_human"))) ||
+						resourceStop !== undefined) &&
 					child.snapshot &&
 					child.restore
 				) {
@@ -516,6 +540,20 @@ export const createWorkflowRuntime = (
 					retained = undefined;
 					result.error ??= "Role cleanup failed; workflow paused.";
 				}
+			}
+		}
+		if (resourceStop !== undefined) {
+			if (retained !== undefined && !result.error) {
+				result.outcome = {
+					status: "needs_human",
+					summary:
+						resourceStop === "context_limit"
+							? `Role ${record.role} reached the model's context window. Its conversation and settled tool results are retained, and existing edits remain in place. Select a model with a larger context window, then ask to continue this work; no abandonment or restart is required. D3R cannot automatically compact this conversation yet.`
+							: `Role ${record.role} reached an inference limit. Its conversation and settled tool results are retained, and existing edits remain in place. Ask to continue this work; no abandonment or restart is required.`,
+				};
+			} else {
+				retained = undefined;
+				result.error ??= `Role ${record.role} stopped with ${resourceStop}, but its continuation could not be saved. Existing edits remain; inspect the workspace before deciding how to recover.`;
 			}
 		}
 		continuations = continuations.filter(

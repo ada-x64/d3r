@@ -27,6 +27,7 @@ import {
 	type NativeCheckpoint,
 } from "./native-resources.ts";
 import { createWorkflowReportTool } from "./workflow-runtime.ts";
+import { isDocumentRole } from "./workflow-role.ts";
 import {
 	createWorkflowPhaseTools,
 	createWorkflowRoleTool,
@@ -362,7 +363,7 @@ export const createLazyNativeSession = ({
 				}: {
 					tools: readonly RuntimeTool[];
 					budgetLabel?: string;
-					maxTurns?: number;
+					maxTurns?: number | null;
 					maxTotalTurns?: number;
 				},
 			): RuntimeSession => {
@@ -377,7 +378,7 @@ export const createLazyNativeSession = ({
 					models,
 					model,
 					modelChoices: available,
-					systemPrompt: `${systemPrompt}\n\nSession workspace: ${input.cwd}\nFor run_command, omit cwd to use this workspace. The vault location is separate; its parent is not implicitly an approved command directory.`,
+					systemPrompt: `${systemPrompt}\n\nSession workspace: ${input.cwd}\nFor run_command, omit cwd to use this workspace. The vault location is separate; its parent is not implicitly an approved command directory.${maxTurns === null ? "\nNo D3R inference budget applies to this task. Complete the requested work and verification without rushing to fit an assumed allowance. Honor user interruption and tool permissions; a provider resource limit is not a reason to discard work or claim completion." : ""}`,
 					budgetLabel,
 					maxTurns,
 					maxTotalTurns,
@@ -431,7 +432,7 @@ export const createLazyNativeSession = ({
 			const routing = create(
 				saved.selection,
 				nativeSystemPrompt(saved.resources, undefined, orchestrated),
-				{ tools: [...tools, ...phaseTools] },
+				{ tools: [...tools, ...phaseTools], maxTurns: null },
 			);
 			runtime = routing;
 			const phaseRuntime = deps.createWorkflowRuntime({
@@ -472,6 +473,7 @@ export const createLazyNativeSession = ({
 								createWorkflowReportTool(report),
 							],
 							budgetLabel: name,
+							maxTurns: isDocumentRole(name) ? undefined : null,
 						},
 					);
 				},

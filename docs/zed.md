@@ -549,14 +549,25 @@ still use the legacy abandon/restart behavior.
 
 ## Request budgets and extensions
 
-Each routing prompt and each dispatched role starts with **50 model requests**,
-with a default hard cap of **100** for that invocation. This counts provider
-requests, not individual tool calls or tokens; final synthesis also consumes a
-request. The model receives its current count, allowance, remaining requests,
-and hard cap before each request, with a warning when five or fewer remain.
-These reminders are not stored as conversation messages.
+**Implementation has no D3R request-count or cumulative token allowance.** The
+router, implementor, reviewer, auditor, and other non-document roles run until
+they finish, need user input, encounter a real failure, or you interrupt them.
+They do not receive budget warnings or a `d3r_request_extension` tool. Longer
+runs can incur more provider usage and cost; cancellation, tool permissions, and
+required review/checkpoints still apply.
 
-A role can ask for more through a tool call before its allowance is exhausted:
+Finite inference budgets apply only to the built-in document-producing roles:
+`aggregator`, `researcher`, `designer`, `planner`, `schemer`, `summarizer`, and
+`archivist`. Each starts with **50 model requests**, with a default hard cap of
+**100** per invocation. This counts provider requests, not individual tool calls
+or tokens; final synthesis also consumes a request. The model receives its
+current count, allowance, remaining requests, and hard cap before each request,
+with a warning when five or fewer remain. These reminders are not stored as
+conversation messages. The legacy summary-only helper keeps its explicit
+single-request allowance.
+
+A document role can ask for more through a tool call before its allowance is
+exhausted:
 
 ```text
 d3r_request_extension({"reason": "Finish retrieving sources and save the research report", "additionalRequests": 50})
@@ -578,10 +589,31 @@ grant can satisfy that approval without another prompt. Changes to the request's
 reason, role/title, amount, or limits need new approval. No budget is inherited,
 and the hard cap is unchanged.
 
-Request the extension early enough to save and report if it is denied. The
-requesting response itself counts, and there is no hidden extra allowance for a
-final response after `d3r_report`. Hitting the limit still stops unfinished
-work; it does not automatically resume a disposed role or rerun earlier effects.
+Document roles must request the extension early enough to save and report if it
+is denied. The requesting response itself counts, and there is no hidden extra
+allowance for a final response after `d3r_report`. Hitting a document budget
+still stops unfinished work; it does not rerun earlier effects.
+
+Provider limits are separate. For unlimited invocations, a response that hits
+the provider's **output-token limit** continues automatically in the same
+conversation. Truncated tool calls are closed without execution; completed calls
+are not replayed, and an already successful report must not be submitted again.
+This does not retry provider failures, denied tools, or cancelled work.
+
+If a non-document worker in a native orchestrated session reaches the model's
+**context window**, D3R retains its conversation and settled tool results as a
+resumable checkpoint instead of abandoning the implementation. Existing edits
+remain in place. Select a larger-context model and ask to continue; only the
+unfinished worker resumes, not completed work. Other resource-limit stop
+responses from a worker likewise preserve a continuation when one can be saved.
+D3R does not yet compact these conversations automatically and cannot override
+provider context windows, rate limits, or account quotas. If checkpoint capture
+itself fails, the report identifies that recovery gap rather than claiming a
+resumable conversation exists.
+
+At the embedded-runtime API, `maxTurns: null` selects unlimited inference and
+cannot be combined with `maxTotalTurns`. Omitted or numeric values retain the
+finite budget behavior, so existing direct adapter callers are unchanged.
 
 ## Built-in web research
 

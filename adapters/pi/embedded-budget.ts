@@ -35,11 +35,17 @@ export interface RequestBudget {
 	lastRequestedResponse?: number;
 }
 
-/** Preserve explicitly larger legacy allowances without introducing an infinite cap. */
+/** Explicit null disables accounting; omitted and numeric limits retain legacy defaults. */
 export const parseRequestBudgetLimits = (options: {
-	readonly maxTurns?: number;
+	readonly maxTurns?: number | null;
 	readonly maxTotalTurns?: number;
-}): RequestBudgetLimits => {
+}): RequestBudgetLimits | null => {
+	if (options.maxTurns === null) {
+		if (options.maxTotalTurns !== undefined) {
+			throw new Error("maxTotalTurns cannot be combined with maxTurns: null");
+		}
+		return null;
+	}
 	const initial =
 		options.maxTurns === undefined
 			? DEFAULT_INITIAL_REQUESTS
@@ -62,19 +68,22 @@ export const parseRequestBudgetLimits = (options: {
 
 /** Allocate independently for siblings, subsequent prompts, and restored sessions. */
 export const createRequestBudget = (
-	limits: RequestBudgetLimits,
+	limits: RequestBudgetLimits | null,
 	signal: AbortSignal,
 	hasTools: boolean,
-): RequestBudget => ({
-	hard: limits.hard,
-	signal,
-	hasTools,
-	limit: limits.initial,
-	used: 0,
-	active: true,
-	pending: false,
-	denied: false,
-});
+): RequestBudget | null =>
+	limits === null
+		? null
+		: {
+				hard: limits.hard,
+				signal,
+				hasTools,
+				limit: limits.initial,
+				used: 0,
+				active: true,
+				pending: false,
+				denied: false,
+			};
 
 /** Charge at the provider boundary; reminders are not conversation messages. */
 export const beginBudgetedRequest = (

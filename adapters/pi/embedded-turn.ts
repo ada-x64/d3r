@@ -25,6 +25,10 @@ import {
 	type EmbeddedTool,
 } from "./embedded-tools.ts";
 
+/** A provider output limit interrupts a response, not the unlimited invocation's work. */
+const LENGTH_CONTINUATION =
+	"The previous response reached the provider output token limit. Continue the same invocation and task using the retained conversation and tool results. Preserve completed work; do not replay settled tool effects or automatically retry errors or permission denials. Tool calls in the truncated response were not executed; issue new, complete calls only for unfinished work. If d3r_report already succeeded in this invocation, do not call it again: finish the remaining response only. Otherwise finish the work and report normally. This continuation grants no new tool permissions.";
+
 /** Mutable observation data belongs to one invocation, never the provider registry. */
 interface TurnState {
 	messageId: string;
@@ -143,7 +147,7 @@ export const runEmbeddedTurn = async (
 	}: {
 		readonly input: RuntimeSessionInput;
 		readonly definitions: readonly EmbeddedTool[];
-		readonly budget: RequestBudget;
+		readonly budget: RequestBudget | null;
 		readonly budgetLabel?: string;
 		readonly namespace: string;
 		readonly resolveResource?: ResolveResource;
@@ -156,7 +160,7 @@ export const runEmbeddedTurn = async (
 		outputFailed: false,
 	};
 	const tools =
-		definitions.length > 0
+		definitions.length > 0 && budget !== null
 			? [
 					...definitions,
 					...compileTools([createRequestExtensionTool(budget, budgetLabel)]),
@@ -175,8 +179,8 @@ export const runEmbeddedTurn = async (
 		afterToolCall: bridge.afterToolCall,
 		shouldStopAfterTurn: () =>
 			definitions.length === 0 ||
-			budget.used >= budget.limit ||
-			budget.used >= budget.hard ||
+			(budget !== null &&
+				(budget.used >= budget.limit || budget.used >= budget.hard)) ||
 			state.finalMessage?.stopReason === "length" ||
 			request.signal.aborted ||
 			state.outputFailed,
@@ -232,21 +236,36 @@ export const runEmbeddedTurn = async (
 		if (request.signal.aborted) {
 			return "cancelled";
 		}
-		try {
-			await agent.prompt({ role: "user", content, timestamp: Date.now() });
-		} catch (error) {
-			throw createRuntimeFailure(failureData(error));
+		let nextContent = content;
+		while (true) {
+			try {
+				// oxlint-disable-next-line no-await-in-loop -- Continuations require Pi and all prior callbacks to settle.
+				await agent.prompt({
+					role: "user",
+					content: nextContent,
+					timestamp: Date.now(),
+				});
+			} catch (error) {
+				throw createRuntimeFailure(failureData(error));
+			}
+			if (request.signal.aborted) {
+				return "cancelled";
+			}
+			const result = turnOutcome(
+				state,
+				definitions.length > 0,
+				failureData(state.finalMessage),
+			);
+			if (budget !== null || result !== "token_limit") {
+				keepHistory ||= result !== "cancelled";
+				return result;
+			}
+			agent.state.messages = closeToolBatches(agent.state.messages);
+			// Accepted length output is useful work even without tool effects. Keep it
+			// through later continuation failures or cancellation, not just completion.
+			keepHistory = true;
+			nextContent = [{ type: "text", text: LENGTH_CONTINUATION }];
 		}
-		if (request.signal.aborted) {
-			return "cancelled";
-		}
-		const result = turnOutcome(
-			state,
-			definitions.length > 0,
-			failureData(state.finalMessage),
-		);
-		keepHistory = result !== "cancelled";
-		return result;
 	} catch (error) {
 		if (request.signal.aborted) {
 			return "cancelled";

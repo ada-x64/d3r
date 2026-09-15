@@ -5,6 +5,18 @@ import { type AgentDefinition } from "./resources.ts";
 /** Private engine identity; it is not added to the user's commands or Phase picker. */
 export const STANDALONE_COMMAND = "standalone";
 
+/** Only document-producing roles use finite inference budgets; code work and routing do not. */
+export const isDocumentRole = (name: string): boolean =>
+	[
+		"aggregator",
+		"researcher",
+		"designer",
+		"planner",
+		"schemer",
+		"summarizer",
+		"archivist",
+	].includes(name);
+
 /** A one-role graph reuses reporting, cancellation, and checkpoints without changing phase definitions. */
 export const standaloneWorkflow = (
 	workflow: Workflow,

@@ -14,6 +14,7 @@ import {
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	executionWorkflow,
+	isDocumentRole,
 	standaloneWorkflow,
 	STANDALONE_COMMAND,
 } from "./workflow-role.ts";
@@ -49,6 +50,28 @@ const agents = ["implementor", "reviewer", "researcher", "orchestrator"].map(
 );
 
 describe("standalone workflow graphs", () => {
+	it("reserves finite inference budgets for document roles, not implementation or routing", () => {
+		for (const name of [
+			"aggregator",
+			"researcher",
+			"designer",
+			"planner",
+			"schemer",
+			"summarizer",
+			"archivist",
+		]) {
+			expect(isDocumentRole(name), name).toBe(true);
+		}
+		for (const name of [
+			"implementor",
+			"reviewer",
+			"auditor",
+			"orchestrator",
+			"custom-worker",
+		]) {
+			expect(isDocumentRole(name), name).toBe(false);
+		}
+	});
 	it("selects exactly one loaded worker without changing phase definitions or shared resources", () => {
 		const base = structuredClone(workflow);
 		const resources = structuredClone(agents);

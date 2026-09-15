@@ -136,6 +136,48 @@ describe("embedded invocation request budgets", () => {
 		await Promise.all(sessions.splice(0).map((session) => session.dispose()));
 	});
 
+	it("runs past 100 requests with explicit null and no extension tool or finite-budget guidance", async () => {
+		const effects: string[] = [];
+		const permission = vi.fn(async () => true);
+		const f = open(
+			{
+				maxTurns: null,
+				tools: [
+					workTool(
+						vi.fn(async () => {
+							effects.push("saved");
+							return { text: "work saved" };
+						}),
+					),
+				],
+			},
+			{ requestPermission: permission },
+		);
+		const workResponses = HARD_LIMIT + 1;
+		f.faux.setResponses([
+			...Array.from({ length: workResponses }, () =>
+				fauxAssistantMessage(fauxToolCall("save_work", {})),
+			),
+			fauxAssistantMessage("All work saved and verified"),
+		]);
+		await expect(f.session.prompt(prompt())).resolves.toBe("completed");
+		expect(f.faux.state.callCount).toBe(workResponses + 1);
+		expect(effects).toEqual(
+			Array.from({ length: workResponses }, () => "saved"),
+		);
+		expect(permission).not.toHaveBeenCalled();
+		f.contexts.forEach((context) => {
+			expect(context.systemPrompt).toBe("Original role instructions");
+			expect(context.tools?.map(({ name }) => name)).toEqual(["save_work"]);
+			expect(
+				context.messages.filter(({ role }) => role === "user"),
+			).toHaveLength(1);
+		});
+		expect(JSON.stringify(f.session.snapshot?.())).not.toContain(
+			"D3R request budget",
+		);
+	});
+
 	it("makes all 50 default requests visible before inference, warning with five left and preserving user history", async () => {
 		const f = open();
 		f.faux.setResponses(Array.from({ length: INITIAL_LIMIT + 1 }, working));
@@ -697,18 +739,24 @@ describe("embedded invocation request budgets", () => {
 		expect(f.contexts.at(-1)?.systemPrompt).toContain("Response 2 of 3");
 	});
 
-	it("keeps the no-tools contract even for hallucinated extension calls", async () => {
-		const permission = vi.fn(async () => true);
-		const f = open({ tools: [] }, { requestPermission: permission });
-		f.faux.setResponses([extension(), working()]);
-		await expect(f.session.prompt(prompt())).rejects.toThrow(
-			"Embedded tool execution is not supported yet",
-		);
-		expect(f.contexts[0].tools).toEqual([]);
-		expect(f.contexts[0].systemPrompt).not.toContain("d3r_request_extension");
-		expect(permission).not.toHaveBeenCalled();
-		expect(f.faux.state.callCount).toBe(1);
-	});
+	it.each([undefined, null])(
+		"keeps the no-tools contract even for hallucinated extension calls (maxTurns=%s)",
+		async (maxTurns) => {
+			const permission = vi.fn(async () => true);
+			const f = open(
+				{ tools: [], maxTurns },
+				{ requestPermission: permission },
+			);
+			f.faux.setResponses([extension(), working()]);
+			await expect(f.session.prompt(prompt())).rejects.toThrow(
+				"Embedded tool execution is not supported yet",
+			);
+			expect(f.contexts[0].tools).toEqual([]);
+			expect(f.contexts[0].systemPrompt).not.toContain("d3r_request_extension");
+			expect(permission).not.toHaveBeenCalled();
+			expect(f.faux.state.callCount).toBe(1);
+		},
+	);
 
 	it.each(["maxTurns", "maxTotalTurns"] as const)(
 		"validates %s as a positive safe integer",
@@ -729,6 +777,12 @@ describe("embedded invocation request budgets", () => {
 		},
 	);
 
+	it("rejects contradictory limits for an unbounded invocation", () => {
+		expect(() => open({ maxTurns: null, maxTotalTurns: HARD_LIMIT })).toThrow(
+			"maxTotalTurns cannot be combined with maxTurns: null",
+		);
+	});
+
 	it("rejects a hard cap smaller than the initial allowance and reserved-name collisions", () => {
 		expect(() => open({ maxTurns: 3, maxTotalTurns: 2 })).toThrow(
 			"maxTotalTurns must be at least maxTurns",
@@ -739,6 +793,32 @@ describe("embedded invocation request budgets", () => {
 		expect(() =>
 			open({ tools: [{ ...workTool(), name: "d3r_request_extension" }] }),
 		).toThrow("reserved");
+	});
+
+	it("rejects malformed initial tools before inference even without a budget", () => {
+		const streamSimple = vi.fn();
+		const execute = vi.fn(async () => ({ text: "Must not execute" }));
+		const tool = workTool(execute);
+		[
+			{ tools: [{ ...tool, name: "" }], error: "nonempty and unique" },
+			{ tools: [tool, tool], error: "nonempty and unique" },
+			{
+				tools: [{ ...tool, name: "d3r_request_extension" }],
+				error: "reserved",
+			},
+			{
+				tools: [
+					{ ...tool, permission: "unknown" as RuntimeTool["permission"] },
+				],
+				error: "Unknown runtime tool permission policy",
+			},
+		].forEach(({ tools, error }) => {
+			expect(() =>
+				open({ maxTurns: null, tools, models: { streamSimple } }),
+			).toThrow(error);
+		});
+		expect(streamSimple).not.toHaveBeenCalled();
+		expect(execute).not.toHaveBeenCalled();
 	});
 
 	it.each([LEGACY_LARGE_LIMIT, Number.MAX_SAFE_INTEGER])(

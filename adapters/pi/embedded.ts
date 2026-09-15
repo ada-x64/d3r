@@ -44,9 +44,9 @@ export interface EmbeddedRuntimeOptions {
 	readonly resolveResource?: ResolveResource;
 	readonly tools?: readonly RuntimeTool[];
 	readonly modelChoices?: readonly Model<Api>[];
-	/** Initial model requests per invocation, including final synthesis (default: 50). */
-	readonly maxTurns?: number;
-	/** Non-extendable ceiling (default: max(maxTurns, 100)). */
+	/** Initial model requests including synthesis (default: 50); null removes the D3R limit. */
+	readonly maxTurns?: number | null;
+	/** Non-extendable ceiling (default: max(maxTurns, 100)); incompatible with null maxTurns. */
 	readonly maxTotalTurns?: number;
 	/** Routing or role name shown in resource-extension approval titles. */
 	readonly budgetLabel?: string;
@@ -84,7 +84,7 @@ export const createEmbeddedRuntime = (
 		const lifecycle: {
 			busy: boolean;
 			disposed: boolean;
-			budget?: RequestBudget;
+			budget?: RequestBudget | null;
 		} = { busy: false, disposed: false };
 		const agent = new Agent({
 			initialState: {
@@ -93,19 +93,21 @@ export const createEmbeddedRuntime = (
 				tools: [],
 			},
 			streamFn: (model, context, settings) => {
-				if (!lifecycle.budget) {
+				if (lifecycle.budget === undefined) {
 					throw new Error("Model request requires an active invocation budget");
 				}
 				settings?.signal?.throwIfAborted();
 				return options.models.streamSimple(
 					model,
-					{
-						...context,
-						systemPrompt: beginBudgetedRequest(
-							lifecycle.budget,
-							context.systemPrompt,
-						),
-					},
+					lifecycle.budget === null
+						? context
+						: {
+								...context,
+								systemPrompt: beginBudgetedRequest(
+									lifecycle.budget,
+									context.systemPrompt,
+								),
+							},
 					settings,
 				);
 			},
@@ -142,7 +144,9 @@ export const createEmbeddedRuntime = (
 						resolveResource: options.resolveResource,
 					});
 				} finally {
-					budget.active = false;
+					if (budget !== null) {
+						budget.active = false;
+					}
 					lifecycle.budget = undefined;
 					lifecycle.busy = false;
 				}
