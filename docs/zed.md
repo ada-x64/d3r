@@ -117,6 +117,14 @@ root. Home instructions are loaded once, as global defaults if home is outside
 the workspace ancestry. Sibling and descendant directories are not scanned by
 this ancestor lookup.
 
+Instruction-file symlinks may point to another conventional `AGENT.md`,
+`AGENTS.md`, or `agents.md`, including a file directly inside a shared `.config`
+directory. The link's location determines instruction scope; only that file is
+read, with bounded text reads and target revalidation. Broken links are errors,
+not missing optional instructions. Other private-store targets remain excluded.
+This exception applies only to instruction discovery, not workspace tools,
+skills, model/MCP configuration, or general access to `.config`.
+
 Only these instruction files are read from ancestors; this does not grant tools
 access to parent directories or load their agents, skills, model presets, or MCP
 configuration. Missing files are skipped, while unreadable or invalid files

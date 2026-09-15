@@ -1,5 +1,5 @@
 /* oxlint-disable no-await-in-loop -- Overlay order and aggregate discovery budgets require sequential IO. */
-import { opendir, realpath } from "node:fs/promises";
+import { lstat, opendir, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,8 @@ import {
 	isMissing,
 	checkedWorkspaceRoot,
 	isWithinRoot,
+	isSensitivePath,
+	ResourceAccessError,
 	readDiskText,
 	readWorkspaceText,
 	workspacePath,
@@ -167,17 +169,60 @@ const readAgentResources = async (
 		signal.throwIfAborted();
 		return canonical;
 	};
+	// Instruction aliases are configuration inputs, not filesystem grants to worker tools.
+	const instructionPath = async (
+		path: string,
+		root: string,
+	): Promise<string> => {
+		await resourcePath(dirname(path), root);
+		const info = await lstat(path);
+		if (!info.isSymbolicLink()) {
+			return resourcePath(path, root);
+		}
+		const canonical = await realpath(path).catch(() => {
+			throw new ResourceAccessError(
+				`Cannot resolve instruction symlink: ${path}`,
+			);
+		});
+		if (!["AGENT.md", "AGENTS.md", "agents.md"].includes(basename(canonical))) {
+			throw new ResourceAccessError(
+				`Symlink instruction must resolve to an instruction file: ${path}`,
+			);
+		}
+		const directory = dirname(canonical);
+		const sharedConfig =
+			basename(directory) === ".config" && !isSensitivePath(dirname(directory));
+		if (isSensitivePath(canonical) && !sharedConfig) {
+			throw new ResourceAccessError(
+				`Sensitive instruction target denied: ${path}`,
+			);
+		}
+		await checkedWorkspaceRoot(directory, signal);
+		return canonical;
+	};
 	const agents = new Map<string, AgentDefinition>();
 	const skills = new Map<string, SkillDefinition>();
 	const instructions: string[] = [];
 	let bytes = 0;
 	let entries = 0;
 	let systemPrompt: string | undefined = undefined;
-	const read = async (path: string, root: string): Promise<string> => {
-		const canonical = await resourcePath(path, root);
-		const text = await readText(canonical, signal, root === core);
+	const read = async (
+		path: string,
+		root: string,
+		resolvePath = resourcePath,
+	): Promise<string> => {
+		const canonical = await resolvePath(path, root);
+		const text = await readText(
+			canonical,
+			signal,
+			root === core && isWithinRoot(core, canonical),
+		);
 		signal.throwIfAborted();
-		await resourcePath(path, root);
+		if ((await resolvePath(path, root)) !== canonical) {
+			throw new ResourceAccessError(
+				`Resource source changed during read: ${path}`,
+			);
+		}
 		bytes += Buffer.byteLength(text);
 		if (bytes > RESOURCE_LIMITS.bytes) {
 			throw new Error("Agent resources exceed the total text limit");
@@ -187,9 +232,10 @@ const readAgentResources = async (
 	const optional = async (
 		path: string,
 		root: string,
+		resolvePath = resourcePath,
 	): Promise<string | undefined> => {
 		try {
-			return await read(path, root);
+			return await read(path, root, resolvePath);
 		} catch (error) {
 			if (isMissing(error)) {
 				return undefined;
@@ -348,7 +394,7 @@ const readAgentResources = async (
 				? [join(root, ".agents", "agents.md")]
 				: []),
 		]) {
-			const text = await optional(path, root);
+			const text = await optional(path, root, instructionPath);
 			if (text?.trim()) {
 				instructions.push(`# ${path}\n\n${text.trim()}`);
 			}

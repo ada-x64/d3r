@@ -381,7 +381,77 @@ describe("native agent resources", () => {
 			).rejects.toThrow(`Cannot read ${path}`);
 		});
 
-		it("rejects a symlinked ancestor instruction without following it", async () => {
+		it.each(["AGENT.md", "AGENTS.md"])(
+			"loads shared .config/%s through an instruction alias without granting tool access",
+			async (name) => {
+				const target = join(base, ".config", name);
+				const alias = join(cwd, name);
+				await put(target, "Shared engineering instructions");
+				await symlink(target, alias, "file");
+				const result = await load();
+				expect(result.instructions).toContain(
+					`# ${alias}\n\nShared engineering instructions`,
+				);
+				expect(result.instructions).not.toContain(`# ${target}`);
+				await expect(
+					resolveWorkspaceResource(pathToFileURL(alias).href, {
+						cwd,
+						roots: [cwd],
+						signal: new AbortController().signal,
+					}),
+				).rejects.toThrow(/Symlink/);
+			},
+		);
+
+		it.each([".ssh", ".config/private", ".ssh/.config", ".agents/d3r/private"])(
+			"does not follow an instruction alias into %s",
+			async (directory) => {
+				const target = join(base, directory, "AGENTS.md");
+				await put(target, "Private data must not become instructions");
+				await symlink(target, join(cwd, "AGENTS.md"), "file");
+				await expect(load()).rejects.toThrow(/Sensitive instruction target/);
+			},
+		);
+
+		it("reports a broken instruction alias instead of silently omitting it", async () => {
+			await symlink(
+				join(base, "missing", "AGENTS.md"),
+				join(cwd, "AGENTS.md"),
+				"file",
+			);
+			await expect(load()).rejects.toThrow(
+				/Cannot resolve instruction symlink/,
+			);
+		});
+
+		it("rejects an instruction alias that changes target during its read", async () => {
+			const before = join(base, "before", "AGENTS.md");
+			const after = join(base, "after", "AGENTS.md");
+			const alias = join(cwd, "AGENTS.md");
+			await Promise.all([
+				put(before, "Original instructions"),
+				put(after, "Changed instructions"),
+			]);
+			await symlink(before, alias, "file");
+			await expect(
+				loadAgentResources(
+					{ home, cwd },
+					{
+						resolveCorePackage: () => join(core, "package.json"),
+						readText: async (path) => {
+							const text = await readFile(path, "utf8");
+							if (path === before) {
+								await rm(alias);
+								await symlink(after, alias, "file");
+							}
+							return text;
+						},
+					},
+				),
+			).rejects.toThrow(/Resource source changed/);
+		});
+
+		it("rejects an instruction alias to an unrelated filename", async () => {
 			const target = join(home, "unrelated.md");
 			await put(target, "Not inherited instructions");
 			await symlink(target, join(base, "parent", "AGENTS.md"), "file");
