@@ -275,6 +275,24 @@ export const runEmbeddedTurn = async (
 		request.signal.removeEventListener("abort", abort);
 		unsubscribe();
 		agent.streamFunction = previousStream;
+		const terminal = agent.state.messages.at(-1);
+		if (
+			agent.state.messages.length > previousMessages.length &&
+			terminal?.role === "assistant" &&
+			terminal.stopReason === "error"
+		) {
+			// Failed envelopes carry untrusted backend metadata, not historical model provenance.
+			agent.state.messages = agent.state.messages.with(-1, {
+				role: terminal.role,
+				content: terminal.content,
+				api: agent.state.model.api,
+				provider: agent.state.model.provider,
+				model: agent.state.model.id,
+				usage: terminal.usage,
+				stopReason: terminal.stopReason,
+				timestamp: terminal.timestamp,
+			});
+		}
 		// Execution is conservatively an effect even if it throws or observes abort.
 		// Never roll it back: resume receives results, not a queue of calls to replay.
 		agent.state.messages =

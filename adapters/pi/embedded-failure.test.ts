@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import {
+	createAssistantMessageEventStream,
 	createModels,
 	fauxAssistantMessage,
 	fauxProvider,
@@ -8,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	createEmbeddedRuntime,
+	parseEmbeddedCheckpoint,
 	type EmbeddedRuntimeOptions,
 } from "@d3r/adapter-pi/embedded";
 import {
@@ -274,6 +276,144 @@ describe("embedded runtime failure propagation", () => {
 			expect(effects).toEqual(["written"]);
 		},
 	);
+
+	// oxlint-disable-next-line max-statements -- Model switching, retained effects, and both continuation paths share one failure fixture.
+	it("normalizes only the current failed envelope while retaining switched-model history and effects", async () => {
+		const faux = fauxProvider({
+			models: [{ id: "previous-model" }, { id: "current-model" }],
+		});
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const [previousModel, currentModel] = faux.models;
+		const effects: string[] = [];
+		const contexts: Context[] = [];
+		const options: Partial<EmbeddedRuntimeOptions> = {
+			models,
+			model: previousModel,
+			modelChoices: faux.models,
+			tools: [
+				{
+					name: "write",
+					description: "offline effect",
+					kind: "edit",
+					permission: "none",
+					schema: z.object({}),
+					execute: async () => {
+						effects.push("written");
+						return { text: "effect recorded" };
+					},
+				},
+			],
+		};
+		const failed = {
+			...fauxAssistantMessage("Useful partial answer after the write", {
+				stopReason: "error",
+				errorMessage: `429 {"error":{"code":"insufficient_quota","message":${JSON.stringify(privateText)}}}`,
+			}),
+			api: "openai-responses" as const,
+			provider: "diagnostic-provider",
+			model: "diagnostic-model",
+			responseModel: "diagnostic-response-model",
+			responseId: "diagnostic-response-id",
+			providerThinkingLevel: "diagnostic-thinking",
+			diagnostics: [
+				{
+					type: "provider_error",
+					timestamp: 0,
+					error: { message: privateText },
+				},
+			],
+			rawStopReason: privateText,
+		};
+		let rejected = false;
+		const f = open({
+			...options,
+			models: {
+				streamSimple: (model, context, settings) => {
+					if (effects.length === 0 || rejected) {
+						return models.streamSimple(model, context, settings);
+					}
+					rejected = true;
+					// Faux normalizes identity itself; inject the raw terminal error below that boundary.
+					const stream = createAssistantMessageEventStream();
+					stream.push({ type: "error", reason: "error", error: failed });
+					return stream;
+				},
+			},
+		});
+		const recover = (context: Context) => {
+			contexts.push({ messages: structuredClone(context.messages) });
+			return fauxAssistantMessage("Recovered without repeating the write");
+		};
+		faux.setResponses([
+			{
+				...fauxAssistantMessage("Earlier successful answer"),
+				api: previousModel.api,
+				provider: previousModel.provider,
+				model: previousModel.id,
+				responseId: "earlier-successful-response",
+			},
+			fauxAssistantMessage(fauxToolCall("write", {})),
+			recover,
+			recover,
+		]);
+		await expect(f.session.prompt(prompt())).resolves.toBe("completed");
+		const before = parseEmbeddedCheckpoint(f.session.snapshot!());
+		await f.session.setConfig!(
+			"model",
+			`${currentModel.provider}/${currentModel.id}`,
+		);
+		const error = await f.session.prompt(prompt()).catch(captureError);
+		expect(readRuntimeFailure(error)).toMatchObject({
+			category: "quota",
+			provider: currentModel.provider,
+			model: currentModel.id,
+			toolsStarted: true,
+		});
+		const saved = parseEmbeddedCheckpoint(f.session.snapshot!());
+		expect(saved.messages.slice(0, before.messages.length)).toEqual(
+			before.messages,
+		);
+		expect(saved.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			api: currentModel.api,
+			provider: currentModel.provider,
+			model: currentModel.id,
+			content: failed.content,
+			usage: failed.usage,
+			timestamp: failed.timestamp,
+			stopReason: "error",
+		});
+		expect(saved.messages).toContainEqual(
+			expect.objectContaining({
+				role: "toolResult",
+				toolName: "write",
+				isError: false,
+				content: [{ type: "text", text: "effect recorded" }],
+			}),
+		);
+		expect(JSON.stringify(saved)).not.toMatch(
+			/diagnostic-|fake-secret|Authorization|x-api-key|private/,
+		);
+		const restored = open(options).session;
+		restored.restore!(saved);
+		const recoveryPaths = [f.session, restored];
+		await Promise.all(
+			recoveryPaths.map(async (session) => {
+				await expect(session.prompt(prompt())).resolves.toBe("completed");
+			}),
+		);
+		expect(contexts).toHaveLength(recoveryPaths.length);
+		for (const context of contexts) {
+			expect(context.messages.slice(0, saved.messages.length)).toEqual(
+				saved.messages,
+			);
+			expect(JSON.stringify(context)).not.toMatch(
+				/diagnostic-|fake-secret|Authorization|x-api-key|private/,
+			);
+		}
+		expect(effects).toEqual(["written"]);
+	});
 
 	it("scopes no-tools reporting to this invocation, not earlier effects in the session", async () => {
 		const effects: string[] = [];
